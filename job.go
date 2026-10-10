@@ -93,6 +93,7 @@ func (a *app) startPreview(task *config.Task) {
 			}
 			if ctx.Err() != nil {
 				a.job = nil
+				a.maybeClose()
 				return
 			}
 			j.state = jobPreview
@@ -178,7 +179,7 @@ func (a *app) startBackup(task *config.Task) {
 			j.logErr = logErr
 			a.recordRun(j, &taskCopy)
 			if a.quitWhenDone {
-				a.closeWindow()
+				a.maybeClose()
 			}
 		})
 	}()

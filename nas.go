@@ -34,6 +34,8 @@ type nasBrowser struct {
 	// servers, or only signs in, after which afterLogin runs.
 	pick       func(server string, root int64, rootName, path string)
 	afterLogin func()
+	// sameServer, when set, is the only server the dialog offers.
+	sameServer string
 
 	server *config.Server // the one in use
 	client *fileindex.Client
@@ -98,13 +100,16 @@ func (a *app) openLogin(server string, after func()) {
 // A request the server refuses for want of a session asks the password.
 func (a *app) nasDo(what string, fn func(ctx context.Context) error, done func(err error)) {
 	b := &a.nas
-	b.gen++
+	a.nasGen++
+	b.gen = a.nasGen
 	gen := b.gen
 	b.busy, b.err = what, ""
 	go func() {
-		err := fn(context.Background())
+		ctx, cancel := context.WithTimeout(context.Background(), requestTimeout)
+		defer cancel()
+		err := fn(ctx)
 		a.post(func() {
-			if b.gen != gen {
+			if a.closed || !b.open || b.gen != gen {
 				return
 			}
 			b.busy = ""
@@ -135,16 +140,18 @@ func (a *app) nasUse(sv *config.Server) {
 
 func (a *app) nasLogin() {
 	b := &a.nas
+	c := b.client
 	pw := b.password
 	a.nasDo("正在登录 "+b.server.Title()+" …", func(ctx context.Context) error {
-		return b.client.Login(ctx, pw)
+		return c.Login(ctx, pw)
 	}, func(err error) {
 		b.password = ""
 		if err != nil {
 			return
 		}
-		b.server.Token = b.client.Token
+		b.server.Token = c.Token
 		a.save()
+		a.serverChanged(b.server.ID)
 		a.nasSignedIn()
 	})
 }
@@ -153,6 +160,7 @@ func (a *app) nasLogout(sv *config.Server) {
 	c := fileindex.New(sv.Addr, sv.Token)
 	sv.Token = ""
 	a.save()
+	a.serverChanged(sv.ID)
 	go c.Logout(context.Background()) // the server may be away: the session is gone here anyway
 }
 
@@ -169,8 +177,9 @@ func (a *app) nasSignedIn() {
 		return
 	}
 	var roots []fileindex.Root
+	c := b.client
 	a.nasDo("正在读取 "+b.server.Title()+" 的目录…", func(ctx context.Context) (err error) {
-		roots, err = b.client.Roots(ctx)
+		roots, err = c.Roots(ctx)
 		return err
 	}, func(err error) {
 		if err != nil {
@@ -198,10 +207,11 @@ func (a *app) nasSignedIn() {
 // choose if any.
 func (a *app) nasGo(root *fileindex.Root, p string, choose ...string) {
 	b := &a.nas
+	c := b.client
 	var dirs []string
 	b.naming = false
 	a.nasDo("正在读取目录…", func(ctx context.Context) (err error) {
-		dirs, err = b.client.Dirs(ctx, root.ID, p)
+		dirs, err = c.Dirs(ctx, root.ID, p)
 		return err
 	}, func(err error) {
 		if err != nil {
@@ -220,9 +230,10 @@ func (a *app) nasGo(root *fileindex.Root, p string, choose ...string) {
 
 func (a *app) nasMkdir() {
 	b := &a.nas
+	c := b.client
 	root, dir, name := b.root, b.path, strings.TrimSpace(b.newName)
 	a.nasDo("正在新建文件夹…", func(ctx context.Context) error {
-		return b.client.Mkdir(ctx, root.ID, dir, name)
+		return c.Mkdir(ctx, root.ID, dir, name)
 	}, func(err error) {
 		if err == nil {
 			a.nasGo(root, dir, name)
@@ -279,6 +290,7 @@ func (a *app) nasSaveServer() {
 	}
 	sv.Name, sv.Addr = strings.TrimSpace(b.name), addr
 	a.save()
+	a.serverChanged(sv.ID)
 	b.err = ""
 	if b.pick != nil {
 		a.nasUse(sv)
@@ -366,6 +378,9 @@ func (a *app) nasServers(c *ui.Context) {
 			ui.Text(c, "还没有服务器。点“添加服务器”，输入 NAS 上 fileindex 的地址。").TextColor(t.TextMuted).Padding(12)
 		}
 		for _, sv := range a.store.Servers {
+			if b.sameServer != "" && sv.ID != b.sameServer {
+				continue
+			}
 			row := ui.Row(c.Key(sv.ID)).Gap(10).Padding(10, 12).Children(func() {
 				ui.Column(c).Grow(1).Shrink(1).Gap(2).Children(func() {
 					ui.Text(c, sv.Title()).Bold().SingleLine()
@@ -388,10 +403,13 @@ func (a *app) nasServers(c *ui.Context) {
 				}
 				if b.confirmDelID == sv.ID {
 					if ui.Button(c.Key("del-yes"), "确定删除").Clicked() {
-						if err := a.store.RemoveServer(sv.ID); err != nil {
+						if a.serverHasTransfers(sv.ID) {
+							b.err = "还有传输任务正在使用这个服务器，请先等待完成或取消"
+						} else if err := a.store.RemoveServer(sv.ID); err != nil {
 							b.err = err.Error()
 						} else {
 							a.save()
+							a.serverChanged(sv.ID)
 						}
 						b.confirmDelID = ""
 					}

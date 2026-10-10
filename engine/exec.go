@@ -170,20 +170,17 @@ func (r *Run) Fatal(err error) {
 	}
 }
 
-// Execute carries out the plan. It stops when ctx is canceled; files being
-// copied then are left as they were.
-func Execute(ctx context.Context, p *Plan, h Hooks) *Result {
+// NewRun starts reporting work of total actions and totalBytes bytes that
+// is not a plan, as an upload: report to it, then call Finish.
+func NewRun(total int, totalBytes int64, h Hooks) *Run {
 	r := &Run{hooks: h}
 	r.res.Started = time.Now()
-	r.prog = Progress{Total: p.Summary.Changes(), TotalBytes: p.Summary.CopyBytes}
+	r.prog = Progress{Total: total, TotalBytes: totalBytes}
+	return r
+}
 
-	// The source may have gone since the plan was made, as a share unmounted.
-	if info, err := os.Stat(p.source); err != nil || !info.IsDir() {
-		r.res.Fatal = fmt.Errorf("源目录已无法访问: %v", err)
-	} else {
-		p.dest.Apply(ctx, p, r)
-	}
-
+// Finish ends the run, canceled if ctx is, and returns its result.
+func (r *Run) Finish(ctx context.Context) *Result {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	if ctx.Err() != nil {
@@ -194,4 +191,17 @@ func Execute(ctx context.Context, p *Plan, h Hooks) *Result {
 	res := r.res
 	res.Finished = time.Now()
 	return &res
+}
+
+// Execute carries out the plan. It stops when ctx is canceled; files being
+// copied then are left as they were.
+func Execute(ctx context.Context, p *Plan, h Hooks) *Result {
+	r := NewRun(p.Summary.Changes(), p.Summary.CopyBytes, h)
+	// The source may have gone since the plan was made, as a share unmounted.
+	if info, err := os.Stat(p.source); err != nil || !info.IsDir() {
+		r.Fatal(fmt.Errorf("源目录已无法访问: %v", err))
+	} else {
+		p.dest.Apply(ctx, p, r)
+	}
+	return r.Finish(ctx)
 }

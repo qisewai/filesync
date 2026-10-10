@@ -99,11 +99,22 @@ func (t *Target) Apply(ctx context.Context, p *engine.Plan, run *engine.Run) {
 			items = append(items, a)
 		}
 	}
+	source := p.Source()
+	t.Client.sendTree(ctx, t.Location, items, func(a engine.Action) string {
+		return filepath.Join(source, filepath.FromSlash(a.Path))
+	}, run)
+}
+
+// sendTree sends the directories, files and links of items into the
+// directory loc as one tar stream, in one request: one connection writing
+// in order keeps a link busy, and the disks of the NAS writing one file
+// after another. local gives the file of this computer an item copies.
+// The server answers each entry as it lands, which reports it to run.
+func (c *Client) sendTree(ctx context.Context, loc Location, items []engine.Action, local func(engine.Action) string, run *engine.Run) {
 	if len(items) == 0 {
 		return
 	}
-
-	s := &stream{run: run, pending: map[string]*pending{}}
+	s := &stream{run: run, pending: map[string]*pending{}, local: local}
 	stopped := ctx
 	ctx, cancel := context.WithCancel(ctx)
 	defer cancel()
@@ -111,9 +122,9 @@ func (t *Target) Apply(ctx context.Context, p *engine.Plan, run *engine.Run) {
 	written := make(chan struct{})
 	go func() {
 		defer close(written)
-		pw.CloseWithError(s.write(ctx, p.Source(), items, pw))
+		pw.CloseWithError(s.write(ctx, items, pw))
 	}()
-	answers, err := t.Client.Tar(ctx, t.Location.Root, t.Location.Path, pr)
+	answers, err := c.Tar(ctx, loc.Root, loc.Path, pr)
 	if err == nil {
 		err = s.read(answers)
 		answers.Close()
@@ -143,6 +154,7 @@ func (t *Target) Apply(ctx context.Context, p *engine.Plan, run *engine.Run) {
 // stream is a backup's tar stream: the entries sent and not yet answered.
 type stream struct {
 	run     *engine.Run
+	local   func(engine.Action) string
 	mu      sync.Mutex
 	pending map[string]*pending // by path
 	next    int                 // the index of the first item neither sent nor reported
@@ -183,7 +195,7 @@ func (s *stream) report(pd *pending, err error) {
 }
 
 // write writes the items as a tar stream to w.
-func (s *stream) write(ctx context.Context, source string, items []engine.Action, w io.Writer) error {
+func (s *stream) write(ctx context.Context, items []engine.Action, w io.Writer) error {
 	bw := bufio.NewWriterSize(w, 1<<20)
 	tw := tar.NewWriter(bw)
 	for i, a := range items {
@@ -197,7 +209,7 @@ func (s *stream) write(ctx context.Context, source string, items []engine.Action
 			pd.sent = n
 			s.mu.Unlock()
 		}}
-		err := e.write(source, a, func() { pd = s.add(a) })
+		err := e.write(s.local(a), a, func() { pd = s.add(a) })
 		s.next = i + 1
 		var bad *badFile
 		switch {
@@ -237,10 +249,11 @@ type entryWriter struct {
 	onSent func(int64)
 }
 
-// write writes the entry of an action, calling begin before its header.
-// It returns a *badFile for a file of the source that could not be sent,
-// and other errors for the stream.
-func (e *entryWriter) write(source string, a engine.Action, begin func()) error {
+// write writes the entry of an action, the file of this computer it
+// copies being file, calling begin before its header. It returns a
+// *badFile for a file that could not be sent, and other errors for the
+// stream.
+func (e *entryWriter) write(file string, a engine.Action, begin func()) error {
 	hdr := &tar.Header{Name: e.name, ModTime: a.ModTime, Mode: int64(a.Mode.Perm()), Format: tar.FormatPAX}
 	var f *os.File
 	switch {
@@ -250,7 +263,7 @@ func (e *entryWriter) write(source string, a engine.Action, begin func()) error 
 		hdr.Typeflag, hdr.Linkname = tar.TypeSymlink, a.Link
 	default:
 		var err error
-		f, err = os.Open(filepath.Join(source, filepath.FromSlash(a.Path)))
+		f, err = os.Open(file)
 		var info os.FileInfo
 		if err == nil {
 			info, err = f.Stat()

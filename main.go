@@ -36,10 +36,10 @@ func main() {
 	mygo.App.WhenReady(func() {
 		var win *mygo.Window
 		win = mygo.NewWindow(mygo.WindowOptions{
-			Title:     "FileSync 文件备份",
-			Width:     980,
-			Height:    680,
-			MinWidth:  720,
+			Title:     "FileSync · fileindex 客户端",
+			Width:     1180,
+			Height:    760,
+			MinWidth:  900,
 			MinHeight: 480,
 			StateKey:  "main",
 			Content:   ui.View(a.view),
@@ -56,6 +56,9 @@ func main() {
 				return "", err
 			}
 			return paths[0], nil
+		}
+		a.pickFiles = func(title string) ([]string, error) {
+			return mygo.Dialog.Open(mygo.OpenDialogOptions{Parent: win, Title: title, Multiple: true})
 		}
 		a.openPath = func(path string) {
 			if err := mygo.Shell.OpenPath(path); err != nil {

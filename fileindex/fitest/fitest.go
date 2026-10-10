@@ -6,6 +6,8 @@ import (
 	"archive/tar"
 	"encoding/json"
 	"fmt"
+	"image"
+	"image/jpeg"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -15,8 +17,10 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"testing"
+	"time"
 )
 
 // Password is the password the server takes.
@@ -46,9 +50,16 @@ type Server struct {
 	// a client waiting for answers before sending more would never end.
 	HoldAnswers atomic.Bool
 	// Streams counts the tar streams received.
-	Streams atomic.Int32
+	Streams        atomic.Int32
+	DropTaskEvents atomic.Bool
 
-	srv *httptest.Server
+	srv         *httptest.Server
+	tasks       atomic.Int64
+	mu          sync.Mutex
+	subs        map[chan []byte]bool
+	taskRecords map[int64]map[string]any
+	trashItems  map[int64]trashItem
+	trashSeq    int64
 }
 
 type manifestEntry struct {
@@ -61,7 +72,7 @@ type manifestEntry struct {
 
 // New starts a server, which stops with the test.
 func New(t testing.TB) *Server {
-	s := &Server{Root: t.TempDir(), ReadOnly: t.TempDir(), Trash: t.TempDir()}
+	s := &Server{Root: t.TempDir(), ReadOnly: t.TempDir(), Trash: t.TempDir(), subs: map[chan []byte]bool{}, taskRecords: map[int64]map[string]any{}, trashItems: map[int64]trashItem{}}
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /api/auth/status", func(w http.ResponseWriter, r *http.Request) {
 		fmt.Fprintf(w, `{"setup":false,"authed":%v}`, s.authed(r))
@@ -82,6 +93,37 @@ func New(t testing.TB) *Server {
 	})
 	api := http.NewServeMux()
 	api.HandleFunc("GET /api/roots", s.roots)
+	api.HandleFunc("GET /api/info", func(w http.ResponseWriter, r *http.Request) {
+		fmt.Fprint(w, `{"thumb_exts":["jpg","png"]}`)
+	})
+	api.HandleFunc("GET /api/trash", s.listTrash)
+	api.HandleFunc("POST /api/trash/restore", s.restoreTrash)
+	api.HandleFunc("POST /api/trash/delete", s.purgeTrash)
+	api.HandleFunc("GET /api/search", s.search)
+	api.HandleFunc("GET /api/thumb/{id}", s.thumb)
+	api.HandleFunc("GET /api/download/{id}", s.download)
+	api.HandleFunc("GET /api/backup/export", s.export)
+	api.HandleFunc("POST /api/fs/rename", s.rename)
+	api.HandleFunc("POST /api/fs/transfer", s.transfer)
+	api.HandleFunc("GET /api/events", s.events)
+	api.HandleFunc("GET /api/tasks", func(w http.ResponseWriter, r *http.Request) {
+		s.mu.Lock()
+		defer s.mu.Unlock()
+		out := []map[string]any{}
+		for _, task := range s.taskRecords {
+			out = append(out, task)
+		}
+		json.NewEncoder(w).Encode(out)
+	})
+	api.HandleFunc("POST /api/tasks/{id}/cancel", func(w http.ResponseWriter, r *http.Request) {
+		id, _ := strconv.ParseInt(r.PathValue("id"), 10, 64)
+		task := map[string]any{"id": id, "status": "canceled", "finished_at": time.Now().Unix()}
+		s.mu.Lock()
+		s.taskRecords[id] = task
+		s.mu.Unlock()
+		s.publish(map[string]any{"type": "task", "task": task})
+		fmt.Fprint(w, `{}`)
+	})
 	api.HandleFunc("GET /api/roots/{id}/list", s.list)
 	api.HandleFunc("POST /api/fs/mkdir", s.mkdir)
 	api.HandleFunc("GET /api/backup/manifest", s.manifest)
@@ -89,7 +131,7 @@ func New(t testing.TB) *Server {
 	api.HandleFunc("POST /api/backup/file", s.file)
 	api.HandleFunc("POST /api/fs/delete", s.delete)
 	mux.Handle("/api/", http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if !s.authed(r) || r.Method != "GET" && r.Header.Get("X-Requested-With") != "fileindex" {
+		if !s.authed(r) || r.Method != "GET" && r.Method != "HEAD" && r.Header.Get("X-Requested-With") != "fileindex" {
 			s.fail(w, 401, "未登录")
 			return
 		}
@@ -98,6 +140,31 @@ func New(t testing.TB) *Server {
 	s.srv = httptest.NewServer(mux)
 	t.Cleanup(s.srv.Close)
 	return s
+}
+
+// Entry is an entry of a listing or a search.
+type Entry struct {
+	ID     int64  `json:"id"`
+	Root   int64  `json:"root_id"`
+	Name   string `json:"name"`
+	Path   string `json:"path"`
+	Parent string `json:"parent"`
+	IsDir  bool   `json:"is_dir"`
+	Size   int64  `json:"size"`
+	MTime  int64  `json:"mtime"`
+	Ext    string `json:"ext"`
+}
+
+func (s *Server) entry(root int64, rel string, info os.FileInfo) Entry {
+	e := Entry{Root: root, Name: info.Name(), Path: rel, Parent: path.Dir(rel), IsDir: info.IsDir(), MTime: info.ModTime().Unix()}
+	if e.Parent == "." {
+		e.Parent = ""
+	}
+	if !e.IsDir {
+		e.Size = info.Size()
+		e.Ext = strings.TrimPrefix(strings.ToLower(path.Ext(rel)), ".")
+	}
+	return e
 }
 
 // Addr is the server's host and port.
@@ -141,13 +208,14 @@ func (s *Server) list(w http.ResponseWriter, r *http.Request) {
 		s.fail(w, 400, err.Error())
 		return
 	}
-	type entry struct {
-		Name  string `json:"name"`
-		IsDir bool   `json:"is_dir"`
-	}
-	items := []entry{}
+	id, _ := strconv.ParseInt(r.PathValue("id"), 10, 64)
+	items := []Entry{}
 	for _, e := range ents {
-		items = append(items, entry{e.Name(), e.IsDir()})
+		info, err := e.Info()
+		if err != nil {
+			continue
+		}
+		items = append(items, s.entry(id, path.Join(r.URL.Query().Get("path"), e.Name()), info))
 	}
 	sort.SliceStable(items, func(i, j int) bool { return items[i].IsDir && !items[j].IsDir })
 	size, _ := strconv.Atoi(r.URL.Query().Get("size"))
@@ -318,18 +386,259 @@ func (s *Server) file(w http.ResponseWriter, r *http.Request) {
 	json.NewEncoder(w).Encode(map[string]any{"path": path.Join(q.Get("path"), q.Get("name")), "size": n})
 }
 
-func (s *Server) delete(w http.ResponseWriter, r *http.Request) {
+func (s *Server) search(w http.ResponseWriter, r *http.Request) {
+	q := strings.ToLower(r.URL.Query().Get("q"))
+	items := []Entry{}
+	for _, id := range []int64{1, 2} {
+		dir, _ := s.rootDir(strconv.FormatInt(id, 10))
+		filepath.WalkDir(dir, func(p string, d os.DirEntry, err error) error {
+			if err != nil || p == dir || !strings.Contains(strings.ToLower(d.Name()), q) {
+				return nil
+			}
+			info, _ := d.Info()
+			rel, _ := filepath.Rel(dir, p)
+			items = append(items, s.entry(id, filepath.ToSlash(rel), info))
+			return nil
+		})
+	}
+	json.NewEncoder(w).Encode(map[string]any{"items": items, "total": len(items)})
+}
+
+// abs is the file of ?path= in the root of the path's {id}.
+func (s *Server) abs(r *http.Request) (string, bool) {
+	dir, ok := s.rootDir(r.PathValue("id"))
+	p := path.Clean("/" + r.URL.Query().Get("path"))
+	return filepath.Join(dir, filepath.FromSlash(p)), ok
+}
+
+func (s *Server) thumb(w http.ResponseWriter, r *http.Request) {
+	if _, ok := s.abs(r); !ok {
+		s.fail(w, 404, "不存在")
+		return
+	}
+	img := image.NewRGBA(image.Rect(0, 0, 8, 8))
+	for i := range img.Pix {
+		img.Pix[i] = 200
+	}
+	w.Header().Set("Content-Type", "image/jpeg")
+	jpeg.Encode(w, img, nil)
+}
+
+func (s *Server) download(w http.ResponseWriter, r *http.Request) {
+	abs, ok := s.abs(r)
+	if !ok {
+		s.fail(w, 404, "不存在")
+		return
+	}
+	http.ServeFile(w, r, abs)
+}
+
+func (s *Server) export(w http.ResponseWriter, r *http.Request) {
+	dir, _ := s.rootDir(r.URL.Query().Get("root"))
+	w.Header().Set("X-Total-Size", "0")
+	tw := tar.NewWriter(w)
+	for _, rel := range r.URL.Query()["path"] {
+		abs := filepath.Join(dir, filepath.FromSlash(path.Clean("/"+rel)))
+		base := filepath.Dir(abs)
+		filepath.WalkDir(abs, func(p string, d os.DirEntry, err error) error {
+			if err != nil {
+				return nil
+			}
+			info, _ := d.Info()
+			name, _ := filepath.Rel(base, p)
+			h := &tar.Header{Name: filepath.ToSlash(name), ModTime: info.ModTime(), Mode: int64(info.Mode().Perm())}
+			switch {
+			case d.IsDir():
+				h.Typeflag, h.Name = tar.TypeDir, h.Name+"/"
+				return tw.WriteHeader(h)
+			case d.Type()&os.ModeSymlink != 0:
+				h.Typeflag, h.Linkname = tar.TypeSymlink, mustReadlink(p)
+				return tw.WriteHeader(h)
+			}
+			h.Typeflag, h.Size = tar.TypeReg, info.Size()
+			tw.WriteHeader(h)
+			f, _ := os.Open(p)
+			defer f.Close()
+			_, err = io.Copy(tw, f)
+			return err
+		})
+	}
+	tw.Close()
+}
+
+func mustReadlink(p string) string {
+	l, _ := os.Readlink(p)
+	return l
+}
+
+func (s *Server) rename(w http.ResponseWriter, r *http.Request) {
 	var req struct {
-		Paths []string `json:"paths"`
+		Root int64  `json:"root"`
+		Path string `json:"path"`
+		Name string `json:"name"`
 	}
 	json.NewDecoder(r.Body).Decode(&req)
+	dir, _ := s.rootDir(strconv.FormatInt(req.Root, 10))
+	from := filepath.Join(dir, filepath.FromSlash(req.Path))
+	if err := os.Rename(from, filepath.Join(filepath.Dir(from), req.Name)); err != nil {
+		s.fail(w, 400, err.Error())
+		return
+	}
+	fmt.Fprint(w, `{}`)
+}
+
+// transfer copies or moves at once, and tells it as a task done.
+func (s *Server) transfer(w http.ResponseWriter, r *http.Request) {
+	var req struct {
+		Op      string   `json:"op"`
+		SrcRoot int64    `json:"src_root"`
+		Paths   []string `json:"paths"`
+		DstRoot int64    `json:"dst_root"`
+		DstDir  string   `json:"dst_dir"`
+	}
+	json.NewDecoder(r.Body).Decode(&req)
+	src, _ := s.rootDir(strconv.FormatInt(req.SrcRoot, 10))
+	dst, _ := s.rootDir(strconv.FormatInt(req.DstRoot, 10))
 	for _, p := range req.Paths {
-		dst := filepath.Join(s.Trash, filepath.FromSlash(p))
-		os.MkdirAll(filepath.Dir(dst), 0o755)
-		if err := os.Rename(filepath.Join(s.Root, filepath.FromSlash(p)), dst); err != nil {
+		from := filepath.Join(src, filepath.FromSlash(p))
+		to := filepath.Join(dst, filepath.FromSlash(req.DstDir), filepath.Base(from))
+		var err error
+		if req.Op == "move" {
+			err = os.Rename(from, to)
+		} else {
+			err = copyTree(from, to)
+		}
+		if err != nil {
 			s.fail(w, 400, err.Error())
 			return
 		}
 	}
+	id := s.tasks.Add(1)
+	task := map[string]any{"id": id, "kind": req.Op, "title": req.Op, "status": "queued"}
+	s.mu.Lock()
+	s.taskRecords[id] = task
+	s.mu.Unlock()
+	json.NewEncoder(w).Encode(map[string]any{"task": task})
+	go func() {
+		time.Sleep(20 * time.Millisecond)
+		done := map[string]any{"id": id, "kind": req.Op, "title": req.Op, "status": "done", "finished_at": time.Now().Unix()}
+		s.mu.Lock()
+		if s.taskRecords[id]["status"] == "canceled" {
+			s.mu.Unlock()
+			return
+		}
+		s.taskRecords[id] = done
+		s.mu.Unlock()
+		if !s.DropTaskEvents.Load() {
+			s.publish(map[string]any{"type": "task", "task": done})
+		}
+		s.publish(map[string]any{"type": "fs", "root_id": req.DstRoot})
+	}()
+}
+
+func copyTree(from, to string) error {
+	return filepath.WalkDir(from, func(p string, d os.DirEntry, err error) error {
+		if err != nil {
+			return err
+		}
+		rel, _ := filepath.Rel(from, p)
+		t := filepath.Join(to, rel)
+		if d.IsDir() {
+			return os.MkdirAll(t, 0o755)
+		}
+		b, err := os.ReadFile(p)
+		if err != nil {
+			return err
+		}
+		return os.WriteFile(t, b, 0o644)
+	})
+}
+
+func (s *Server) publish(e any) {
+	b, _ := json.Marshal(e)
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	for ch := range s.subs {
+		select {
+		case ch <- b:
+		default:
+		}
+	}
+}
+
+// Publish tells the clients listening for events.
+func (s *Server) Publish(e any) { s.publish(e) }
+
+func (s *Server) events(w http.ResponseWriter, r *http.Request) {
+	ch := make(chan []byte, 16)
+	s.mu.Lock()
+	s.subs[ch] = true
+	s.mu.Unlock()
+	defer func() {
+		s.mu.Lock()
+		delete(s.subs, ch)
+		s.mu.Unlock()
+	}()
+	w.Header().Set("Content-Type", "text/event-stream")
+	w.WriteHeader(200)
+	http.NewResponseController(w).Flush()
+	for {
+		select {
+		case <-r.Context().Done():
+			return
+		case b := <-ch:
+			fmt.Fprintf(w, "data: %s\n\n", b)
+			http.NewResponseController(w).Flush()
+		}
+	}
+}
+
+func (s *Server) delete(w http.ResponseWriter, r *http.Request) {
+	var req struct {
+		Root  int64    `json:"root"`
+		Paths []string `json:"paths"`
+	}
+	json.NewDecoder(r.Body).Decode(&req)
+	if req.Root == 2 && !s.Writable.Load() {
+		s.fail(w, 403, "只读")
+		return
+	}
+	dir := s.Root
+	if req.Root == 2 {
+		dir = s.ReadOnly
+	}
+	for _, rel := range req.Paths {
+		abs := filepath.Join(dir, filepath.FromSlash(rel))
+		info, err := os.Stat(abs)
+		if err != nil {
+			s.fail(w, 400, err.Error())
+			return
+		}
+		s.mu.Lock()
+		s.trashSeq++
+		id := s.trashSeq
+		s.mu.Unlock()
+		dst := filepath.Join(s.Trash, filepath.FromSlash(rel))
+		if _, err := os.Stat(dst); err == nil {
+			dst += fmt.Sprintf(".%d", id)
+		}
+		os.MkdirAll(filepath.Dir(dst), 0755)
+		if err := os.Rename(abs, dst); err != nil {
+			s.fail(w, 400, err.Error())
+			return
+		}
+		root := req.Root
+		if root == 0 {
+			root = 1
+		}
+		name := "nas"
+		if root == 2 {
+			name = "只读"
+		}
+		s.mu.Lock()
+		s.trashItems[id] = trashItem{ID: id, RootID: root, RootName: name, OrigPath: rel, Name: info.Name(), IsDir: info.IsDir(), Size: info.Size(), DeletedAt: time.Now().Unix(), Disk: dst}
+		s.mu.Unlock()
+	}
+	s.publish(map[string]any{"type": "trash"})
 	fmt.Fprint(w, `{"trashed":1}`)
 }

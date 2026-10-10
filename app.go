@@ -8,6 +8,7 @@ import (
 
 	"filesync/config"
 	"filesync/engine"
+	"filesync/fileindex"
 
 	"github.com/egoist/mygo/ui"
 )
@@ -22,6 +23,8 @@ type app struct {
 	// pickDir asks for a directory, "" when canceled. It blocks, and is
 	// called from goroutines of its own.
 	pickDir func(title, start string) (string, error)
+	// pickFiles asks for files, nil when canceled; it blocks.
+	pickFiles func(title string) ([]string, error)
 	// openPath opens a file with the system's default app, and openURL a
 	// web page in the browser.
 	openPath func(string)
@@ -45,7 +48,34 @@ type app struct {
 	askQuit      bool // the window is closing during a backup
 	quitWhenDone bool
 
-	nas nasBrowser
+	nas    nasBrowser
+	nasGen int
+
+	// place is what the sidebar chose: "backup", or a root as
+	// "root/<server>/<id>".
+	place string
+	open  map[string]*bool // the sidebar's sections shown open, by server
+	roots map[string][]fileindex.Root
+	// rootsLoading are the servers whose roots are being read.
+	rootsLoading map[string]*fileindex.Client
+	tree         map[string]*directoryNode
+
+	br      *browser // the root shown
+	preview *preview
+	proxy   *fileindex.LocalProxy
+	recycle *recycleBrowser
+
+	transfers     []*transfer
+	transferSeq   int
+	showTransfers bool
+	watching      map[string]func() // stops following a server's events
+	noEvents      bool              // tests: no events followed
+	closed        bool
+
+	thumbs     map[string]*thumbOf
+	thumbSlots chan struct{}
+	thumbExts  map[string]map[string]bool // by server
+	thumbSeq   uint64
 }
 
 // draft is a task being created or edited.
@@ -70,10 +100,23 @@ func newApp(store *config.Store) *app {
 		selected:    -1,
 		post:        func(fn func()) { fn() },
 		pickDir:     func(string, string) (string, error) { return "", nil },
+		pickFiles:   func(string) ([]string, error) { return nil, nil },
 		openPath:    func(string) {},
 		openURL:     func(string) {},
 		keepAwake:   func(string) func() { return func() {} },
 		closeWindow: func() {},
+
+		open:         map[string]*bool{},
+		roots:        map[string][]fileindex.Root{},
+		rootsLoading: map[string]*fileindex.Client{},
+		tree:         map[string]*directoryNode{},
+		watching:     map[string]func(){},
+		thumbs:       map[string]*thumbOf{},
+		thumbSlots:   make(chan struct{}, 4),
+		thumbExts:    map[string]map[string]bool{},
+	}
+	if len(store.Servers) == 0 && len(store.Tasks) > 0 {
+		a.place = "backup"
 	}
 	if len(store.Tasks) > 0 {
 		a.selected = 0
@@ -95,105 +138,6 @@ func (a *app) task() *config.Task {
 // tasks cannot change.
 func (a *app) busy() bool {
 	return a.job != nil && (a.job.state == jobScanning || a.job.state == jobRunning)
-}
-
-func (a *app) view(c *ui.Context) {
-	ui.Row(c).Fill().AlignItems(ui.Stretch).Children(func() {
-		a.sidebar(c)
-		ui.Column(c).Grow(1).Shrink(1).MinWidth(0).Padding(24, 28).Gap(16).Children(func() {
-			switch {
-			case a.editing:
-				a.editor(c)
-			case a.task() == nil:
-				a.welcome(c)
-			case a.job != nil && a.job.taskID == a.task().ID:
-				a.jobView(c)
-			default:
-				a.detail(c)
-			}
-		})
-	})
-	if a.askQuit {
-		switch ui.AlertDialog(c, &a.askQuit, "正在备份，要停止并退出吗？",
-			"已传输完成的文件会保留，正在传输的文件不会写入。下次备份会接着传输剩下的文件。", "继续备份", "停止并退出") {
-		case 1:
-			a.quit()
-		}
-	}
-	a.nasView(c)
-	if a.confirmRemove {
-		if task := a.task(); task != nil {
-			if ui.AlertDialog(c, &a.confirmRemove, fmt.Sprintf("删除任务“%s”？", task.Name),
-				"只删除任务设置和运行记录，不会删除本地或 NAS 上的任何文件。", "取消", "删除") == 1 {
-				a.removeTask()
-			}
-		}
-	}
-}
-
-// welcome is shown while there is no task.
-func (a *app) welcome(c *ui.Context) {
-	t := c.Theme()
-	ui.Column(c).Grow(1).Center().Gap(12).Children(func() {
-		ui.Text(c, "还没有备份任务").FontSize(18).Bold()
-		if len(a.store.Servers) == 0 {
-			ui.Text(c, "FileSync 把本机的目录备份到 NAS 上的 fileindex。先添加 fileindex 服务器的地址。").TextColor(t.TextMuted)
-			if ui.PrimaryButton(c, "添加服务器…").Clicked() {
-				a.openServers()
-				a.nasStartEdit(nil)
-			}
-			return
-		}
-		ui.Text(c, "新建一个任务，选择本机要备份的目录，和 NAS 上备份到的目录。").TextColor(t.TextMuted)
-		if ui.PrimaryButton(c, "新建任务").Clicked() {
-			a.startEditing(nil)
-		}
-	})
-}
-
-func (a *app) sidebar(c *ui.Context) {
-	t := c.Theme()
-	ui.Column(c).Width(250).Background(t.Surface).BorderWidth(0, 1, 0, 0).BorderColor(t.Border).Children(func() {
-		ui.Text(c, "备份任务").Bold().Padding(18, 16, 10)
-		list := ui.List(c.Key("tasks"), &a.tasks, len(a.store.Tasks)).Grow(1).Label("备份任务").Rows(func(row ui.ListRow) {
-			task := a.store.Tasks[row.Index]
-			muted := t.TextMuted
-			if row.Selected() {
-				muted = t.AccentText.Alpha(0.85)
-			}
-			ui.Column(c).Padding(8, 16).Gap(2).Children(func() {
-				ui.Text(c, task.Name).SingleLine()
-				status := task.Mode.String()
-				if len(task.History) > 0 {
-					status += " · " + runStatusShort(task.History[0])
-				}
-				ui.Text(c, status).FontSize(12).TextColor(muted).SingleLine()
-			})
-		})
-		if list.Changed() {
-			switch {
-			case a.busy():
-				// The task being scanned or backed up stays chosen.
-				for i, task := range a.store.Tasks {
-					if task.ID == a.job.taskID {
-						a.selected = i
-					}
-				}
-			default:
-				a.editing = false
-				a.errorMsg = ""
-				a.job = nil
-			}
-		}
-		ui.Column(c).Padding(12).Gap(8).Children(func() {
-			if ui.Button(c, "＋ 新建任务").Disabled(a.busy() || a.editing).Clicked() {
-				a.startEditing(nil)
-			}
-			if ui.Button(c, "服务器…").Disabled(a.busy()).Clicked() {
-				a.openServers()
-			}
-		})
-	})
 }
 
 // target describes where a task backs up to.
@@ -490,24 +434,61 @@ func (a *app) removeTask() {
 // requestClose is called as the window is about to close, and reports
 // whether it may.
 func (a *app) requestClose() bool {
-	if a.job != nil && a.job.state == jobRunning {
+	if a.job != nil && a.job.state == jobRunning || a.activeTransfers() > 0 {
 		a.askQuit = true
 		return false
 	}
 	if a.job != nil && a.job.cancel != nil {
 		a.job.cancel()
 	}
+	a.stopBackground()
 	return true
 }
 
 func (a *app) quit() {
-	if a.job == nil || a.job.state != jobRunning {
-		a.closeWindow()
-		return
-	}
 	// The window closes once the backup has stopped and its run is recorded.
 	a.quitWhenDone = true
-	a.job.cancel()
+	if a.job != nil && a.job.cancel != nil {
+		a.job.cancel()
+	}
+	for _, tr := range a.transfers {
+		if tr.running() && tr.cancel != nil {
+			tr.cancel()
+		}
+	}
+	a.maybeClose()
+}
+
+func (a *app) maybeClose() {
+	if a.quitWhenDone && !a.busy() && a.activeTransfers() == 0 {
+		a.stopBackground()
+		a.closeWindow()
+	}
+}
+
+func (a *app) stopBackground() {
+	a.closed = true
+	a.closePreview()
+	if a.proxy != nil {
+		a.proxy.Close()
+	}
+	if a.recycle != nil && a.recycle.cancel != nil {
+		a.recycle.cancel()
+	}
+	if a.br != nil && a.br.cancel != nil {
+		a.br.cancel()
+	}
+	if a.br != nil && a.br.thumbCancel != nil {
+		a.br.thumbCancel()
+	}
+	for server := range a.watching {
+		a.unwatch(server)
+	}
+	for _, tr := range a.transfers {
+		if tr.stop != nil {
+			tr.stop()
+		}
+	}
 }
 
 func (a *app) save() {

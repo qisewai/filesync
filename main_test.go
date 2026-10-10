@@ -27,6 +27,8 @@ type harness struct {
 func newHarness(t *testing.T, store *config.Store) *harness {
 	h := &harness{t: t, a: newApp(store), queue: make(chan func(), 1024)}
 	h.a.post = func(fn func()) { h.queue <- fn }
+	h.a.noEvents = true
+	t.Cleanup(h.a.stopBackground)
 	h.tt = ui.NewTester(h.a.view, 980, 680)
 	return h
 }
@@ -44,13 +46,22 @@ func (h *harness) settle() {
 		case <-deadline:
 			h.t.Fatal("the work did not finish")
 		default:
-			if !h.a.busy() && h.a.nas.busy == "" {
+			if !h.a.busy() && h.a.nas.busy == "" && len(h.a.rootsLoading) == 0 && !h.treeLoading() && (h.a.br == nil || !h.a.br.loading && !h.a.br.operating) && (h.a.preview == nil || !h.a.preview.loading) && (h.a.recycle == nil || !h.a.recycle.loading && !h.a.recycle.operating) && len(h.queue) == 0 {
 				h.tt.Frame()
 				return
 			}
 			time.Sleep(time.Millisecond)
 		}
 	}
+}
+
+func (h *harness) treeLoading() bool {
+	for _, n := range h.a.tree {
+		if n.loading {
+			return true
+		}
+	}
+	return false
 }
 
 func (h *harness) click(label string) {
@@ -93,7 +104,7 @@ func TestAddServerChooseDirectoryAndBackUp(t *testing.T) {
 
 	store := &config.Store{Dir: t.TempDir()}
 	h := newHarness(t, store)
-	h.want("还没有备份任务")
+	h.want("欢迎使用 FileSync")
 	h.click("添加服务器…")
 	h.typeInto("名称", "家里")
 	h.typeInto("地址", f.Addr())
@@ -102,6 +113,7 @@ func TestAddServerChooseDirectoryAndBackUp(t *testing.T) {
 	h.want("未登录")
 	h.click("完成")
 
+	h.click("备份任务")
 	h.click("新建任务")
 	h.typeInto("源目录", src)
 	h.click("选择…")
@@ -171,6 +183,7 @@ func TestPickerChoices(t *testing.T) {
 	os.MkdirAll(filepath.Join(f.Root, "照片"), 0o755)
 	store := signedIn(t, f)
 	h := newHarness(t, store)
+	h.click("备份任务")
 	h.click("新建任务")
 
 	h.click("选择…")
@@ -225,6 +238,7 @@ func TestReadOnlyRoot(t *testing.T) {
 	f := fitest.New(t)
 	os.MkdirAll(filepath.Join(f.ReadOnly, "资料"), 0o755)
 	h := newHarness(t, signedIn(t, f))
+	h.click("备份任务")
 	var opened []string
 	h.a.openURL = func(u string) { opened = append(opened, u) }
 	h.click("新建任务")
@@ -268,6 +282,7 @@ func TestBackUpContentsOnly(t *testing.T) {
 	os.WriteFile(filepath.Join(src, "a.txt"), []byte("a"), 0o644)
 	store := signedIn(t, f)
 	h := newHarness(t, store)
+	h.click("备份任务")
 	h.click("新建任务")
 	h.typeInto("源目录", src)
 	h.click("选择…")
@@ -294,6 +309,7 @@ func TestArchiveMode(t *testing.T) {
 	os.WriteFile(filepath.Join(src, "docs", "a.txt"), []byte("a"), 0o644)
 	store := signedIn(t, f)
 	h := newHarness(t, store)
+	h.click("备份任务")
 	h.click("新建任务")
 	h.typeInto("源目录", src)
 	h.click("选择…")
@@ -324,6 +340,7 @@ func TestArchiveMode(t *testing.T) {
 
 func TestEditorValidates(t *testing.T) {
 	h := newHarness(t, &config.Store{Dir: t.TempDir()})
+	h.click("备份任务")
 	h.click("＋ 新建任务")
 	h.click("保存")
 	h.want("请选择源目录。")
@@ -347,6 +364,7 @@ func TestMirrorAsksBeforeMassDelete(t *testing.T) {
 	store := signedIn(t, f)
 	store.Add(&config.Task{Name: "镜像", Source: src, Server: store.Servers[0].ID, Root: 1, RootName: "nas", Path: "m", Mode: engine.Mirror})
 	h := newHarness(t, store)
+	h.click("备份任务")
 
 	h.click("预览并备份…")
 	h.click("开始备份")
@@ -376,6 +394,7 @@ func TestExpiredSessionAsksTheLogin(t *testing.T) {
 	store.Add(&config.Task{Name: "t", Source: src, Server: store.Servers[0].ID, Root: 1, RootName: "nas", Path: "x"})
 	f.Expired.Store(true)
 	h := newHarness(t, store)
+	h.click("备份任务")
 
 	h.click("预览并备份…")
 	h.want("需要登录 NAS 上的 fileindex，登录后会自动重新扫描。")
@@ -426,6 +445,7 @@ func TestRemoveTaskKeepsFiles(t *testing.T) {
 	store := signedIn(t, f)
 	store.Add(&config.Task{Name: "要删除的任务", Source: src, Server: store.Servers[0].ID, Root: 1})
 	h := newHarness(t, store)
+	h.click("备份任务")
 	h.click("删除任务")
 	h.want("删除任务“要删除的任务”？")
 	h.click("删除")

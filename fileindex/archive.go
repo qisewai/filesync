@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"io"
 	"path"
+	"path/filepath"
 	"sync"
 
 	"archive/tar"
@@ -130,7 +131,7 @@ func (t *Archive) Apply(ctx context.Context, p *engine.Plan, run *engine.Run) {
 				run.Start(a.Path)
 				var sent int64
 				e := entryWriter{tw: tw, run: run, name: path.Join(t.Prefix, a.Path), onSent: func(n int64) { sent = n }}
-				err := e.write(p.Source(), a, func() {})
+				err := e.write(filepath.Join(p.Source(), filepath.FromSlash(a.Path)), a, func() {})
 				var bad *badFile
 				switch {
 				case errors.As(err, &bad):
