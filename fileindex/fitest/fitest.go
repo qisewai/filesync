@@ -6,6 +6,7 @@ import (
 	"archive/tar"
 	"encoding/json"
 	"fmt"
+	"hash/fnv"
 	"image"
 	"image/jpeg"
 	"io"
@@ -52,14 +53,20 @@ type Server struct {
 	// Streams counts the tar streams received.
 	Streams        atomic.Int32
 	DropTaskEvents atomic.Bool
+	HoldScans      atomic.Bool
 
-	srv         *httptest.Server
-	tasks       atomic.Int64
-	mu          sync.Mutex
-	subs        map[chan []byte]bool
-	taskRecords map[int64]map[string]any
-	trashItems  map[int64]trashItem
-	trashSeq    int64
+	srv          *httptest.Server
+	tasks        atomic.Int64
+	mu           sync.Mutex
+	subs         map[chan []byte]bool
+	taskRecords  map[int64]map[string]any
+	trashItems   map[int64]trashItem
+	trashSeq     int64
+	ManageData   string
+	managerRoots map[int64]managerRoot
+	scanRecords  map[int64][]scanJob
+	scanSeq      int64
+	dupesLastRun int64
 }
 
 type manifestEntry struct {
@@ -72,7 +79,8 @@ type manifestEntry struct {
 
 // New starts a server, which stops with the test.
 func New(t testing.TB) *Server {
-	s := &Server{Root: t.TempDir(), ReadOnly: t.TempDir(), Trash: t.TempDir(), subs: map[chan []byte]bool{}, taskRecords: map[int64]map[string]any{}, trashItems: map[int64]trashItem{}}
+	s := &Server{ManageData: t.TempDir(), managerRoots: map[int64]managerRoot{}, scanRecords: map[int64][]scanJob{}, Root: t.TempDir(), ReadOnly: t.TempDir(), Trash: t.TempDir(), subs: map[chan []byte]bool{}, taskRecords: map[int64]map[string]any{}, trashItems: map[int64]trashItem{}}
+	s.initManagement()
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /api/auth/status", func(w http.ResponseWriter, r *http.Request) {
 		fmt.Fprintf(w, `{"setup":false,"authed":%v}`, s.authed(r))
@@ -92,9 +100,13 @@ func New(t testing.TB) *Server {
 		fmt.Fprint(w, `{"ok":true}`)
 	})
 	api := http.NewServeMux()
+	s.managementRoutes(api)
 	api.HandleFunc("GET /api/roots", s.roots)
 	api.HandleFunc("GET /api/info", func(w http.ResponseWriter, r *http.Request) {
-		fmt.Fprint(w, `{"thumb_exts":["jpg","png"]}`)
+		s.mu.Lock()
+		last := s.dupesLastRun
+		s.mu.Unlock()
+		fmt.Fprintf(w, `{"thumb_exts":["jpg","png"],"dupes_last_run":%d}`, last)
 	})
 	api.HandleFunc("GET /api/trash", s.listTrash)
 	api.HandleFunc("POST /api/trash/restore", s.restoreTrash)
@@ -144,19 +156,25 @@ func New(t testing.TB) *Server {
 
 // Entry is an entry of a listing or a search.
 type Entry struct {
-	ID     int64  `json:"id"`
-	Root   int64  `json:"root_id"`
-	Name   string `json:"name"`
-	Path   string `json:"path"`
-	Parent string `json:"parent"`
-	IsDir  bool   `json:"is_dir"`
-	Size   int64  `json:"size"`
-	MTime  int64  `json:"mtime"`
-	Ext    string `json:"ext"`
+	ID       int64  `json:"id"`
+	Root     int64  `json:"root_id"`
+	RootName string `json:"root_name"`
+	Name     string `json:"name"`
+	Path     string `json:"path"`
+	Parent   string `json:"parent"`
+	IsDir    bool   `json:"is_dir"`
+	Size     int64  `json:"size"`
+	MTime    int64  `json:"mtime"`
+	Ext      string `json:"ext"`
 }
 
 func (s *Server) entry(root int64, rel string, info os.FileInfo) Entry {
-	e := Entry{Root: root, Name: info.Name(), Path: rel, Parent: path.Dir(rel), IsDir: info.IsDir(), MTime: info.ModTime().Unix()}
+	h := fnv.New64a()
+	fmt.Fprintf(h, "%d/%s", root, rel)
+	s.mu.Lock()
+	rootName := s.managerRoots[root].Name
+	s.mu.Unlock()
+	e := Entry{RootName: rootName, ID: int64(h.Sum64() >> 1), Root: root, Name: info.Name(), Path: rel, Parent: path.Dir(rel), IsDir: info.IsDir(), MTime: info.ModTime().Unix()}
 	if e.Parent == "." {
 		e.Parent = ""
 	}
@@ -181,20 +199,14 @@ func (s *Server) fail(w http.ResponseWriter, code int, msg string) {
 }
 
 func (s *Server) rootDir(id string) (string, bool) {
-	switch id {
-	case "1":
-		return s.Root, true
-	case "2":
-		return s.ReadOnly, true
-	}
-	return "", false
+	rootID, _ := strconv.ParseInt(id, 10, 64)
+	s.mu.Lock()
+	root, ok := s.managerRoots[rootID]
+	s.mu.Unlock()
+	return root.Disk, ok
 }
-
 func (s *Server) roots(w http.ResponseWriter, r *http.Request) {
-	json.NewEncoder(w).Encode(map[string]any{"roots": []map[string]any{
-		{"id": 1, "name": "nas", "path": "/data/nas", "readonly": false},
-		{"id": 2, "name": "只读", "path": "/data/ro", "readonly": !s.Writable.Load()},
-	}})
+	json.NewEncoder(w).Encode(map[string]any{"roots": s.managedRoots(), "data_roots": []string{"/data"}})
 }
 
 func (s *Server) list(w http.ResponseWriter, r *http.Request) {

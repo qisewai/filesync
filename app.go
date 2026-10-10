@@ -64,6 +64,7 @@ type app struct {
 	preview *preview
 	proxy   *fileindex.LocalProxy
 	recycle *recycleBrowser
+	admin   *adminPage
 
 	transfers     []*transfer
 	transferSeq   int
@@ -468,6 +469,9 @@ func (a *app) maybeClose() {
 
 func (a *app) stopBackground() {
 	a.closed = true
+	if a.admin != nil {
+		a.admin.stop()
+	}
 	a.closePreview()
 	if a.proxy != nil {
 		a.proxy.Close()

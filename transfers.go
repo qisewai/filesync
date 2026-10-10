@@ -30,8 +30,9 @@ type transfer struct {
 	current     string
 
 	// A task of the server, followed by its events.
-	server string
-	task   int64
+	server            string
+	task              int64
+	scanRoot, scanJob int64
 	// after runs on the main thread once it ends well, as a refresh.
 	after func()
 	stop  context.CancelFunc
@@ -225,6 +226,9 @@ func (a *app) transferRow(c *ui.Context, tr *transfer) {
 				}
 				ui.Progress(c, frac).Label(tr.title)
 				info := formatBytes(tr.done)
+				if tr.scanRoot > 0 {
+					info = fmt.Sprintf("已扫描 %d 项", tr.files)
+				}
 				if tr.total > 0 {
 					info += " / " + formatBytes(tr.total)
 				}
@@ -320,7 +324,27 @@ func (a *app) unwatch(serverID string) {
 
 func (a *app) onEvent(server string, e fileindex.Event) {
 	switch e.Type {
+	case "job":
+		a.applyScan(server, e.Job, e.Current)
+	case "dupes":
+		a.adminRefreshSoon(server)
 	case "task":
+		if m := a.admin; m != nil && m.server == server && e.Task != nil && e.Task.Kind == "dupes" {
+			found := false
+			for i, t := range m.tasks {
+				if t.ID == e.Task.ID {
+					m.tasks[i] = *e.Task
+					found = true
+					break
+				}
+			}
+			if !found {
+				m.tasks = append(m.tasks, *e.Task)
+			}
+			if e.Task.Finished() {
+				a.adminRefreshSoon(server)
+			}
+		}
 		if e.Task == nil {
 			return
 		}
@@ -333,6 +357,7 @@ func (a *app) onEvent(server string, e fileindex.Event) {
 	case "trash":
 		a.trashRefreshSoon(server)
 	case "fs":
+		a.adminRefreshSoon(server)
 		a.invalidateTree(server, e.Root)
 		if b := a.br; b != nil && b.server == server && b.root.ID == e.Root && !b.results {
 			a.refreshSoon()

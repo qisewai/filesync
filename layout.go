@@ -20,6 +20,8 @@ func (a *app) view(c *ui.Context) {
 				notice(c, c.Theme().Danger, a.errorMsg)
 			}
 			switch {
+			case a.admin != nil && a.place == adminPlace(a.admin.server, a.admin.tab):
+				a.adminView(c)
 			case a.place == "backup":
 				a.backupPage(c)
 			case a.recycle != nil && a.place == trashPlace(a.recycle.server):
@@ -47,7 +49,7 @@ func (a *app) view(c *ui.Context) {
 	})
 	if a.askQuit {
 		switch ui.AlertDialog(c, &a.askQuit, "任务正在进行，要停止并退出吗？",
-			"已完成的文件会保留，本机传输会停止，下次备份可继续。复制、移动会向服务器请求取消；服务器无法连接时，这些任务可能继续运行。", "继续任务", "停止并退出") {
+			"已完成的文件会保留，本机传输会停止，下次备份可继续。复制、移动、查重和索引扫描会向服务器请求取消；服务器无法连接时，这些任务可能继续运行。", "继续任务", "停止并退出") {
 		case 1:
 			a.quit()
 		}
@@ -151,6 +153,9 @@ func (a *app) sidebar(c *ui.Context) {
 							ui.Text(c, "（没有索引目录）")
 							ui.Button(c.Key("retry-roots/"+sv.ID), "重新读取目录").OnClick(func() { delete(a.roots, sv.ID) })
 						}
+						for _, tab := range []struct{ id, label string }{{"roots", "目录管理"}, {"dupes", "查重"}, {"stats", "空间统计"}} {
+							ui.TreeItem(c.Key(adminPlace(sv.ID, tab.id)), tab.label, nil, nil).OnClick(func() { a.openAdmin(sv.ID, tab.id) })
+						}
 						ui.TreeItem(c.Key(trashPlace(sv.ID)), "回收站", nil, nil).OnClick(func() { a.openTrash(sv.ID) })
 						for _, r := range roots {
 							a.directoryView(c, sv, r, "", r.Name)
@@ -164,8 +169,8 @@ func (a *app) sidebar(c *ui.Context) {
 			ui.Button(c.Key("transfers-page"), "传输任务").OnClick(func() { a.place = "transfers" })
 			ui.MenuButton(c.Key("web-management"), "网页管理", func(m *ui.Menu) {
 				for _, sv := range a.store.Servers {
-					if m.Item(sv.Title() + " · 索引目录").Chosen() {
-						a.openURL("http://" + sv.Addr + "/roots")
+					if m.Item(sv.Title() + " · 设置").Chosen() {
+						a.openURL("http://" + sv.Addr + "/settings")
 					}
 				}
 			}).Disabled(len(a.store.Servers) == 0)
@@ -182,6 +187,9 @@ func (a *app) goPlace(place string) {
 	switch kind {
 	case "backup":
 		a.place = place
+	case "admin":
+		server, tab, _ := strings.Cut(rest, "/")
+		a.openAdmin(server, tab)
 	case "trash":
 		a.openTrash(rest)
 	case "login":
@@ -225,7 +233,7 @@ func (a *app) loadRoots(sv *config.Server) {
 				a.roots[sv.ID] = nil // shows none; reopening the servers retries
 				a.errorMsg = sv.Title() + ": " + err.Error()
 			default:
-				a.roots[sv.ID] = roots
+				a.applyRoots(sv.ID, roots)
 				a.watch(sv)
 				// Nothing chosen yet: the first root shows.
 				if a.place == "" && len(roots) > 0 {
@@ -239,6 +247,13 @@ func (a *app) loadRoots(sv *config.Server) {
 // serverChanged forgets what was read of a server, after its session or
 // address changed or it was removed.
 func (a *app) serverChanged(id string) {
+	if a.admin != nil && a.admin.server == id {
+		a.admin.stop()
+		a.admin = nil
+		if strings.HasPrefix(a.place, "admin/"+id+"/") {
+			a.place = ""
+		}
+	}
 	if a.proxy != nil {
 		a.proxy.Revoke(id)
 	}

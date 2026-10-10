@@ -46,7 +46,7 @@ func (h *harness) settle() {
 		case <-deadline:
 			h.t.Fatal("the work did not finish")
 		default:
-			if !h.a.busy() && h.a.nas.busy == "" && len(h.a.rootsLoading) == 0 && !h.treeLoading() && (h.a.br == nil || !h.a.br.loading && !h.a.br.operating) && (h.a.preview == nil || !h.a.preview.loading) && (h.a.recycle == nil || !h.a.recycle.loading && !h.a.recycle.operating) && len(h.queue) == 0 {
+			if !h.a.busy() && h.a.nas.busy == "" && len(h.a.rootsLoading) == 0 && !h.treeLoading() && (h.a.br == nil || !h.a.br.loading && !h.a.br.operating) && (h.a.preview == nil || !h.a.preview.loading) && (h.a.recycle == nil || !h.a.recycle.loading && !h.a.recycle.operating) && (h.a.admin == nil || !h.a.admin.loading && !h.a.admin.busy && !h.a.admin.historyLoading && (h.a.admin.draft == nil || h.a.admin.draft.picker == nil || !h.a.admin.draft.picker.loading)) && len(h.queue) == 0 {
 				h.tt.Frame()
 				return
 			}

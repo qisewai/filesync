@@ -77,7 +77,8 @@ func (c *Client) Search(ctx context.Context, q string, root int64, dir string, l
 type Info struct {
 	// ThumbExts are the extensions of files the server makes thumbnails
 	// of.
-	ThumbExts []string `json:"thumb_exts"`
+	ThumbExts    []string `json:"thumb_exts"`
+	DupesLastRun int64    `json:"dupes_last_run"`
 }
 
 // Info asks the server about itself.
@@ -166,9 +167,11 @@ func (c *Client) CancelTask(ctx context.Context, id int64) error {
 // Event is what the server tells as it happens: a task's progress, or a
 // root's files changed.
 type Event struct {
-	Type string `json:"type"` // task | fs | …
-	Task *Task  `json:"task"`
-	Root int64  `json:"root_id"`
+	Type    string   `json:"type"` // task | fs | …
+	Task    *Task    `json:"task"`
+	Job     *ScanJob `json:"job"`
+	Current string   `json:"current"`
+	Root    int64    `json:"root_id"`
 }
 
 // Events calls fn with the server's events until ctx ends or the stream

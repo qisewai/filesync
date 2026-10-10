@@ -170,10 +170,19 @@ func (c *Client) Authed(ctx context.Context) (bool, error) {
 
 // Root is a directory the server indexes, under which backups go.
 type Root struct {
-	ID       int64  `json:"id"`
-	Name     string `json:"name"`
-	Path     string `json:"path"`
-	ReadOnly bool   `json:"readonly"`
+	ID         int64      `json:"id"`
+	Name       string     `json:"name"`
+	Path       string     `json:"path"`
+	ReadOnly   bool       `json:"readonly"`
+	Excludes   []string   `json:"excludes"`
+	LastScanAt int64      `json:"last_scan_at"`
+	FileCount  int64      `json:"file_count"`
+	DirCount   int64      `json:"dir_count"`
+	TotalSize  int64      `json:"total_size"`
+	Schedule   string     `json:"schedule"`
+	NextScanAt int64      `json:"next_scan_at"`
+	Active     *ScanEvent `json:"active"`
+	LastJob    *ScanJob   `json:"last_job"`
 }
 
 // Roots lists the server's directories.
