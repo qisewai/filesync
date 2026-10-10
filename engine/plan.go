@@ -49,6 +49,9 @@ type Options struct {
 	Excludes       []string
 	// TimeTolerance is DefaultTimeTolerance when zero.
 	TimeTolerance time.Duration
+	// Dest is where the backup writes, in place of the local directory
+	// Target, as a server.
+	Dest Target
 }
 
 // ActionKind is what an action does.
@@ -116,8 +119,12 @@ type Plan struct {
 	TargetMissing bool
 	Created       time.Time
 
-	source, target string // resolved roots
+	source string // the resolved source directory
+	dest   Target
 }
+
+// Source is the directory the plan copies from.
+func (p *Plan) Source() string { return p.source }
 
 // ScanProgress is reported while Prepare scans.
 type ScanProgress struct {
@@ -131,9 +138,15 @@ func Prepare(ctx context.Context, opts Options, onProgress func(ScanProgress)) (
 	if opts.TimeTolerance <= 0 {
 		opts.TimeTolerance = DefaultTimeTolerance
 	}
-	source, target, targetMissing, err := checkRoots(opts.Source, opts.Target)
+	source, err := checkSource(opts.Source)
 	if err != nil {
 		return nil, err
+	}
+	dest := opts.Dest
+	if dest == nil {
+		if dest, err = newLocalTarget(source, opts.Target); err != nil {
+			return nil, err
+		}
 	}
 	filter, err := NewFilter(opts.Excludes)
 	if err != nil {
@@ -153,11 +166,9 @@ func Prepare(ctx context.Context, opts Options, onProgress func(ScanProgress)) (
 	if err != nil {
 		return nil, fmt.Errorf("无法读取源目录: %w", err)
 	}
-	dst := &tree{}
-	if !targetMissing {
-		if dst, err = scan(ctx, target, filter, onEntry); err != nil {
-			return nil, fmt.Errorf("无法读取目标目录: %w", err)
-		}
+	dst, missing, err := dest.Scan(ctx, filter, onEntry)
+	if err != nil {
+		return nil, fmt.Errorf("无法读取目标 %s: %w", dest, err)
 	}
 	if onProgress != nil {
 		onProgress(ScanProgress{Entries: n})
@@ -165,59 +176,39 @@ func Prepare(ctx context.Context, opts Options, onProgress func(ScanProgress)) (
 
 	p := &Plan{
 		Options:         opts,
-		CaseInsensitive: caseInsensitive(target),
-		TargetMissing:   targetMissing,
+		CaseInsensitive: dest.CaseInsensitive(),
+		TargetMissing:   missing,
 		Created:         time.Now(),
 		source:          source,
-		target:          target,
+		dest:            dest,
 	}
 	p.build(src, dst)
-	if p.Options.Mode == Mirror && p.SourceFiles == 0 && len(src.entries) == 0 && p.TargetFiles > 0 {
+	if p.Options.Mode == Mirror && p.SourceFiles == 0 && len(src.Entries) == 0 && p.TargetFiles > 0 {
 		return nil, errors.New("源目录是空的，而目标目录有文件。完全一致模式会删除目标中的所有文件，已拒绝执行。请确认源目录（如网络共享）已经挂载")
 	}
 	return p, nil
 }
 
-// checkRoots resolves the roots and makes sure a backup between them is
-// possible.
-func checkRoots(source, target string) (src, dst string, targetMissing bool, err error) {
-	if strings.TrimSpace(source) == "" || strings.TrimSpace(target) == "" {
-		return "", "", false, errors.New("请选择源目录和目标目录")
+// checkSource resolves the source directory.
+func checkSource(source string) (string, error) {
+	if strings.TrimSpace(source) == "" {
+		return "", errors.New("请选择源目录")
 	}
-	if src, err = filepath.Abs(source); err != nil {
-		return
-	}
-	if dst, err = filepath.Abs(target); err != nil {
-		return
+	src, err := filepath.Abs(source)
+	if err != nil {
+		return "", err
 	}
 	if src, err = filepath.EvalSymlinks(src); err != nil {
-		return "", "", false, fmt.Errorf("无法访问源目录 %s: %w", source, err)
+		return "", fmt.Errorf("无法访问源目录 %s: %w", source, err)
 	}
 	info, err := os.Stat(src)
 	if err != nil {
-		return "", "", false, fmt.Errorf("无法访问源目录 %s: %w", source, err)
+		return "", fmt.Errorf("无法访问源目录 %s: %w", source, err)
 	}
 	if !info.IsDir() {
-		return "", "", false, fmt.Errorf("源 %s 不是目录", source)
+		return "", fmt.Errorf("源 %s 不是目录", source)
 	}
-	if resolved, rerr := filepath.EvalSymlinks(dst); rerr == nil {
-		dst = resolved
-		info, err := os.Stat(dst)
-		if err != nil {
-			return "", "", false, fmt.Errorf("无法访问目标目录 %s: %w", target, err)
-		}
-		if !info.IsDir() {
-			return "", "", false, fmt.Errorf("目标 %s 不是目录", target)
-		}
-	} else if errors.Is(rerr, os.ErrNotExist) {
-		targetMissing = true
-	} else {
-		return "", "", false, fmt.Errorf("无法访问目标目录 %s: %w", target, rerr)
-	}
-	if within(src, dst) || within(dst, src) {
-		return "", "", false, errors.New("源目录和目标目录不能相同，也不能一个在另一个里面")
-	}
-	return src, dst, targetMissing, nil
+	return src, nil
 }
 
 // within reports whether p is dir or inside it.
@@ -232,7 +223,7 @@ func within(p, dir string) bool {
 	return rel != ".." && !strings.HasPrefix(rel, ".."+string(filepath.Separator))
 }
 
-func (p *Plan) build(src, dst *tree) {
+func (p *Plan) build(src, dst *Tree) {
 	key := func(s string) string { return s }
 	if p.CaseInsensitive {
 		key = strings.ToLower
@@ -241,16 +232,16 @@ func (p *Plan) build(src, dst *tree) {
 	mirror := p.Options.Mode == Mirror
 	tolerance := p.Options.TimeTolerance
 
-	dstIndex := make(map[string]*entry, len(dst.entries))
-	for i := range dst.entries {
-		e := &dst.entries[i]
-		dstIndex[key(e.rel)] = e
-		if !e.isDir {
+	dstIndex := make(map[string]*Entry, len(dst.Entries))
+	for i := range dst.Entries {
+		e := &dst.Entries[i]
+		dstIndex[key(e.Path)] = e
+		if !e.IsDir {
 			p.TargetFiles++
 		}
 	}
 	unreadable := map[string]bool{}
-	for _, rel := range src.unreadable {
+	for _, rel := range src.Unreadable {
 		unreadable[key(rel)] = true
 	}
 
@@ -262,26 +253,26 @@ func (p *Plan) build(src, dst *tree) {
 		deletes  []Action
 		creates  []Action
 	)
-	for i := range src.entries {
-		e := &src.entries[i]
-		k := key(e.rel)
-		if !e.isDir {
+	for i := range src.Entries {
+		e := &src.Entries[i]
+		k := key(e.Path)
+		if !e.IsDir {
 			p.SourceFiles++
 		}
-		if parent := path.Dir(e.rel); parent != "." && skipped[key(parent)] {
+		if parent := path.Dir(e.Path); parent != "." && skipped[key(parent)] {
 			continue
 		}
 		skip := func(reason string) {
-			creates = append(creates, Action{Kind: ActSkip, Path: e.rel, Size: e.size, Reason: reason})
-			if e.isDir {
+			creates = append(creates, Action{Kind: ActSkip, Path: e.Path, Size: e.Size, Reason: reason})
+			if e.IsDir {
 				skipped[k] = true
 			}
 			if _, ok := seen[k]; !ok {
 				keep[k] = true // what the target has in its place stays
 			}
 		}
-		if e.special != "" {
-			skip(e.special)
+		if e.Special != "" {
+			skip(e.Special)
 			continue
 		}
 		if other, ok := seen[k]; ok {
@@ -289,15 +280,15 @@ func (p *Plan) build(src, dst *tree) {
 			continue
 		}
 		if checkNames {
-			if problem := windowsNameProblem(path.Base(e.rel)); problem != "" {
+			if problem := windowsNameProblem(path.Base(e.Path)); problem != "" {
 				skip(problem)
 				continue
 			}
 		}
-		seen[k] = e.rel
+		seen[k] = e.Path
 
 		d := dstIndex[k]
-		if d != nil && (d.isDir != e.isDir || d.special != "") {
+		if d != nil && (d.IsDir != e.IsDir || d.Special != "") {
 			if !mirror {
 				skip("目标中已有同名但类型不同的项，增量备份不会删除它")
 				continue
@@ -310,21 +301,21 @@ func (p *Plan) build(src, dst *tree) {
 			keep[k] = true
 		}
 		switch {
-		case e.isDir && d == nil:
-			creates = append(creates, Action{Kind: ActMkdir, Path: e.rel, perm: e.perm})
-		case e.isDir:
+		case e.IsDir && d == nil:
+			creates = append(creates, Action{Kind: ActMkdir, Path: e.Path, perm: e.Perm})
+		case e.IsDir:
 		case d == nil:
-			creates = append(creates, Action{Kind: ActCreate, Path: e.rel, Size: e.size, ModTime: e.modTime, perm: e.perm})
-		case d.size != e.size || absDuration(d.modTime.Sub(e.modTime)) > tolerance:
-			creates = append(creates, Action{Kind: ActUpdate, Path: e.rel, Size: e.size, ModTime: e.modTime, perm: e.perm})
+			creates = append(creates, Action{Kind: ActCreate, Path: e.Path, Size: e.Size, ModTime: e.ModTime, perm: e.Perm})
+		case d.Size != e.Size || absDuration(d.ModTime.Sub(e.ModTime)) > tolerance:
+			creates = append(creates, Action{Kind: ActUpdate, Path: e.Path, Size: e.Size, ModTime: e.ModTime, perm: e.Perm})
 		}
 	}
 
 	if mirror {
-		for i := range dst.entries {
-			d := &dst.entries[i]
-			k := key(d.rel)
-			if keep[k] || underAny(d.rel, unreadable, key) || underAny(d.rel, skipped, key) {
+		for i := range dst.Entries {
+			d := &dst.Entries[i]
+			k := key(d.Path)
+			if keep[k] || underAny(d.Path, unreadable, key) || underAny(d.Path, skipped, key) {
 				continue
 			}
 			reason := ""
@@ -334,16 +325,16 @@ func (p *Plan) build(src, dst *tree) {
 			deletes = append(deletes, deleteAction(d, reason))
 		}
 	}
-	for _, rel := range dst.temps {
+	for _, rel := range dst.Temps {
 		deletes = append(deletes, Action{Kind: ActCleanup, Path: rel, Reason: "上次中断时留下的临时文件"})
 	}
-	if len(src.unreadable) > 0 && mirror {
-		p.Warnings = append(p.Warnings, fmt.Sprintf("源中有 %d 个目录无法读取，目标中对应的内容不会被删除", len(src.unreadable)))
+	if len(src.Unreadable) > 0 && mirror {
+		p.Warnings = append(p.Warnings, fmt.Sprintf("源中有 %d 个目录无法读取，目标中对应的内容不会被删除", len(src.Unreadable)))
 	}
-	for _, msg := range src.errors {
+	for _, msg := range src.Errors {
 		p.Warnings = append(p.Warnings, "读取源出错: "+msg)
 	}
-	for _, msg := range dst.errors {
+	for _, msg := range dst.Errors {
 		p.Warnings = append(p.Warnings, "读取目标出错: "+msg)
 	}
 
@@ -389,11 +380,11 @@ func (p *Plan) build(src, dst *tree) {
 	}
 }
 
-func deleteAction(d *entry, reason string) Action {
-	if d.isDir {
-		return Action{Kind: ActRmdir, Path: d.rel, Reason: reason}
+func deleteAction(d *Entry, reason string) Action {
+	if d.IsDir {
+		return Action{Kind: ActRmdir, Path: d.Path, Reason: reason}
 	}
-	return Action{Kind: ActDelete, Path: d.rel, Size: d.size, Reason: reason}
+	return Action{Kind: ActDelete, Path: d.Path, Size: d.Size, Reason: reason}
 }
 
 func absDuration(d time.Duration) time.Duration {

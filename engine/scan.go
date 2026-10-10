@@ -12,22 +12,22 @@ import (
 	"time"
 )
 
-// entry is a file or directory found under a root.
-type entry struct {
-	rel     string // slash-separated, relative to the root
-	isDir   bool
-	size    int64
-	modTime time.Time
-	perm    fs.FileMode
-	special string // why it cannot be copied (a symbolic link…), or ""
+// Entry is a file or directory found under a root.
+type Entry struct {
+	Path    string // slash-separated, relative to the root
+	IsDir   bool
+	Size    int64
+	ModTime time.Time
+	Perm    fs.FileMode
+	Special string // why it cannot be copied (a symbolic link…), or ""
 }
 
-// tree is what a scan found under a root.
-type tree struct {
-	entries    []entry  // in lexical order, each directory before its contents
-	unreadable []string // directories whose contents could not be listed
-	temps      []string // temporary files left by an interrupted copy
-	errors     []string
+// Tree is what a scan found under a root.
+type Tree struct {
+	Entries    []Entry  // each directory before its contents
+	Unreadable []string // directories whose contents could not be listed
+	Temps      []string // temporary files left by an interrupted copy
+	Errors     []string
 }
 
 // tempName matches the temporary files copies write before renaming them.
@@ -35,8 +35,8 @@ var tempName = regexp.MustCompile(`^\.filesync-[0-9a-f]{8}\.tmp$`)
 
 // scan lists root, leaving out what f excludes. onEntry is called for every
 // entry, for progress.
-func scan(ctx context.Context, root string, f *Filter, onEntry func()) (*tree, error) {
-	t := &tree{}
+func scan(ctx context.Context, root string, f *Filter, onEntry func()) (*Tree, error) {
+	t := &Tree{}
 	err := filepath.WalkDir(root, func(p string, d fs.DirEntry, err error) error {
 		if ctx.Err() != nil {
 			return ctx.Err()
@@ -56,9 +56,9 @@ func scan(ctx context.Context, root string, f *Filter, onEntry func()) (*tree, e
 			if d != nil && d.IsDir() {
 				// The directory itself was listed by its parent, but not its
 				// contents.
-				t.unreadable = append(t.unreadable, rel)
+				t.Unreadable = append(t.Unreadable, rel)
 			}
-			t.errors = append(t.errors, rel+": "+err.Error())
+			t.Errors = append(t.Errors, rel+": "+err.Error())
 			return nil
 		}
 		if onEntry != nil {
@@ -66,7 +66,7 @@ func scan(ctx context.Context, root string, f *Filter, onEntry func()) (*tree, e
 		}
 		isDir := d.IsDir()
 		if !isDir && tempName.MatchString(d.Name()) {
-			t.temps = append(t.temps, rel)
+			t.Temps = append(t.Temps, rel)
 			return nil
 		}
 		if f.Excluded(rel, isDir) {
@@ -80,26 +80,26 @@ func scan(ctx context.Context, root string, f *Filter, onEntry func()) (*tree, e
 			if errors.Is(ierr, fs.ErrNotExist) {
 				return nil // gone since it was listed
 			}
-			t.errors = append(t.errors, rel+": "+ierr.Error())
+			t.Errors = append(t.Errors, rel+": "+ierr.Error())
 			if isDir {
-				t.unreadable = append(t.unreadable, rel)
+				t.Unreadable = append(t.Unreadable, rel)
 				return fs.SkipDir
 			}
 			return nil
 		}
-		e := entry{rel: rel, isDir: isDir, size: info.Size(), modTime: info.ModTime(), perm: info.Mode().Perm()}
+		e := Entry{Path: rel, IsDir: isDir, Size: info.Size(), ModTime: info.ModTime(), Perm: info.Mode().Perm()}
 		switch mode := info.Mode(); {
 		case mode&fs.ModeSymlink != 0:
-			e.special = "符号链接"
+			e.Special = "符号链接"
 		case mode&fs.ModeIrregular != 0:
-			e.special = "特殊文件（如 Windows 的连接点）"
+			e.Special = "特殊文件（如 Windows 的连接点）"
 		case !mode.IsRegular() && !isDir:
-			e.special = "设备、管道或套接字等特殊文件"
+			e.Special = "设备、管道或套接字等特殊文件"
 		}
-		if e.special != "" {
-			e.isDir = false
+		if e.Special != "" {
+			e.IsDir = false
 		}
-		t.entries = append(t.entries, e)
+		t.Entries = append(t.Entries, e)
 		return nil
 	})
 	if err != nil {

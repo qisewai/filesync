@@ -18,12 +18,15 @@ const MaxHistory = 20
 
 // Task is a backup the user set up.
 type Task struct {
-	ID       string      `json:"id"`
-	Name     string      `json:"name"`
-	Source   string      `json:"source"`
-	Target   string      `json:"target"`
-	Mode     engine.Mode `json:"mode"`
-	Excludes []string    `json:"excludes"`
+	ID     string `json:"id"`
+	Name   string `json:"name"`
+	Source string `json:"source"`
+	Target string `json:"target"`
+	// TargetName shows a target that is a URL, as a directory of the NAS:
+	// "NAS 192.168.0.235:8090 · 王宁/备份".
+	TargetName string      `json:"targetName,omitempty"`
+	Mode       engine.Mode `json:"mode"`
+	Excludes   []string    `json:"excludes"`
 	// TimeTolerance is in seconds; 0 is engine.DefaultTimeTolerance.
 	TimeTolerance int   `json:"timeTolerance,omitempty"`
 	History       []Run `json:"history,omitempty"`
@@ -71,6 +74,11 @@ var DefaultExcludes = []string{"Thumbs.db", "desktop.ini", ".DS_Store", "$RECYCL
 type Store struct {
 	Dir   string
 	Tasks []*Task
+	// Sessions are the logins to fileindex servers, by address. The file
+	// keeps no password, only these.
+	Sessions map[string]string
+	// LastServer is the address of the fileindex server used last.
+	LastServer string
 }
 
 // DefaultDir is where the app keeps its settings: ~/.config/filesync on
@@ -81,6 +89,21 @@ func DefaultDir() (string, error) {
 		return "", err
 	}
 	return filepath.Join(dir, "filesync"), nil
+}
+
+type fileData struct {
+	Tasks      []*Task           `json:"tasks"`
+	Sessions   map[string]string `json:"sessions,omitempty"`
+	LastServer string            `json:"lastServer,omitempty"`
+}
+
+// SetSession keeps the login to a server.
+func (s *Store) SetSession(addr, token string) {
+	if s.Sessions == nil {
+		s.Sessions = map[string]string{}
+	}
+	s.Sessions[addr] = token
+	s.LastServer = addr
 }
 
 func (s *Store) file() string { return filepath.Join(s.Dir, "tasks.json") }
@@ -98,13 +121,11 @@ func Load(dir string) (*Store, error) {
 	if err != nil {
 		return nil, err
 	}
-	var data struct {
-		Tasks []*Task `json:"tasks"`
-	}
+	var data fileData
 	if err := json.Unmarshal(b, &data); err != nil {
 		return nil, err
 	}
-	s.Tasks = data.Tasks
+	s.Tasks, s.Sessions, s.LastServer = data.Tasks, data.Sessions, data.LastServer
 	return s, nil
 }
 
@@ -114,16 +135,17 @@ func (s *Store) Save() error {
 	if err := os.MkdirAll(s.Dir, 0o755); err != nil {
 		return err
 	}
-	tasks := s.Tasks
-	if tasks == nil {
-		tasks = []*Task{}
+	data := fileData{Tasks: s.Tasks, Sessions: s.Sessions, LastServer: s.LastServer}
+	if data.Tasks == nil {
+		data.Tasks = []*Task{}
 	}
-	b, err := json.MarshalIndent(map[string]any{"tasks": tasks}, "", "  ")
+	b, err := json.MarshalIndent(data, "", "  ")
 	if err != nil {
 		return err
 	}
+	// Only the user reads it: it holds the sessions.
 	tmp := s.file() + ".tmp"
-	if err := os.WriteFile(tmp, b, 0o644); err != nil {
+	if err := os.WriteFile(tmp, b, 0o600); err != nil {
 		return err
 	}
 	return os.Rename(tmp, s.file())

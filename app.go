@@ -7,6 +7,7 @@ import (
 
 	"filesync/config"
 	"filesync/engine"
+	"filesync/fileindex"
 	"filesync/places"
 
 	"github.com/egoist/mygo/ui"
@@ -42,12 +43,15 @@ type app struct {
 
 	askQuit      bool // the window is closing during a backup
 	quitWhenDone bool
+
+	nas nasBrowser
 }
 
 // draft is a task being created or edited.
 type draft struct {
 	id                      string // "" for a new task
 	name, source, target    string
+	targetName              string // of a target on the NAS
 	mode                    int
 	excludes                string
 	tolerance               float64
@@ -116,6 +120,7 @@ func (a *app) view(c *ui.Context) {
 			a.quit()
 		}
 	}
+	a.nasView(c)
 	if a.confirmRemove {
 		if task := a.task(); task != nil {
 			if ui.AlertDialog(c, &a.confirmRemove, fmt.Sprintf("删除任务“%s”？", task.Name),
@@ -181,8 +186,8 @@ func (a *app) detail(c *ui.Context) {
 	}
 	card(c, func() {
 		ui.Form(c, func() {
-			ui.Field(c, "源目录", func() { location(c, task.Source) })
-			ui.Field(c, "目标目录", func() { location(c, task.Target) })
+			ui.Field(c, "源目录", func() { location(c, task.Source, "") })
+			ui.Field(c, "目标目录", func() { location(c, task.Target, task.TargetName) })
 			ui.Field(c, "模式", func() { ui.Text(c, modeHelp[task.Mode]).TextColor(t.TextMuted) })
 			excl := "无"
 			if len(task.Excludes) > 0 {
@@ -245,7 +250,7 @@ func (a *app) startEditing(task *config.Task) {
 		tol = engine.DefaultTimeTolerance.Seconds()
 	}
 	a.draft = draft{
-		id: task.ID, name: task.Name, source: task.Source, target: task.Target,
+		id: task.ID, name: task.Name, source: task.Source, target: task.Target, targetName: task.TargetName,
 		mode: int(task.Mode), excludes: strings.Join(task.Excludes, "\n"), tolerance: tol,
 	}
 }
@@ -263,8 +268,8 @@ func (a *app) editor(c *ui.Context) {
 			ui.Field(c, "名称", func() {
 				ui.TextInput(c.Key("name"), &d.name).AutoFocus()
 			}).Error(d.nameErr)
-			a.dirField(c, "源目录", "要备份的目录", &d.source, d.srcErr)
-			a.dirField(c, "目标目录", "备份到的目录，网络共享请先在系统中挂载", &d.target, d.dstErr)
+			a.dirField(c, "源目录", "要备份的目录", &d.source, d.srcErr, false)
+			a.dirField(c, "目标目录", "备份到的目录；点“NAS…”可以高速备份到 NAS", &d.target, d.dstErr, true)
 			ui.Field(c, "模式", func() {
 				ui.RadioGroup(c, func() {
 					ui.Radio(c, &d.mode, int(engine.Incremental), "增量备份")
@@ -291,12 +296,21 @@ func (a *app) editor(c *ui.Context) {
 	})
 }
 
-func (a *app) dirField(c *ui.Context, label, help string, value *string, errMsg string) {
+func (a *app) dirField(c *ui.Context, label, help string, value *string, errMsg string, nas bool) {
 	ui.Field(c, label, func() {
 		ui.Row(c).Gap(8).Children(func() {
 			ui.TextInput(c.Key(label), value).Placeholder(help).Grow(1).Shrink(1).MinWidth(0)
+			if nas && ui.Button(c.Key(label+"-nas"), "NAS…").Tooltip("通过 NAS 上的 fileindex 服务备份，速度最快").Clicked() {
+				a.openNAS(*value, func(url, name string) {
+					*value = url
+					a.draft.targetName = name
+				}, nil)
+			}
 			if ui.Button(c.Key(label+"-browse"), "浏览…").Clicked() {
 				start := *value
+				if fileindex.IsURL(start) {
+					start = ""
+				}
 				go func() {
 					// A URL is opened first, for the dialog to start in it.
 					dir, err := places.Resolve(context.Background(), start)
@@ -357,6 +371,10 @@ func (a *app) saveDraft() {
 		a.selected = len(a.store.Tasks) - 1
 	}
 	task.Name, task.Source, task.Target = d.name, d.source, d.target
+	task.TargetName = ""
+	if fileindex.IsURL(d.target) {
+		task.TargetName = d.targetName
+	}
 	task.Mode = engine.Mode(d.mode)
 	task.Excludes = excludes
 	task.TimeTolerance = int(d.tolerance)
@@ -410,8 +428,16 @@ func (a *app) save() {
 }
 
 // location shows a task's directory, and how a URL is reached.
-func location(c *ui.Context, p string) {
+func location(c *ui.Context, p, name string) {
 	ui.Column(c).Gap(2).Children(func() {
+		if fileindex.IsURL(p) {
+			if name == "" {
+				name = p
+			}
+			ui.Text(c, name).Selectable()
+			ui.Text(c, "NAS 上的目录，通过 fileindex 服务批量高速传输；完全一致模式删除的文件会进入 fileindex 回收站").FontSize(12).TextColor(c.Theme().TextMuted)
+			return
+		}
 		ui.Text(c, p).Selectable()
 		if places.IsURL(p) {
 			ui.Text(c, "网络位置，备份时通过 KDE 的 kio-fuse 打开（文件很多时较慢）").FontSize(12).TextColor(c.Theme().TextMuted)

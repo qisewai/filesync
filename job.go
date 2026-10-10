@@ -2,11 +2,13 @@ package main
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"time"
 
 	"filesync/config"
 	"filesync/engine"
+	"filesync/fileindex"
 	"filesync/places"
 
 	"github.com/egoist/mygo/ui"
@@ -112,6 +114,13 @@ func (a *app) prepare(ctx context.Context, j *job, opts engine.Options) (*engine
 			return nil, err
 		}
 		*p = dir
+	}
+	if fileindex.IsURL(opts.Target) {
+		loc, err := fileindex.Parse(opts.Target)
+		if err != nil {
+			return nil, err
+		}
+		opts.Dest = fileindex.NewTarget(loc, a.store.Sessions[loc.Addr])
 	}
 	a.post(func() { j.status = "正在比较源目录和目标目录…" })
 	return engine.Prepare(ctx, opts, func(p engine.ScanProgress) {
@@ -235,10 +244,18 @@ func (a *app) previewView(c *ui.Context, j *job, task *config.Task) {
 		ui.Badge(c, task.Mode.String())
 	})
 	if j.err != nil {
-		notice(c, t.Danger, j.err.Error())
+		needLogin := errors.Is(j.err, fileindex.ErrAuth)
+		if needLogin {
+			notice(c, t.Warning, "需要登录 NAS 上的 fileindex，登录后会自动重新扫描。")
+		} else {
+			notice(c, t.Danger, j.err.Error())
+		}
 		ui.Spacer(c)
 		ui.Row(c).Gap(8).Children(func() {
-			if ui.PrimaryButton(c, "重新扫描").Clicked() {
+			if needLogin && ui.PrimaryButton(c, "登录 NAS…").Clicked() {
+				a.openNAS(task.Target, nil, func() { a.startPreview(task) })
+			}
+			if !needLogin && ui.PrimaryButton(c, "重新扫描").Clicked() {
 				a.startPreview(task)
 			}
 			if ui.Button(c, "返回").Clicked() {

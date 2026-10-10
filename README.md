@@ -14,6 +14,18 @@
   这类目录会保存成 `smb://…` 地址，每次备份前通过 kio-fuse 重新打开，所以重新登录后依然有效。
   不过 kio-fuse 比较慢，目录很大时建议用 `mount.cifs` 或 Smb4K 挂载。
 
+## 高速备份到 NAS（fileindex）
+
+如果 NAS 上部署了 [fileindex](../fileindex)，目标目录可以点“NAS…”选择 fileindex 的索引目录（及其子目录）。这种方式不经过 SMB：
+
+- 目标目录由 NAS 在本地一次性列出（2 万个文件约 0.1 秒）；
+- 小文件按批打包，在一个请求中连续发送，省去每个文件的往返；
+- 4 条连接同时传输，大文件单独一批、先发送；
+- 写入的文件立即进入 fileindex 的索引，可以马上搜索；
+- 完全一致模式删除的文件移到 fileindex 的回收站（默认保留 30 天）。
+
+需要 NAS 上的 fileindex 包含 `/api/backup/manifest` 和 `/api/backup/put` 接口。登录只保存会话，不保存密码；会话过期后预览时会提示重新登录。
+
 ## 安全措施
 
 - 完全一致模式下，如果源目录为空而目标有文件，拒绝执行（防止共享未挂载时清空备份）。
@@ -45,6 +57,8 @@ GOOS=windows go build -o filesync.exe .   # 在 Linux 上交叉编译 Windows �
 engine/   同步引擎：扫描、比较、生成计划、执行，不依赖界面
 config/   任务和运行记录的读写
 places/   smb:// 等网络地址和 kio-fuse 本地路径之间的转换
+fileindex/ fileindex 客户端：目录清单、批量上传、回收站删除
+nas.go    NAS 目录浏览和登录对话框
 app.go    任务列表、任务详情、编辑页面
 job.go    预览、执行进度、结果页面
 runlog.go 每次运行的日志文件

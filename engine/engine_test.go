@@ -2,6 +2,7 @@ package engine
 
 import (
 	"context"
+	"fmt"
 	"os"
 	"path/filepath"
 	"sort"
@@ -287,20 +288,29 @@ func TestWindowsNames(t *testing.T) {
 
 func TestCancel(t *testing.T) {
 	src, dst := t.TempDir(), t.TempDir()
-	write(t, src, map[string]string{"a": "a", "b": "b"})
+	tree := map[string]string{}
+	for i := range 200 {
+		tree[fmt.Sprintf("f%03d", i)] = "data"
+	}
+	write(t, src, tree)
 	p, err := Prepare(context.Background(), Options{Source: src, Target: dst}, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
 	ctx, cancel := context.WithCancel(context.Background())
 	r := Execute(ctx, p, Hooks{Done: func(Action, error) { cancel() }})
-	if !r.Canceled || r.Created != 1 {
+	// The copies under way when it stops finish; no more start.
+	if !r.Canceled || r.Created < 1 || r.Created > LocalWorkers {
 		t.Errorf("result %+v", r)
 	}
-	for name := range files(t, dst) {
+	got := files(t, dst)
+	for name := range got {
 		if strings.HasPrefix(name, ".filesync-") {
 			t.Errorf("temporary file %s left", name)
 		}
+	}
+	if len(got) < r.Created {
+		t.Errorf("%d files written, %d counted", len(got), r.Created)
 	}
 }
 
