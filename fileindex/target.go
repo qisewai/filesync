@@ -1,6 +1,7 @@
 package fileindex
 
 import (
+	"archive/tar"
 	"bufio"
 	"context"
 	"encoding/json"
@@ -10,8 +11,6 @@ import (
 	"os"
 	"path"
 	"path/filepath"
-	"sort"
-	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -19,52 +18,12 @@ import (
 	"filesync/engine"
 )
 
-// Scheme starts the URLs of directories on a fileindex server:
-// fileindex://192.168.0.235:8090/3/备份/笔记本 is the directory 备份/笔记本 of
-// the server's root 3.
-const Scheme = "fileindex://"
-
 // Location is a directory on a fileindex server.
 type Location struct {
 	Addr string
 	Root int64
 	Path string // relative to the root, with slashes; "" for the root
 }
-
-// IsURL reports whether s is the URL of a Location.
-func IsURL(s string) bool { return strings.HasPrefix(s, Scheme) }
-
-// Parse reads the URL of a Location.
-func Parse(s string) (Location, error) {
-	rest, ok := strings.CutPrefix(s, Scheme)
-	if !ok {
-		return Location{}, fmt.Errorf("不是 NAS 地址: %s", s)
-	}
-	addr, rest, _ := strings.Cut(rest, "/")
-	rootID, p, _ := strings.Cut(rest, "/")
-	id, err := strconv.ParseInt(rootID, 10, 64)
-	if err != nil || addr == "" {
-		return Location{}, fmt.Errorf("NAS 地址无效: %s", s)
-	}
-	return Location{Addr: addr, Root: id, Path: strings.Trim(p, "/")}, nil
-}
-
-func (l Location) String() string {
-	s := Scheme + l.Addr + "/" + strconv.FormatInt(l.Root, 10)
-	if l.Path != "" {
-		s += "/" + l.Path
-	}
-	return s
-}
-
-// Tuning of the transfers. A batch carries many small files in one request,
-// and several batches go at once, over connections of their own, to keep
-// the link busy while each waits for the disk at its end.
-const (
-	Workers    = 4
-	batchFiles = 1000
-	batchBytes = 32 << 20
-)
 
 // Target is a directory on a fileindex server, as an engine.Target.
 type Target struct {
@@ -111,9 +70,9 @@ func (t *Target) Scan(ctx context.Context, f *engine.Filter, onEntry func()) (*e
 			}
 			return
 		}
-		e := engine.Entry{Path: m.Path, IsDir: m.Dir, Size: m.Size, ModTime: time.Unix(0, m.MTime)}
+		e := engine.Entry{Path: m.Path, IsDir: m.Dir, Size: m.Size, ModTime: time.Unix(0, m.MTime), Perm: os.FileMode(m.Mode), Link: m.Link}
 		if m.Special {
-			e.Special = "符号链接或特殊文件"
+			e.Special = "设备、管道或套接字等特殊文件"
 		}
 		if m.Err != "" {
 			tr.Unreadable = append(tr.Unreadable, m.Path)
@@ -124,203 +83,265 @@ func (t *Target) Scan(ctx context.Context, f *engine.Filter, onEntry func()) (*e
 	return tr, missing, err
 }
 
+// Apply moves what a mirror deletes to the trash, then sends the
+// directories, files and links to make as one tar stream, in one request:
+// one connection writing in order keeps a link busy, and the disks of the
+// NAS writing one file after another. The server answers each entry as it
+// lands, which reports it done.
 func (t *Target) Apply(ctx context.Context, p *engine.Plan, run *engine.Run) {
 	if !t.trash(ctx, p, run) {
 		return
 	}
-	var dirs, copies []engine.Action
+	var items []engine.Action
 	for _, a := range p.Actions {
 		switch a.Kind {
-		case engine.ActMkdir:
-			dirs = append(dirs, a)
-		case engine.ActCreate, engine.ActUpdate:
-			copies = append(copies, a)
+		case engine.ActMkdir, engine.ActCreate, engine.ActUpdate:
+			items = append(items, a)
 		}
 	}
-	batches := makeBatches(dirs, copies)
-	jobs := make(chan []engine.Action)
-	var wg sync.WaitGroup
-	for range Workers {
-		wg.Go(func() {
-			for b := range jobs {
-				if err := t.send(ctx, p.Source(), b, run); errors.Is(err, ErrAuth) {
-					run.Fatal(errors.New("NAS 的登录已过期，请重新登录后再备份"))
-				}
-			}
-		})
+	if len(items) == 0 {
+		return
 	}
-	for _, b := range batches {
-		select {
-		case jobs <- b:
-		case <-ctx.Done():
-		}
-		if ctx.Err() != nil {
-			break
-		}
-	}
-	close(jobs)
-	wg.Wait()
-}
 
-// makeBatches groups the directories and copies into requests: large files
-// alone and first, so that the end of the backup is many small batches
-// spread over the connections rather than one large file on one.
-func makeBatches(dirs, copies []engine.Action) [][]engine.Action {
-	var out [][]engine.Action
-	var small []engine.Action
-	var large []engine.Action
-	for _, a := range copies {
-		if a.Size >= batchBytes {
-			large = append(large, a)
-		} else {
-			small = append(small, a)
-		}
-	}
-	sort.SliceStable(large, func(i, j int) bool { return large[i].Size > large[j].Size })
-	for _, a := range large {
-		out = append(out, []engine.Action{a})
-	}
-	cur := append([]engine.Action(nil), dirs...)
-	var bytes int64
-	for _, a := range small {
-		if len(cur) >= batchFiles || bytes+a.Size > batchBytes {
-			out = append(out, cur)
-			cur, bytes = nil, 0
-		}
-		cur = append(cur, a)
-		bytes += a.Size
-	}
-	if len(cur) > 0 {
-		out = append(out, cur)
-	}
-	return out
-}
-
-// sent is an item that went into a request.
-type sent struct {
-	i     int // its index in the batch
-	a     engine.Action
-	bytes int64
-}
-
-// send puts a batch in one request, and reports each item.
-func (t *Target) send(ctx context.Context, source string, batch []engine.Action, run *engine.Run) error {
+	s := &stream{run: run, pending: map[string]*pending{}}
+	stopped := ctx
+	ctx, cancel := context.WithCancel(ctx)
+	defer cancel()
 	pr, pw := io.Pipe()
-	var items []sent
-	reported := map[int]bool{} // indices of batch reported by the writer
 	written := make(chan struct{})
 	go func() {
 		defer close(written)
-		w := bufio.NewWriterSize(pw, 256<<10)
-		enc := json.NewEncoder(w)
-		for i, a := range batch {
-			if ctx.Err() != nil {
-				pw.CloseWithError(ctx.Err())
-				return
-			}
-			run.Start(a.Path)
-			if a.Kind == engine.ActMkdir {
-				enc.Encode(Item{Path: a.Path, Dir: true})
-				items = append(items, sent{i: i, a: a})
-				continue
-			}
-			f, err := os.Open(filepath.Join(source, filepath.FromSlash(a.Path)))
-			var info os.FileInfo
-			if err == nil {
-				info, err = f.Stat()
-			}
-			if err != nil {
-				if f != nil {
-					f.Close()
-				}
-				run.Copied(a, 0, false, err)
-				reported[i] = true
-				continue
-			}
-			if err := enc.Encode(Item{Path: a.Path, Size: info.Size(), MTime: info.ModTime().UnixNano()}); err != nil {
-				f.Close()
-				return // the request ended: what was sent is reported below
-			}
-			cw := &counter{w: w, run: run}
-			_, err = io.CopyN(cw, f, info.Size())
-			f.Close()
-			items = append(items, sent{i: i, a: a, bytes: cw.n})
-			if err != nil {
-				// The file shrank, or could not be read: its frame cannot be
-				// completed, and the request ends here.
-				pw.CloseWithError(fmt.Errorf("读取 %s 出错: %w", a.Path, err))
-				return
-			}
-		}
-		if err := w.Flush(); err != nil {
-			return
-		}
-		pw.Close()
+		pw.CloseWithError(s.write(ctx, p.Source(), items, pw))
 	}()
-
-	res, err := t.Client.Put(ctx, t.Location.Root, t.Location.Path, pr)
-	pr.CloseWithError(errors.New("请求已结束")) // unblock the writer
+	answers, err := t.Client.Tar(ctx, t.Location.Root, t.Location.Path, pr)
+	if err == nil {
+		err = s.read(answers)
+		answers.Close()
+	}
+	cancel()
+	pr.CloseWithError(errors.New("传输已结束"))
 	<-written
-	if ctx.Err() != nil {
-		return ctx.Err() // canceled: nothing more is counted
+	if stopped.Err() != nil {
+		return // stopped: what did not land is not counted
 	}
-	failed := map[string]string{}
-	broken := ""
+	if errors.Is(err, ErrAuth) {
+		run.Fatal(errors.New("NAS 的登录已过期，请重新登录后再备份"))
+	}
+	// What was sent but not acknowledged, or never sent, did not land.
+	msg := "传输中断，没有写入 NAS"
 	if err != nil {
-		broken = err.Error()
+		msg += ": " + err.Error()
+	}
+	for _, a := range items[s.next:] {
+		s.add(a)
+	}
+	for _, pd := range s.pending {
+		s.report(pd, errors.New(msg))
+	}
+}
+
+// stream is a backup's tar stream: the entries sent and not yet answered.
+type stream struct {
+	run     *engine.Run
+	mu      sync.Mutex
+	pending map[string]*pending // by path
+	next    int                 // the index of the first item neither sent nor reported
+}
+
+type pending struct {
+	a      engine.Action
+	sent   int64
+	broken error // the file could not be read whole: it does not count
+}
+
+func (s *stream) add(a engine.Action) *pending {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	pd := &pending{a: a}
+	s.pending[a.Path] = pd
+	return pd
+}
+
+// report reports an entry, once.
+func (s *stream) report(pd *pending, err error) {
+	s.mu.Lock()
+	if s.pending[pd.a.Path] != pd {
+		s.mu.Unlock()
+		return
+	}
+	delete(s.pending, pd.a.Path)
+	if pd.broken != nil {
+		err = pd.broken
+	}
+	sent := pd.sent
+	s.mu.Unlock()
+	if pd.a.Kind == engine.ActMkdir {
+		s.run.Done(pd.a, err)
 	} else {
-		for _, f := range res.Failed {
-			failed[f.Path] = f.Error
+		s.run.Copied(pd.a, sent, true, err)
+	}
+}
+
+// write writes the items as a tar stream to w.
+func (s *stream) write(ctx context.Context, source string, items []engine.Action, w io.Writer) error {
+	bw := bufio.NewWriterSize(w, 1<<20)
+	tw := tar.NewWriter(bw)
+	for i, a := range items {
+		if err := ctx.Err(); err != nil {
+			return err
 		}
-		broken = res.Error
-	}
-	processed := 0
-	if res != nil {
-		processed = res.Written + len(res.Failed)
-	}
-	for k, it := range items {
-		var itemErr error
+		s.run.Start(a.Path)
+		var pd *pending
+		e := entryWriter{tw: tw, run: s.run, name: a.Path, onSent: func(n int64) {
+			s.mu.Lock()
+			pd.sent = n
+			s.mu.Unlock()
+		}}
+		err := e.write(source, a, func() { pd = s.add(a) })
+		s.next = i + 1
+		var bad *badFile
 		switch {
-		case failed[it.a.Path] != "":
-			itemErr = errors.New(failed[it.a.Path])
-		case broken != "" && k >= processed:
-			itemErr = errors.New(broken)
-		}
-		report(run, it, itemErr)
-		reported[it.i] = true
-	}
-	// Items never sent, after the request broke.
-	for i, a := range batch {
-		if !reported[i] {
-			msg := broken
-			if msg == "" {
-				msg = "没有发送"
+		case errors.As(err, &bad) && pd == nil:
+			s.run.Copied(a, 0, false, bad.err) // not sent
+		case errors.As(err, &bad):
+			// Its entry was filled out: the server drops it.
+			s.mu.Lock()
+			pd.broken = bad.err
+			s.mu.Unlock()
+			if err := tw.WriteHeader(&tar.Header{Name: DiscardName, Typeflag: tar.TypeReg, Format: tar.FormatPAX,
+				PAXRecords: map[string]string{DiscardKey: a.Path}}); err != nil {
+				return err
 			}
-			report(run, sent{i: i, a: a}, errors.New(msg))
+		case err != nil:
+			return err
 		}
 	}
-	return err
-}
-
-func report(run *engine.Run, it sent, err error) {
-	if it.a.Kind == engine.ActMkdir {
-		run.Done(it.a, err)
-	} else {
-		run.Copied(it.a, it.bytes, true, err)
+	if err := tw.Close(); err != nil {
+		return err
 	}
+	return bw.Flush()
 }
 
-// counter counts the bytes of a file as they go.
+// badFile is a file that could not be sent: not opened, or not read whole,
+// as when it shrank, its entry then filled out with zeros.
+type badFile struct{ err error }
+
+func (b *badFile) Error() string { return b.err.Error() }
+
+// entryWriter writes the entries of a tar stream.
+type entryWriter struct {
+	tw   *tar.Writer
+	run  *engine.Run
+	name string // of the entry
+	// onSent receives the bytes of a file written.
+	onSent func(int64)
+}
+
+// write writes the entry of an action, calling begin before its header.
+// It returns a *badFile for a file of the source that could not be sent,
+// and other errors for the stream.
+func (e *entryWriter) write(source string, a engine.Action, begin func()) error {
+	hdr := &tar.Header{Name: e.name, ModTime: a.ModTime, Mode: int64(a.Mode.Perm()), Format: tar.FormatPAX}
+	var f *os.File
+	switch {
+	case a.Kind == engine.ActMkdir:
+		hdr.Typeflag, hdr.Name = tar.TypeDir, e.name+"/"
+	case a.Link != "":
+		hdr.Typeflag, hdr.Linkname = tar.TypeSymlink, a.Link
+	default:
+		var err error
+		f, err = os.Open(filepath.Join(source, filepath.FromSlash(a.Path)))
+		var info os.FileInfo
+		if err == nil {
+			info, err = f.Stat()
+		}
+		if err != nil {
+			if f != nil {
+				f.Close()
+			}
+			return &badFile{err}
+		}
+		defer f.Close()
+		hdr.Typeflag, hdr.Size, hdr.ModTime = tar.TypeReg, info.Size(), info.ModTime()
+	}
+	begin()
+	if err := e.tw.WriteHeader(hdr); err != nil {
+		return err
+	}
+	if f == nil {
+		return nil
+	}
+	cw := &counter{w: e.tw, run: e.run}
+	_, err := io.CopyN(cw, f, hdr.Size)
+	e.onSent(cw.n)
+	if err == nil {
+		return nil
+	}
+	if cw.err != nil {
+		return cw.err // the stream broke
+	}
+	if _, err := io.CopyN(e.tw, zeros{}, hdr.Size-cw.n); err != nil {
+		return err
+	}
+	return &badFile{fmt.Errorf("读取出错，文件在备份时被修改了吗？%w", err)}
+}
+
+// read reports the entries the server answers.
+func (s *stream) read(r io.Reader) error {
+	sc := bufio.NewScanner(r)
+	sc.Buffer(make([]byte, 64<<10), 1<<20)
+	for sc.Scan() {
+		var a Answer
+		if err := json.Unmarshal(sc.Bytes(), &a); err != nil {
+			return fmt.Errorf("NAS 的回答无法解析: %w", err)
+		}
+		if a.End {
+			if a.Fatal != "" {
+				return errors.New("NAS: " + a.Fatal)
+			}
+			return nil
+		}
+		s.mu.Lock()
+		pd := s.pending[a.Path]
+		s.mu.Unlock()
+		if pd == nil {
+			continue // a file discarded, already reported
+		}
+		var err error
+		if a.Error != "" {
+			err = errors.New(a.Error)
+		}
+		s.report(pd, err)
+	}
+	if err := sc.Err(); err != nil {
+		return err
+	}
+	return errors.New("NAS 的回答意外结束")
+}
+
+type zeros struct{}
+
+func (zeros) Read(p []byte) (int, error) {
+	clear(p)
+	return len(p), nil
+}
+
+// counter counts the bytes of a file as they go, and keeps the error of
+// the stream, to tell it from one reading the file.
 type counter struct {
 	w   io.Writer
 	run *engine.Run
 	n   int64
+	err error
 }
 
 func (c *counter) Write(p []byte) (int, error) {
 	n, err := c.w.Write(p)
 	c.n += int64(n)
 	c.run.Bytes(int64(n))
+	if err != nil {
+		c.err = err
+	}
 	return n, err
 }
 

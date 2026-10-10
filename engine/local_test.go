@@ -10,15 +10,18 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
+	"strings"
 	"sync"
 	"sync/atomic"
 )
 
-// LocalWorkers is how many files a local target copies at once: on a
-// network mount, each file waits for round trips, which overlap.
+// The tests of the planner and of Execute back up to a directory of this
+// computer, through localTarget.
+
+// LocalWorkers is how many files a local target copies at once.
 const LocalWorkers = 8
 
-// localTarget is a directory of this computer, or one the system mounts.
+// localTarget is a directory of this computer.
 type localTarget struct {
 	dir string // resolved, absolute
 	// The first copies check that the target keeps modification times,
@@ -27,30 +30,10 @@ type localTarget struct {
 	timesLost atomic.Bool
 }
 
-func newLocalTarget(source, target string) (*localTarget, error) {
-	if target == "" {
-		return nil, errors.New("请选择目标目录")
-	}
-	dst, err := filepath.Abs(target)
-	if err != nil {
-		return nil, err
-	}
-	if resolved, err := filepath.EvalSymlinks(dst); err == nil {
-		dst = resolved
-		info, err := os.Stat(dst)
-		if err != nil {
-			return nil, fmt.Errorf("无法访问目标目录 %s: %w", target, err)
-		}
-		if !info.IsDir() {
-			return nil, fmt.Errorf("目标 %s 不是目录", target)
-		}
-	} else if !errors.Is(err, os.ErrNotExist) {
-		return nil, fmt.Errorf("无法访问目标目录 %s: %w", target, err)
-	}
-	if within(source, dst) || within(dst, source) {
-		return nil, errors.New("源目录和目标目录不能相同，也不能一个在另一个里面")
-	}
-	return &localTarget{dir: dst}, nil
+// local returns the target of the directory dir.
+func local(dir string) Target {
+	abs, _ := filepath.Abs(dir)
+	return &localTarget{dir: abs}
 }
 
 func (t *localTarget) String() string { return t.dir }
@@ -172,6 +155,18 @@ func removeDir(dir string) (kept bool, err error) {
 // next backup. timeKept reports whether the destination has the source's
 // modification time.
 func (t *localTarget) copyFile(ctx context.Context, source string, a Action, buf []byte, onBytes func(int64)) (timeKept bool, err error) {
+	if a.Link != "" {
+		dst := t.path(a.Path)
+		tmp := filepath.Join(filepath.Dir(dst), tempFileName())
+		if err := os.Symlink(a.Link, tmp); err != nil {
+			return false, err
+		}
+		if err := os.Rename(tmp, dst); err != nil {
+			os.Remove(tmp)
+			return false, err
+		}
+		return true, nil
+	}
 	in, err := os.Open(filepath.Join(source, filepath.FromSlash(a.Path)))
 	if err != nil {
 		return false, err
@@ -185,12 +180,12 @@ func (t *localTarget) copyFile(ctx context.Context, source string, a Action, buf
 
 	dst := t.path(a.Path)
 	tmp := filepath.Join(filepath.Dir(dst), tempFileName())
-	out, err := os.OpenFile(tmp, os.O_WRONLY|os.O_CREATE|os.O_EXCL, a.perm|0o600)
+	out, err := os.OpenFile(tmp, os.O_WRONLY|os.O_CREATE|os.O_EXCL, a.Mode|0o600)
 	if errors.Is(err, os.ErrNotExist) {
 		// Its directory went, or was never planned, as for a plan made
 		// before the directory was excluded.
 		if err = os.MkdirAll(filepath.Dir(dst), 0o755); err == nil {
-			out, err = os.OpenFile(tmp, os.O_WRONLY|os.O_CREATE|os.O_EXCL, a.perm|0o600)
+			out, err = os.OpenFile(tmp, os.O_WRONLY|os.O_CREATE|os.O_EXCL, a.Mode|0o600)
 		}
 	}
 	if err != nil {
@@ -262,4 +257,57 @@ func tempFileName() string {
 	var b [4]byte
 	rand.Read(b[:])
 	return ".filesync-" + hex.EncodeToString(b[:]) + ".tmp"
+}
+
+// caseInsensitive reports whether the file system at dir, or at its nearest
+// existing ancestor, folds the case of names, as NTFS, FAT and SMB shares
+// do.
+func caseInsensitive(dir string) bool {
+	for {
+		if info, err := os.Stat(dir); err == nil && info.IsDir() {
+			break
+		}
+		parent := filepath.Dir(dir)
+		if parent == dir {
+			return false
+		}
+		dir = parent
+	}
+	// Ask an existing name in the other case, which changes nothing.
+	if des, err := os.ReadDir(dir); err == nil {
+		for _, de := range des {
+			name := de.Name()
+			other := swapCase(name)
+			if other == name {
+				continue
+			}
+			a, err1 := os.Lstat(filepath.Join(dir, name))
+			b, err2 := os.Lstat(filepath.Join(dir, other))
+			if err1 != nil {
+				continue
+			}
+			if err2 != nil {
+				return false
+			}
+			return os.SameFile(a, b)
+		}
+	}
+	// Else write a file to ask.
+	f, err := os.CreateTemp(dir, ".filesync-case-")
+	if err != nil {
+		return false
+	}
+	name := f.Name()
+	f.Close()
+	defer os.Remove(name)
+	base := filepath.Base(name)
+	_, err = os.Lstat(filepath.Join(dir, strings.ToUpper(base)))
+	return err == nil
+}
+
+func swapCase(s string) string {
+	if u := strings.ToUpper(s); u != s {
+		return u
+	}
+	return strings.ToLower(s)
 }

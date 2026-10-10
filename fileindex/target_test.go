@@ -1,140 +1,17 @@
 package fileindex
 
 import (
-	"bufio"
 	"context"
-	"encoding/json"
 	"fmt"
-	"io"
-	"net/http"
-	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"strings"
-	"sync/atomic"
 	"testing"
 	"time"
 
 	"filesync/engine"
+	"filesync/fileindex/fitest"
 )
-
-// fakeServer speaks the backup API of fileindex for one root, on a
-// directory.
-type fakeServer struct {
-	t       *testing.T
-	root    string // the root's directory
-	trash   string
-	srv     *httptest.Server
-	expired atomic.Bool // sessions are refused
-	puts    atomic.Int32
-}
-
-func newFakeServer(t *testing.T) *fakeServer {
-	f := &fakeServer{t: t, root: t.TempDir(), trash: t.TempDir()}
-	mux := http.NewServeMux()
-	mux.HandleFunc("POST /api/auth/login", func(w http.ResponseWriter, r *http.Request) {
-		var req struct{ Password string }
-		json.NewDecoder(r.Body).Decode(&req)
-		if req.Password != "pw" {
-			w.WriteHeader(401)
-			fmt.Fprint(w, `{"error":"密码错误"}`)
-			return
-		}
-		f.expired.Store(false)
-		http.SetCookie(w, &http.Cookie{Name: cookieName, Value: "tok"})
-		fmt.Fprint(w, `{"ok":true}`)
-	})
-	mux.HandleFunc("GET /api/backup/manifest", f.manifest)
-	mux.HandleFunc("POST /api/backup/put", f.put)
-	mux.HandleFunc("POST /api/fs/delete", f.delete)
-	f.srv = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.URL.Path != "/api/auth/login" {
-			ck, err := r.Cookie(cookieName)
-			if err != nil || ck.Value != "tok" || f.expired.Load() || r.Header.Get(csrfHeader) != csrfValue {
-				w.WriteHeader(401)
-				fmt.Fprint(w, `{"error":"未登录"}`)
-				return
-			}
-		}
-		mux.ServeHTTP(w, r)
-	}))
-	t.Cleanup(f.srv.Close)
-	return f
-}
-
-func (f *fakeServer) addr() string { return strings.TrimPrefix(f.srv.URL, "http://") }
-
-func (f *fakeServer) manifest(w http.ResponseWriter, r *http.Request) {
-	base := filepath.Join(f.root, r.URL.Query().Get("path"))
-	if _, err := os.Stat(base); err != nil {
-		w.WriteHeader(404)
-		fmt.Fprint(w, `{"error":"目录不存在"}`)
-		return
-	}
-	enc := json.NewEncoder(w)
-	filepath.WalkDir(base, func(p string, d os.DirEntry, err error) error {
-		if p == base {
-			return nil
-		}
-		rel, _ := filepath.Rel(base, p)
-		info, _ := d.Info()
-		e := ManifestEntry{Path: filepath.ToSlash(rel), Dir: d.IsDir(), MTime: info.ModTime().UnixNano()}
-		if !d.IsDir() {
-			e.Size = info.Size()
-		}
-		return enc.Encode(e)
-	})
-}
-
-func (f *fakeServer) put(w http.ResponseWriter, r *http.Request) {
-	f.puts.Add(1)
-	base := filepath.Join(f.root, r.URL.Query().Get("path"))
-	body := bufio.NewReader(r.Body)
-	res := PutResult{}
-	for {
-		line, err := body.ReadBytes('\n')
-		if err != nil {
-			break
-		}
-		var it Item
-		json.Unmarshal(line, &it)
-		dst := filepath.Join(base, filepath.FromSlash(it.Path))
-		if it.Dir {
-			os.MkdirAll(dst, 0o755)
-			res.Written++
-			continue
-		}
-		os.MkdirAll(filepath.Dir(dst), 0o755)
-		out, _ := os.Create(dst)
-		if _, err := io.CopyN(out, body, it.Size); err != nil {
-			out.Close()
-			res.Error = err.Error()
-			break
-		}
-		out.Close()
-		mt := time.Unix(0, it.MTime)
-		os.Chtimes(dst, mt, mt)
-		res.Written++
-	}
-	json.NewEncoder(w).Encode(res)
-}
-
-func (f *fakeServer) delete(w http.ResponseWriter, r *http.Request) {
-	var req struct {
-		Paths []string `json:"paths"`
-	}
-	json.NewDecoder(r.Body).Decode(&req)
-	for _, p := range req.Paths {
-		dst := filepath.Join(f.trash, filepath.FromSlash(p))
-		os.MkdirAll(filepath.Dir(dst), 0o755)
-		if err := os.Rename(filepath.Join(f.root, filepath.FromSlash(p)), dst); err != nil {
-			w.WriteHeader(400)
-			fmt.Fprintf(w, `{"error":%q}`, err.Error())
-			return
-		}
-	}
-	fmt.Fprint(w, `{"trashed":1}`)
-}
 
 func write(t *testing.T, root string, files map[string]string) {
 	t.Helper()
@@ -171,9 +48,9 @@ func tree(t *testing.T, root string) map[string]string {
 	return out
 }
 
-func (f *fakeServer) backup(t *testing.T, src string, mode engine.Mode, excludes ...string) (*engine.Plan, *engine.Result) {
+func backup(t *testing.T, f *fitest.Server, src string, mode engine.Mode, excludes ...string) (*engine.Plan, *engine.Result) {
 	t.Helper()
-	target := NewTarget(Location{Addr: f.addr(), Root: 1, Path: "备份/电脑"}, "tok")
+	target := NewTarget(Location{Addr: f.Addr(), Root: 1, Path: "备份/电脑"}, "tok")
 	p, err := engine.Prepare(context.Background(), engine.Options{Source: src, Mode: mode, Excludes: excludes, Dest: target}, nil)
 	if err != nil {
 		t.Fatal(err)
@@ -185,35 +62,18 @@ func (f *fakeServer) backup(t *testing.T, src string, mode engine.Mode, excludes
 	return p, r
 }
 
-func TestLocation(t *testing.T) {
-	for _, s := range []string{"fileindex://192.168.0.235:8090/3", "fileindex://nas:8090/12/备份/笔记本 1"} {
-		l, err := Parse(s)
-		if err != nil || l.String() != s {
-			t.Errorf("%s: %+v, %v", s, l, err)
-		}
-	}
-	if l, _ := Parse("fileindex://h:1/3/a/b/"); l.Root != 3 || l.Path != "a/b" {
-		t.Errorf("%+v", l)
-	}
-	for _, s := range []string{"smb://h/x", "fileindex://h:1/x/y", "fileindex:///3"} {
-		if _, err := Parse(s); err == nil {
-			t.Errorf("parsed %s", s)
-		}
-	}
-}
-
 func TestBackupToServer(t *testing.T) {
-	f := newFakeServer(t)
+	f := fitest.New(t)
 	src := t.TempDir()
 	write(t, src, map[string]string{"a.txt": "a", "照片/1.jpg": "jpeg", "empty/": ""})
 	old := time.Date(2020, 1, 2, 3, 4, 5, 0, time.UTC)
 	os.Chtimes(filepath.Join(src, "a.txt"), old, old)
 
-	p, r := f.backup(t, src, engine.Incremental)
+	p, r := backup(t, f, src, engine.Incremental)
 	if !p.TargetMissing || r.Created != 2 || r.Mkdirs != 2 {
 		t.Errorf("missing %v, result %+v", p.TargetMissing, r)
 	}
-	dst := filepath.Join(f.root, "备份", "电脑")
+	dst := filepath.Join(f.Root, "备份", "电脑")
 	got := tree(t, dst)
 	if got["a.txt"] != "a" || got["照片/1.jpg"] != "jpeg" || got["empty/"] != "" || len(got) != 4 {
 		t.Fatalf("server has %v", got)
@@ -223,22 +83,22 @@ func TestBackupToServer(t *testing.T) {
 	}
 
 	// Nothing changed: nothing to do.
-	p, _ = f.backup(t, src, engine.Incremental)
+	p, _ = backup(t, f, src, engine.Incremental)
 	if p.Summary.Changes() != 0 {
 		t.Errorf("second backup plans %+v", p.Summary)
 	}
 }
 
 func TestMirrorTrashesOnServer(t *testing.T) {
-	f := newFakeServer(t)
+	f := fitest.New(t)
 	src := t.TempDir()
 	write(t, src, map[string]string{"keep.txt": "k"})
-	dst := filepath.Join(f.root, "备份", "电脑")
+	dst := filepath.Join(f.Root, "备份", "电脑")
 	write(t, dst, map[string]string{
 		"keep.txt": "k", "gone.txt": "g", "old/a": "a", "old/deep/b": "b",
 		"mixed/x": "x", "mixed/cache.tmp": "excluded, stays",
 	})
-	p, r := f.backup(t, src, engine.Mirror, "*.tmp")
+	p, r := backup(t, f, src, engine.Mirror, "*.tmp")
 	if r.Deleted != 4 || r.Rmdirs != 2 || r.Kept != 1 {
 		t.Errorf("plan %+v, result %+v", p.Summary, r)
 	}
@@ -247,22 +107,22 @@ func TestMirrorTrashesOnServer(t *testing.T) {
 		t.Errorf("server has %v", got)
 	}
 	// Whole directories go to the trash in one piece.
-	trashed := tree(t, f.trash)
+	trashed := tree(t, f.Trash)
 	if trashed["备份/电脑/old/deep/b"] != "b" || trashed["备份/电脑/gone.txt"] != "g" || trashed["备份/电脑/mixed/x"] != "x" {
 		t.Errorf("trash has %v", trashed)
 	}
 }
 
 func TestManySmallAndLargeFiles(t *testing.T) {
-	f := newFakeServer(t)
+	f := fitest.New(t)
 	src := t.TempDir()
-	files := map[string]string{"big.bin": strings.Repeat("x", batchBytes+10)}
+	files := map[string]string{"big.bin": strings.Repeat("x", 40<<20)}
 	for i := range 2500 {
 		files[fmt.Sprintf("d%d/f%04d.txt", i%7, i)] = fmt.Sprint(i)
 	}
 	write(t, src, files)
 	var last engine.Progress
-	target := NewTarget(Location{Addr: f.addr(), Root: 1, Path: "b"}, "tok")
+	target := NewTarget(Location{Addr: f.Addr(), Root: 1, Path: "b"}, "tok")
 	p, err := engine.Prepare(context.Background(), engine.Options{Source: src, Dest: target}, nil)
 	if err != nil {
 		t.Fatal(err)
@@ -274,25 +134,25 @@ func TestManySmallAndLargeFiles(t *testing.T) {
 	if last.Done != last.Total || last.DoneBytes != last.TotalBytes {
 		t.Errorf("progress %+v", last)
 	}
-	// 2500 small files in batches of 1000, the big one alone.
-	if n := f.puts.Load(); n != 4 {
-		t.Errorf("%d requests", n)
+	// All in one stream.
+	if n := f.Streams.Load(); n != 1 {
+		t.Errorf("%d streams", n)
 	}
-	if got := tree(t, filepath.Join(f.root, "b")); len(got) != 2501+7 || got["d3/f0010.txt"] != "10" {
+	if got := tree(t, filepath.Join(f.Root, "b")); len(got) != 2501+7 || got["d3/f0010.txt"] != "10" {
 		t.Errorf("server has %d entries", len(got))
 	}
 }
 
 func TestExpiredSession(t *testing.T) {
-	f := newFakeServer(t)
+	f := fitest.New(t)
 	src := t.TempDir()
 	write(t, src, map[string]string{"a": "a"})
-	target := NewTarget(Location{Addr: f.addr(), Root: 1, Path: "b"}, "tok")
+	target := NewTarget(Location{Addr: f.Addr(), Root: 1, Path: "b"}, "tok")
 	p, err := engine.Prepare(context.Background(), engine.Options{Source: src, Dest: target}, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
-	f.expired.Store(true)
+	f.Expired.Store(true)
 	r := engine.Execute(context.Background(), p, engine.Hooks{})
 	if r.Fatal == nil {
 		t.Fatalf("result %+v", r)
@@ -302,24 +162,92 @@ func TestExpiredSession(t *testing.T) {
 	if _, err := engine.Prepare(context.Background(), engine.Options{Source: src, Dest: target}, nil); err == nil || !strings.Contains(err.Error(), ErrAuth.Error()) {
 		t.Errorf("scan with an expired session: %v", err)
 	}
-	c := New(f.addr(), "")
+	c := New(f.Addr(), "")
 	if err := c.Login(context.Background(), "wrong"); err == nil {
 		t.Error("logged in with a wrong password")
 	}
-	if err := c.Login(context.Background(), "pw"); err != nil || c.Token != "tok" {
+	if err := c.Login(context.Background(), fitest.Password); err != nil || c.Token != "tok" {
 		t.Errorf("login: %v, token %q", err, c.Token)
 	}
 }
 
-func TestBatches(t *testing.T) {
-	dirs := []engine.Action{{Kind: engine.ActMkdir, Path: "d"}}
-	var copies []engine.Action
-	for i := range 1500 {
-		copies = append(copies, engine.Action{Kind: engine.ActCreate, Path: fmt.Sprint(i), Size: 10})
+func TestSymlinksToServer(t *testing.T) {
+	f := fitest.New(t)
+	src := t.TempDir()
+	write(t, src, map[string]string{"lib/libx.so.1": "elf"})
+	if err := os.Symlink("libx.so.1", filepath.Join(src, "lib", "libx.so")); err != nil {
+		t.Skip(err)
 	}
-	copies = append(copies, engine.Action{Kind: engine.ActCreate, Path: "huge", Size: 1 << 30}, engine.Action{Kind: engine.ActCreate, Path: "big", Size: batchBytes})
-	b := makeBatches(dirs, copies)
-	if len(b) != 4 || b[0][0].Path != "huge" || b[1][0].Path != "big" || b[2][0].Path != "d" || len(b[2]) != batchFiles || len(b[3]) != 501 {
-		t.Errorf("%d batches", len(b))
+	_, r := backup(t, f, src, engine.Mirror)
+	if r.Created != 2 {
+		t.Errorf("result %+v", r)
+	}
+	if l, err := os.Readlink(filepath.Join(f.Root, "备份", "电脑", "lib", "libx.so")); err != nil || l != "libx.so.1" {
+		t.Fatalf("link on the server: %q, %v", l, err)
+	}
+	p, _ := backup(t, f, src, engine.Mirror)
+	if p.Summary.Changes() != 0 {
+		t.Errorf("second backup plans %+v", p.Summary)
+	}
+}
+
+// A stream that breaks reports the files that did not land, and the next
+// backup sends them.
+func TestBrokenStream(t *testing.T) {
+	f := fitest.New(t)
+	src := t.TempDir()
+	files := map[string]string{}
+	for i := range 20 {
+		files[fmt.Sprintf("f%02d", i)] = "x"
+	}
+	write(t, src, files)
+	target := NewTarget(Location{Addr: f.Addr(), Root: 1, Path: "b"}, "tok")
+	p, err := engine.Prepare(context.Background(), engine.Options{Source: src, Dest: target}, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	f.StopAfter.Store(5)
+	r := engine.Execute(context.Background(), p, engine.Hooks{})
+	if r.Created != 5 || len(r.Errors) != 15 {
+		t.Fatalf("created %d, %d errors", r.Created, len(r.Errors))
+	}
+	if got := len(tree(t, filepath.Join(f.Root, "b"))); got != 5 {
+		t.Errorf("%d files on the server", got)
+	}
+	p, _ = engine.Prepare(context.Background(), engine.Options{Source: src, Dest: target}, nil)
+	if r := engine.Execute(context.Background(), p, engine.Hooks{}); r.Created != 15 || len(r.Errors) != 0 {
+		t.Fatalf("retry: created %d, errors %v", r.Created, r.Errors)
+	}
+	p2, _ := engine.Prepare(context.Background(), engine.Options{Source: src, Dest: target}, nil)
+	if p2.Summary.Changes() != 0 {
+		t.Errorf("left after the retry: %+v", p2.Summary)
+	}
+}
+
+// The client sends without waiting for answers: a server answering only
+// once the stream is all in gets it all.
+func TestSendsWithoutWaitingForAnswers(t *testing.T) {
+	f := fitest.New(t)
+	f.HoldAnswers.Store(true)
+	src := t.TempDir()
+	files := map[string]string{"big.bin": strings.Repeat("x", 20<<20)}
+	for i := range 3000 {
+		files[fmt.Sprintf("d%d/f%04d", i%10, i)] = "x"
+	}
+	write(t, src, files)
+	target := NewTarget(Location{Addr: f.Addr(), Root: 1, Path: "b"}, "tok")
+	p, err := engine.Prepare(context.Background(), engine.Options{Source: src, Dest: target}, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	done := make(chan *engine.Result)
+	go func() { done <- engine.Execute(context.Background(), p, engine.Hooks{}) }()
+	select {
+	case r := <-done:
+		if r.Created != 3001 || len(r.Errors) != 0 {
+			t.Fatalf("created %d, errors %v", r.Created, r.Errors[:min(3, len(r.Errors))])
+		}
+	case <-time.After(20 * time.Second):
+		t.Fatal("the client waits for answers before sending more")
 	}
 }

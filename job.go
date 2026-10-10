@@ -4,12 +4,12 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"path"
 	"time"
 
 	"filesync/config"
 	"filesync/engine"
 	"filesync/fileindex"
-	"filesync/places"
 
 	"github.com/egoist/mygo/ui"
 )
@@ -81,9 +81,12 @@ func (a *app) startPreview(task *config.Task) {
 	j := &job{taskID: task.ID, state: jobScanning, cancel: cancel}
 	a.job = j
 	a.errorMsg = ""
-	opts := task.Options()
+	opts, err := a.options(task)
 	go func() {
-		plan, err := a.prepare(ctx, j, opts)
+		var plan *engine.Plan
+		if err == nil {
+			plan, err = a.prepare(ctx, j, opts)
+		}
 		a.post(func() {
 			if a.job != j {
 				return
@@ -101,28 +104,32 @@ func (a *app) startPreview(task *config.Task) {
 	}()
 }
 
-// prepare opens the task's network locations, then scans.
+// options are the engine options of a task, with its server as target.
+func (a *app) options(task *config.Task) (engine.Options, error) {
+	sv := a.store.Server(task.Server)
+	if sv == nil {
+		return engine.Options{}, errors.New("这个任务的服务器已被删除，请编辑任务，重新选择备份到的目录")
+	}
+	loc := fileindex.Location{Addr: sv.Addr, Root: task.Root, Path: task.BackupPath()}
+	opts := engine.Options{
+		Source:   task.Source,
+		Mode:     task.Mode,
+		Excludes: task.Excludes,
+		Dest:     fileindex.NewTarget(loc, sv.Token),
+	}
+	if task.Mode == engine.Archive {
+		prefix := ""
+		if task.WithDir {
+			prefix = config.SourceName(task.Source)
+		}
+		opts.Dest = fileindex.NewArchive(loc, sv.Token, config.ArchiveName(task.Source, time.Now(), task.Compress), prefix, task.Compress)
+	}
+	return opts, nil
+}
+
+// prepare scans the source and the target.
 func (a *app) prepare(ctx context.Context, j *job, opts engine.Options) (*engine.Plan, error) {
-	for _, p := range []*string{&opts.Source, &opts.Target} {
-		if !places.IsURL(*p) {
-			continue
-		}
-		u := *p
-		a.post(func() { j.status = "正在连接 " + u + " …" })
-		dir, err := places.Resolve(ctx, u)
-		if err != nil {
-			return nil, err
-		}
-		*p = dir
-	}
-	if fileindex.IsURL(opts.Target) {
-		loc, err := fileindex.Parse(opts.Target)
-		if err != nil {
-			return nil, err
-		}
-		opts.Dest = fileindex.NewTarget(loc, a.store.Sessions[loc.Addr])
-	}
-	a.post(func() { j.status = "正在比较源目录和目标目录…" })
+	a.post(func() { j.status = "正在比较本机目录和 NAS 上的目录…" })
 	return engine.Prepare(ctx, opts, func(p engine.ScanProgress) {
 		a.post(func() { j.scanned = p.Entries })
 	})
@@ -139,10 +146,11 @@ func (a *app) startBackup(task *config.Task) {
 	plan := j.plan
 	logDir := a.store.LogDir()
 	taskCopy := *task
+	target := a.target(task.Server, task.RootName, task.BackupPath())
 	release := a.keepAwake("正在备份：" + task.Name)
 	go func() {
 		defer release()
-		log, logErr := openRunLog(logDir, &taskCopy, plan)
+		log, logErr := openRunLog(logDir, &taskCopy, target, plan)
 		result := engine.Execute(ctx, plan, engine.Hooks{
 			Progress: func(p engine.Progress) {
 				a.post(func() {
@@ -253,7 +261,7 @@ func (a *app) previewView(c *ui.Context, j *job, task *config.Task) {
 		ui.Spacer(c)
 		ui.Row(c).Gap(8).Children(func() {
 			if needLogin && ui.PrimaryButton(c, "登录 NAS…").Clicked() {
-				a.openNAS(task.Target, nil, func() { a.startPreview(task) })
+				a.openLogin(task.Server, func() { a.startPreview(task) })
 			}
 			if !needLogin && ui.PrimaryButton(c, "重新扫描").Clicked() {
 				a.startPreview(task)
@@ -277,6 +285,9 @@ func (a *app) previewView(c *ui.Context, j *job, task *config.Task) {
 		notice(c, t.Warning, w)
 	}
 
+	if arc, ok := p.Options.Dest.(*fileindex.Archive); ok && s.Changes() > 0 {
+		notice(c, t.Accent, "将打包为一个归档文件，保存到 "+a.target(task.Server, task.RootName, path.Join(task.Path, arc.Name)))
+	}
 	if s.Changes() == 0 {
 		ui.Column(c).Grow(1).Center().Gap(8).Children(func() {
 			ui.Text(c, "目标已是最新").FontSize(18).Bold()
@@ -393,6 +404,9 @@ func (a *app) doneView(c *ui.Context, j *job, task *config.Task) {
 		stat(c, "已复制", formatBytes(r.Bytes), t.Text)
 		stat(c, "用时", formatDuration(r.Finished.Sub(r.Started).Seconds()), t.Text)
 	})
+	if arc, ok := j.plan.Options.Dest.(*fileindex.Archive); ok && arc.Saved() != "" {
+		notice(c, t.Success, "已保存为 "+a.target(task.Server, task.RootName, arc.Saved())+"（fileindex 中路径）")
+	}
 	if r.Canceled {
 		notice(c, t.Warning, "已复制完成的文件保留在目标中；正在复制的文件没有写入。再次备份会接着复制剩下的文件。")
 	}
@@ -424,8 +438,8 @@ func (a *app) doneView(c *ui.Context, j *job, task *config.Task) {
 		if j.logPath != "" && ui.Button(c, "打开日志").Clicked() {
 			a.openPath(j.logPath)
 		}
-		if ui.Button(c, "打开目标目录").Clicked() {
-			a.openPath(task.Target)
+		if sv := a.store.Server(task.Server); sv != nil && ui.Button(c, "打开 fileindex").Clicked() {
+			a.openURL("http://" + sv.Addr + "/")
 		}
 	})
 }

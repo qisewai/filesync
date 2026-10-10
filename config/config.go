@@ -1,4 +1,5 @@
-// Package config keeps the backup tasks and their history in a JSON file.
+// Package config keeps the servers, the backup tasks and their history in a
+// JSON file.
 package config
 
 import (
@@ -7,7 +8,10 @@ import (
 	"encoding/json"
 	"errors"
 	"os"
+	"path"
 	"path/filepath"
+	"sort"
+	"strings"
 	"time"
 
 	"filesync/engine"
@@ -16,31 +20,102 @@ import (
 // MaxHistory is how many runs a task remembers; older runs' logs are deleted.
 const MaxHistory = 20
 
-// Task is a backup the user set up.
+// Server is a fileindex server, on a NAS, that backups go to.
+type Server struct {
+	ID   string `json:"id"`
+	Name string `json:"name"`
+	// Addr is its host and port, as 192.168.0.235:8090.
+	Addr string `json:"addr"`
+	// Token is the login session, "" when signed out. No password is kept.
+	Token string `json:"token,omitempty"`
+}
+
+// Title is the server's name, or its address.
+func (s *Server) Title() string {
+	if s.Name != "" {
+		return s.Name
+	}
+	return s.Addr
+}
+
+// Task is a backup the user set up: a local directory copied to a
+// directory of a fileindex server.
 type Task struct {
 	ID     string `json:"id"`
 	Name   string `json:"name"`
 	Source string `json:"source"`
-	Target string `json:"target"`
-	// TargetName shows a target that is a URL, as a directory of the NAS:
-	// "NAS 192.168.0.235:8090 · 王宁/备份".
-	TargetName string      `json:"targetName,omitempty"`
-	Mode       engine.Mode `json:"mode"`
-	Excludes   []string    `json:"excludes"`
-	// TimeTolerance is in seconds; 0 is engine.DefaultTimeTolerance.
-	TimeTolerance int   `json:"timeTolerance,omitempty"`
-	History       []Run `json:"history,omitempty"`
+	// Server is the ID of the server backed up to.
+	Server string `json:"server"`
+	// Root is the ID of the server's indexed directory, and Path the
+	// directory in it, with slashes ("" for the root itself).
+	Root int64  `json:"root"`
+	Path string `json:"path"`
+	// RootName is the name of the root, to show the target.
+	RootName string `json:"rootName"`
+	// WithDir backs up the source directory itself, as a directory of its
+	// name in the target, rather than only what it holds.
+	WithDir bool `json:"withDir,omitempty"`
+	// Compress compresses an archive: "" (not), "gzip" or "zstd".
+	Compress string      `json:"compress,omitempty"`
+	Mode     engine.Mode `json:"mode"`
+	Excludes []string    `json:"excludes"`
+	History  []Run       `json:"history,omitempty"`
 }
 
-// Options returns the engine options of the task.
-func (t *Task) Options() engine.Options {
-	return engine.Options{
-		Source:        t.Source,
-		Target:        t.Target,
-		Mode:          t.Mode,
-		Excludes:      t.Excludes,
-		TimeTolerance: time.Duration(t.TimeTolerance) * time.Second,
+// BackupPath is the directory of the root the files go to: Path, or the
+// directory named as the source in it. An archive goes to Path, the
+// directory named as the source being in it.
+func (t *Task) BackupPath() string {
+	if t.Mode == engine.Archive {
+		return t.Path
 	}
+	return BackupPath(t.Path, t.Source, t.WithDir)
+}
+
+// ArchiveName is the name of an archive of the source made at t, as
+// xiaomai-20261010-160500.tar.gz.
+func ArchiveName(source string, t time.Time, compress string) string {
+	name := SourceName(source)
+	if name == "" {
+		name = "backup"
+	}
+	return name + "-" + t.Format("20060102-150405") + ArchiveExt(compress)
+}
+
+// ArchiveExt is the extension of an archive compressed so.
+func ArchiveExt(compress string) string {
+	switch compress {
+	case "gzip":
+		return ".tar.gz"
+	case "zstd":
+		return ".tar.zst"
+	}
+	return ".tar"
+}
+
+// TargetPath is where the files go, as people read it, as 王宁/备份/xiaomai.
+func (t *Task) TargetPath() string {
+	return path.Join(t.RootName, t.BackupPath())
+}
+
+// BackupPath is the directory below dir where a backup of source goes:
+// dir itself, or with withDir the directory named as source in it.
+func BackupPath(dir, source string, withDir bool) string {
+	if name := SourceName(source); withDir && name != "" {
+		return path.Join(dir, name)
+	}
+	return dir
+}
+
+// SourceName is the name of a source directory, "" for a root such as /
+// or C:\.
+func SourceName(source string) string {
+	source = strings.TrimRight(strings.ReplaceAll(strings.TrimSpace(source), `\`, "/"), "/")
+	name := path.Base(source)
+	if source == "" || name == "." || name == "/" || strings.HasSuffix(name, ":") {
+		return ""
+	}
+	return name
 }
 
 // Status is how a run ended.
@@ -70,15 +145,11 @@ type Run struct {
 // DefaultExcludes are the excludes new tasks start with.
 var DefaultExcludes = []string{"Thumbs.db", "desktop.ini", ".DS_Store", "$RECYCLE.BIN/", "System Volume Information/"}
 
-// Store is the tasks, saved in a directory.
+// Store is the servers and the tasks, saved in a directory.
 type Store struct {
-	Dir   string
-	Tasks []*Task
-	// Sessions are the logins to fileindex servers, by address. The file
-	// keeps no password, only these.
-	Sessions map[string]string
-	// LastServer is the address of the fileindex server used last.
-	LastServer string
+	Dir     string
+	Servers []*Server
+	Tasks   []*Task
 }
 
 // DefaultDir is where the app keeps its settings: ~/.config/filesync on
@@ -91,27 +162,20 @@ func DefaultDir() (string, error) {
 	return filepath.Join(dir, "filesync"), nil
 }
 
-type fileData struct {
-	Tasks      []*Task           `json:"tasks"`
-	Sessions   map[string]string `json:"sessions,omitempty"`
-	LastServer string            `json:"lastServer,omitempty"`
-}
-
-// SetSession keeps the login to a server.
-func (s *Store) SetSession(addr, token string) {
-	if s.Sessions == nil {
-		s.Sessions = map[string]string{}
-	}
-	s.Sessions[addr] = token
-	s.LastServer = addr
-}
-
 func (s *Store) file() string { return filepath.Join(s.Dir, "tasks.json") }
 
 // LogDir is where run logs go.
 func (s *Store) LogDir() string { return filepath.Join(s.Dir, "logs") }
 
-// Load reads the tasks in dir; a directory without them has none.
+type fileData struct {
+	Servers []*Server `json:"servers"`
+	Tasks   []*Task   `json:"tasks"`
+	// Sessions are the logins of version 0.1, by address, which become
+	// servers.
+	Sessions map[string]string `json:"sessions,omitempty"`
+}
+
+// Load reads the store in dir; a directory without it has nothing.
 func Load(dir string) (*Store, error) {
 	s := &Store{Dir: dir}
 	b, err := os.ReadFile(s.file())
@@ -125,17 +189,37 @@ func Load(dir string) (*Store, error) {
 	if err := json.Unmarshal(b, &data); err != nil {
 		return nil, err
 	}
-	s.Tasks, s.Sessions, s.LastServer = data.Tasks, data.Sessions, data.LastServer
+	s.Servers = data.Servers
+	addrs := make([]string, 0, len(data.Sessions))
+	for addr := range data.Sessions {
+		addrs = append(addrs, addr)
+	}
+	sort.Strings(addrs)
+	for _, addr := range addrs {
+		if s.ServerByAddr(addr) == nil {
+			s.AddServer(&Server{Addr: addr, Token: data.Sessions[addr]})
+		}
+	}
+	// Tasks of version 0.1 copied to any directory: only those to a server
+	// remain.
+	for _, t := range data.Tasks {
+		if t.Server != "" {
+			s.Tasks = append(s.Tasks, t)
+		}
+	}
 	return s, nil
 }
 
-// Save writes the tasks, through a temporary file so that a crash cannot
-// leave half of them.
+// Save writes the store, through a temporary file so that a crash cannot
+// leave half of it. Only the user reads it: it holds the sessions.
 func (s *Store) Save() error {
 	if err := os.MkdirAll(s.Dir, 0o755); err != nil {
 		return err
 	}
-	data := fileData{Tasks: s.Tasks, Sessions: s.Sessions, LastServer: s.LastServer}
+	data := fileData{Servers: s.Servers, Tasks: s.Tasks}
+	if data.Servers == nil {
+		data.Servers = []*Server{}
+	}
 	if data.Tasks == nil {
 		data.Tasks = []*Task{}
 	}
@@ -143,12 +227,68 @@ func (s *Store) Save() error {
 	if err != nil {
 		return err
 	}
-	// Only the user reads it: it holds the sessions.
 	tmp := s.file() + ".tmp"
 	if err := os.WriteFile(tmp, b, 0o600); err != nil {
 		return err
 	}
 	return os.Rename(tmp, s.file())
+}
+
+func newID() string {
+	var b [6]byte
+	rand.Read(b[:])
+	return hex.EncodeToString(b[:])
+}
+
+// Server returns the server with the ID, or nil.
+func (s *Store) Server(id string) *Server {
+	for _, sv := range s.Servers {
+		if sv.ID == id {
+			return sv
+		}
+	}
+	return nil
+}
+
+// ServerByAddr returns the server at the address, or nil.
+func (s *Store) ServerByAddr(addr string) *Server {
+	for _, sv := range s.Servers {
+		if sv.Addr == addr {
+			return sv
+		}
+	}
+	return nil
+}
+
+// AddServer adds a server, giving it an ID.
+func (s *Store) AddServer(sv *Server) {
+	sv.ID = newID()
+	s.Servers = append(s.Servers, sv)
+}
+
+// TasksOf returns the tasks backing up to a server.
+func (s *Store) TasksOf(serverID string) []*Task {
+	var out []*Task
+	for _, t := range s.Tasks {
+		if t.Server == serverID {
+			out = append(out, t)
+		}
+	}
+	return out
+}
+
+// RemoveServer removes a server no task uses.
+func (s *Store) RemoveServer(id string) error {
+	if n := len(s.TasksOf(id)); n > 0 {
+		return errors.New("还有任务备份到这个服务器，请先修改或删除这些任务")
+	}
+	for i, sv := range s.Servers {
+		if sv.ID == id {
+			s.Servers = append(s.Servers[:i], s.Servers[i+1:]...)
+			break
+		}
+	}
+	return nil
 }
 
 // Task returns the task with the ID, or nil.
@@ -163,9 +303,7 @@ func (s *Store) Task(id string) *Task {
 
 // Add adds a task, giving it an ID.
 func (s *Store) Add(t *Task) {
-	var b [6]byte
-	rand.Read(b[:])
-	t.ID = hex.EncodeToString(b[:])
+	t.ID = newID()
 	s.Tasks = append(s.Tasks, t)
 }
 

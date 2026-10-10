@@ -3,11 +3,13 @@ package main
 import (
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
 	"filesync/config"
 	"filesync/engine"
+	"filesync/fileindex/fitest"
 
 	"github.com/egoist/mygo/ui"
 )
@@ -29,7 +31,8 @@ func newHarness(t *testing.T, store *config.Store) *harness {
 	return h
 }
 
-// settle runs posted work until no scan or backup is running.
+// settle runs posted work until no scan, backup or request of the server
+// dialog is under way.
 func (h *harness) settle() {
 	h.t.Helper()
 	deadline := time.After(10 * time.Second)
@@ -39,9 +42,9 @@ func (h *harness) settle() {
 			fn()
 			h.tt.Frame()
 		case <-deadline:
-			h.t.Fatal("the job did not finish")
+			h.t.Fatal("the work did not finish")
 		default:
-			if !h.a.busy() {
+			if !h.a.busy() && h.a.nas.busy == "" {
 				h.tt.Frame()
 				return
 			}
@@ -55,6 +58,7 @@ func (h *harness) click(label string) {
 	if err := h.tt.Click(label); err != nil {
 		h.t.Fatalf("%v; texts %q", err, h.tt.Texts())
 	}
+	h.settle()
 }
 
 func (h *harness) want(text string) {
@@ -64,70 +68,266 @@ func (h *harness) want(text string) {
 	}
 }
 
-func TestCreateTaskPreviewAndBackUp(t *testing.T) {
-	src, dst := t.TempDir(), t.TempDir()
+func (h *harness) typeInto(label, text string) {
+	h.t.Helper()
+	h.click(label)
+	h.tt.Type(text)
+}
+
+// signedIn is a store with the server, signed in.
+func signedIn(t *testing.T, f *fitest.Server) *config.Store {
+	store := &config.Store{Dir: t.TempDir()}
+	store.AddServer(&config.Server{Name: "家里", Addr: f.Addr(), Token: "tok"})
+	return store
+}
+
+func TestAddServerChooseDirectoryAndBackUp(t *testing.T) {
+	f := fitest.New(t)
+	src := filepath.Join(t.TempDir(), "xiaomai")
+	os.MkdirAll(src, 0o755)
 	os.WriteFile(filepath.Join(src, "photo.jpg"), []byte("jpeg"), 0o644)
 	os.MkdirAll(filepath.Join(src, "docs"), 0o755)
 	os.WriteFile(filepath.Join(src, "docs", "report.txt"), []byte("report"), 0o644)
 	os.WriteFile(filepath.Join(src, "Thumbs.db"), []byte("excluded by default"), 0o644)
+	os.MkdirAll(filepath.Join(f.Root, "已有"), 0o755)
 
 	store := &config.Store{Dir: t.TempDir()}
 	h := newHarness(t, store)
 	h.want("还没有备份任务")
-	h.click("新建任务")
-	h.want("新建任务")
-
-	h.click("源目录")
-	h.tt.Type(src)
-	h.click("目标目录")
-	h.tt.Type(dst)
+	h.click("添加服务器…")
+	h.typeInto("名称", "家里")
+	h.typeInto("地址", f.Addr())
 	h.click("保存")
-	if len(store.Tasks) != 1 || store.Tasks[0].Source != src || store.Tasks[0].Target != dst {
-		t.Fatalf("tasks %+v", store.Tasks)
+	h.want("家里")
+	h.want("未登录")
+	h.click("完成")
+
+	h.click("新建任务")
+	h.typeInto("源目录", src)
+	h.click("选择…")
+	// The only server opens at once, and asks its password.
+	h.want("请输入 fileindex 的管理员密码。这里只保存登录状态，不保存密码。")
+	h.typeInto("密码", "wrong")
+	h.click("登录")
+	h.want("密码错误")
+	h.typeInto("密码", fitest.Password)
+	h.click("登录")
+	h.want("只读")
+	// A click chooses a root, and opening it shows its directories.
+	h.click("nas")
+	h.want("选择“nas”")
+	h.click("打开")
+	h.want("已有")
+	h.want("选择当前目录“nas”")
+	// A new folder is chosen, not opened.
+	h.click("新建文件夹")
+	h.tt.Type("备份")
+	h.click("创建")
+	h.want("已有")
+	h.click("选择“备份”")
+	h.want("家里 · nas/备份")
+	// The source directory itself is backed up, by default.
+	h.want("在目标中创建“xiaomai”文件夹")
+	h.want("“xiaomai”会备份为 家里 · nas/备份/xiaomai")
+	h.click("保存")
+
+	if len(store.Tasks) != 1 || store.Servers[0].Token == "" {
+		t.Fatalf("tasks %+v, servers %+v", store.Tasks, store.Servers)
 	}
-	if _, err := os.Stat(filepath.Join(store.Dir, "tasks.json")); err != nil {
-		t.Fatal("tasks not saved:", err)
+	if b, err := os.ReadFile(filepath.Join(store.Dir, "tasks.json")); err != nil || len(b) == 0 {
+		t.Fatal("not saved:", err)
 	}
 	h.want("备份任务 1")
+	h.want("家里 · nas/备份/xiaomai")
 
 	h.click("预览并备份…")
-	h.settle()
 	h.want("预览：备份任务 1")
 	h.want("photo.jpg")
 	h.want("docs/report.txt")
 	if h.tt.HasText("Thumbs.db") {
 		t.Error("an excluded file is planned")
 	}
-
 	h.click("开始备份")
-	h.settle()
 	h.want("备份完成")
-	if b, err := os.ReadFile(filepath.Join(dst, "docs", "report.txt")); err != nil || string(b) != "report" {
-		t.Fatalf("report.txt: %q, %v", b, err)
+	if b, err := os.ReadFile(filepath.Join(f.Root, "备份", "xiaomai", "docs", "report.txt")); err != nil || string(b) != "report" {
+		t.Fatalf("report.txt on the server: %q, %v", b, err)
 	}
 	run := store.Tasks[0].History
 	if len(run) != 1 || run[0].Status != config.StatusOK || run[0].Copied != 2 || run[0].Log == "" {
 		t.Fatalf("history %+v", run)
 	}
-	if _, err := os.Stat(run[0].Log); err != nil {
-		t.Fatal("no log:", err)
-	}
 
 	h.click("完成")
 	h.want("成功")
-
-	// A second preview finds nothing to do.
 	h.click("预览并备份…")
-	h.settle()
 	h.want("目标已是最新")
+}
+
+// The dialog opens where the task's directory is, chosen; a directory can
+// be chosen as it is, or opened and the directory shown chosen.
+func TestPickerChoices(t *testing.T) {
+	f := fitest.New(t)
+	os.MkdirAll(filepath.Join(f.Root, "王宁", "项目", "深处"), 0o755)
+	os.MkdirAll(filepath.Join(f.Root, "照片"), 0o755)
+	store := signedIn(t, f)
+	h := newHarness(t, store)
+	h.click("新建任务")
+
+	h.click("选择…")
+	h.click("nas")
+	h.click("选择“nas”")
+	h.want("家里 · nas")
+	if d := h.a.draft; d.root != 1 || d.path != "" {
+		t.Fatalf("draft %+v", d)
+	}
+
+	h.click("选择…")
+	// The root of the task is chosen in its list.
+	h.want("选择“nas”")
+	h.click("打开")
+	h.click("王宁")
+	h.click("打开")
+	h.click("项目")
+	h.click("选择“项目”")
+	h.want("家里 · nas/王宁/项目")
+
+	h.click("选择…")
+	// The directory of the task is chosen in its parent.
+	h.want("选择“项目”")
+	h.want("王宁")
+	h.click("打开")
+	h.want("深处")
+	h.click("选择当前目录“项目”")
+	h.want("家里 · nas/王宁/项目")
+	// A double click opens a directory too.
+	h.click("选择…")
+	r, ok := h.tt.Find("项目")
+	if !ok {
+		t.Fatal("no 项目")
+	}
+	h.tt.ClickAt(r.X+r.W/2, r.Y+r.H/2)
+	h.tt.ClickAt(r.X+r.W/2, r.Y+r.H/2)
+	h.settle()
+	h.want("选择当前目录“项目”")
+	h.want("深处")
+	h.click("上一级")
+	h.want("选择“项目”")
+	h.click("上一级")
+	h.want("选择“王宁”")
+	h.click("取消")
+	if h.a.draft.path != "王宁/项目" {
+		t.Errorf("canceled, but the path is %q", h.a.draft.path)
+	}
+}
+
+// A read-only root says why it cannot be chosen, and where to change it.
+func TestReadOnlyRoot(t *testing.T) {
+	f := fitest.New(t)
+	os.MkdirAll(filepath.Join(f.ReadOnly, "资料"), 0o755)
+	h := newHarness(t, signedIn(t, f))
+	var opened []string
+	h.a.openURL = func(u string) { opened = append(opened, u) }
+	h.click("新建任务")
+	h.click("选择…")
+	h.click("只读")
+	h.want("“只读”在 fileindex 中设为只读，不能备份到这里。请在 fileindex 的“索引目录”页面编辑它，关闭“只读”，再回来选择。")
+	h.click("打开")
+	h.click("资料")
+	h.click("选择“资料”")
+	if h.a.draft.server != "" {
+		t.Fatal("chose a directory of a read-only root")
+	}
+	h.click("打开 fileindex 设置")
+	if len(opened) != 1 || opened[0] != "http://"+f.Addr()+"/roots" {
+		t.Errorf("opened %q", opened)
+	}
+	// Made writable on the server, it can be chosen once its list is read
+	// again.
+	f.Writable.Store(true)
+	h.click("上一级")
+	h.want("选择“只读”")
+	if h.tt.HasText("打开 fileindex 设置") {
+		t.Error("still said read-only")
+	}
+	f.Writable.Store(false)
+
+	// A root that can be written says nothing.
+	h.click("服务器")
+	h.click("浏览")
+	h.click("nas")
+	if h.tt.HasText("打开 fileindex 设置") {
+		t.Error("a writable root is said read-only")
+	}
+}
+
+// Unchecked, the contents of the source go straight into the target.
+func TestBackUpContentsOnly(t *testing.T) {
+	f := fitest.New(t)
+	src := filepath.Join(t.TempDir(), "xiaomai")
+	os.MkdirAll(src, 0o755)
+	os.WriteFile(filepath.Join(src, "a.txt"), []byte("a"), 0o644)
+	store := signedIn(t, f)
+	h := newHarness(t, store)
+	h.click("新建任务")
+	h.typeInto("源目录", src)
+	h.click("选择…")
+	h.click("nas")
+	h.click("选择“nas”")
+	h.click("在目标中创建“xiaomai”文件夹")
+	h.want("“xiaomai”里的内容会直接放在 家里 · nas 中")
+	h.click("保存")
+	if store.Tasks[0].WithDir {
+		t.Fatal("still with its directory")
+	}
+	h.click("预览并备份…")
+	h.click("开始备份")
+	h.want("备份完成")
+	if _, err := os.Stat(filepath.Join(f.Root, "a.txt")); err != nil {
+		t.Error("not in the target itself:", err)
+	}
+}
+
+func TestArchiveMode(t *testing.T) {
+	f := fitest.New(t)
+	src := filepath.Join(t.TempDir(), "xiaomai")
+	os.MkdirAll(filepath.Join(src, "docs"), 0o755)
+	os.WriteFile(filepath.Join(src, "docs", "a.txt"), []byte("a"), 0o644)
+	store := signedIn(t, f)
+	h := newHarness(t, store)
+	h.click("新建任务")
+	h.typeInto("源目录", src)
+	h.click("选择…")
+	h.click("nas")
+	h.click("选择“nas”")
+	h.click("tar 归档")
+	h.want("归档里包含“xiaomai”文件夹")
+	h.want("gzip（.tar.gz，推荐）")
+	h.click("保存")
+	if store.Tasks[0].Compress != "gzip" {
+		t.Fatalf("compress %q", store.Tasks[0].Compress)
+	}
+	if store.Tasks[0].Mode != engine.Archive {
+		t.Fatalf("mode %v", store.Tasks[0].Mode)
+	}
+	h.want("tar 归档")
+	h.click("预览并备份…")
+	h.want("docs/a.txt")
+	h.click("开始备份")
+	h.want("备份完成")
+	ents, _ := os.ReadDir(f.Root)
+	// Compressed with gzip, by default.
+	if len(ents) != 1 || !strings.HasPrefix(ents[0].Name(), "xiaomai-") || !strings.HasSuffix(ents[0].Name(), ".tar.gz") {
+		t.Fatalf("server has %v", ents)
+	}
+	h.want("已保存为 家里 · nas/" + ents[0].Name() + "（fileindex 中路径）")
 }
 
 func TestEditorValidates(t *testing.T) {
 	h := newHarness(t, &config.Store{Dir: t.TempDir()})
-	h.click("新建任务")
+	h.click("＋ 新建任务")
 	h.click("保存")
 	h.want("请选择源目录。")
-	h.want("请选择目标目录。")
+	h.want("请选择 NAS 上备份到的目录。")
 	if len(h.a.store.Tasks) != 0 {
 		t.Error("an invalid task was saved")
 	}
@@ -136,17 +336,19 @@ func TestEditorValidates(t *testing.T) {
 }
 
 func TestMirrorAsksBeforeMassDelete(t *testing.T) {
-	src, dst := t.TempDir(), t.TempDir()
+	f := fitest.New(t)
+	src := t.TempDir()
 	os.WriteFile(filepath.Join(src, "only"), []byte("1"), 0o644)
+	dst := filepath.Join(f.Root, "m")
+	os.MkdirAll(dst, 0o755)
 	for _, name := range []string{"a", "b", "c", "d", "e", "f", "g", "h", "i", "j", "k"} {
 		os.WriteFile(filepath.Join(dst, name), []byte("x"), 0o644)
 	}
-	store := &config.Store{Dir: t.TempDir()}
-	store.Add(&config.Task{Name: "镜像", Source: src, Target: dst, Mode: engine.Mirror})
+	store := signedIn(t, f)
+	store.Add(&config.Task{Name: "镜像", Source: src, Server: store.Servers[0].ID, Root: 1, RootName: "nas", Path: "m", Mode: engine.Mirror})
 	h := newHarness(t, store)
 
 	h.click("预览并备份…")
-	h.settle()
 	h.click("开始备份")
 	h.want("确定要删除这么多文件吗？")
 	h.click("取消")
@@ -156,18 +358,73 @@ func TestMirrorAsksBeforeMassDelete(t *testing.T) {
 
 	h.click("开始备份")
 	h.click("仍然备份")
-	h.settle()
 	h.want("备份完成")
 	entries, _ := os.ReadDir(dst)
 	if len(entries) != 1 || entries[0].Name() != "only" {
 		t.Errorf("target has %v", entries)
 	}
+	if _, err := os.Stat(filepath.Join(f.Trash, "m", "a")); err != nil {
+		t.Error("not in the trash:", err)
+	}
+}
+
+func TestExpiredSessionAsksTheLogin(t *testing.T) {
+	f := fitest.New(t)
+	src := t.TempDir()
+	os.WriteFile(filepath.Join(src, "a.txt"), []byte("a"), 0o644)
+	store := signedIn(t, f)
+	store.Add(&config.Task{Name: "t", Source: src, Server: store.Servers[0].ID, Root: 1, RootName: "nas", Path: "x"})
+	f.Expired.Store(true)
+	h := newHarness(t, store)
+
+	h.click("预览并备份…")
+	h.want("需要登录 NAS 上的 fileindex，登录后会自动重新扫描。")
+	h.click("登录 NAS…")
+	h.typeInto("密码", fitest.Password)
+	h.click("登录")
+	// Signed in again, the scan runs again.
+	h.want("预览：t")
+	h.want("a.txt")
+}
+
+func TestServersInUseStay(t *testing.T) {
+	f := fitest.New(t)
+	store := signedIn(t, f)
+	store.AddServer(&config.Server{Addr: "10.0.0.9:8090"})
+	store.Add(&config.Task{Name: "t", Source: t.TempDir(), Server: store.Servers[0].ID, Root: 1, RootName: "nas"})
+	h := newHarness(t, store)
+	h.click("服务器…")
+	h.want("1 个任务")
+	h.want("已登录")
+
+	// The server of the task cannot go.
+	h.a.nas.confirmDelID = store.Servers[0].ID
+	h.tt.Frame()
+	h.click("确定删除")
+	h.want("还有任务备份到这个服务器，请先修改或删除这些任务")
+	if len(store.Servers) != 2 {
+		t.Fatal("a server in use was removed")
+	}
+	// The other can.
+	h.a.nas.confirmDelID = store.Servers[1].ID
+	h.tt.Frame()
+	h.click("确定删除")
+	if len(store.Servers) != 1 {
+		t.Fatalf("servers %+v", store.Servers)
+	}
+
+	h.click("退出登录")
+	h.want("未登录")
+	if store.Servers[0].Token != "" {
+		t.Error("signed out but the session stays")
+	}
 }
 
 func TestRemoveTaskKeepsFiles(t *testing.T) {
+	f := fitest.New(t)
 	src := t.TempDir()
-	store := &config.Store{Dir: t.TempDir()}
-	store.Add(&config.Task{Name: "要删除的任务", Source: src, Target: t.TempDir()})
+	store := signedIn(t, f)
+	store.Add(&config.Task{Name: "要删除的任务", Source: src, Server: store.Servers[0].ID, Root: 1})
 	h := newHarness(t, store)
 	h.click("删除任务")
 	h.want("删除任务“要删除的任务”？")
@@ -179,4 +436,22 @@ func TestRemoveTaskKeepsFiles(t *testing.T) {
 		t.Fatal("source gone")
 	}
 	h.want("还没有备份任务")
+}
+
+func TestNormalizeAddr(t *testing.T) {
+	for in, want := range map[string]string{
+		"192.168.0.235":             "192.168.0.235:8090",
+		" http://192.168.0.235:80/": "192.168.0.235:80",
+		"nas.local:9000":            "nas.local:9000",
+		"fe80::1":                   "[fe80::1]:8090",
+	} {
+		if got, err := normalizeAddr(in); err != nil || got != want {
+			t.Errorf("%q: %q, %v", in, got, err)
+		}
+	}
+	for _, in := range []string{"", "a b", "host/path"} {
+		if _, err := normalizeAddr(in); err == nil {
+			t.Errorf("%q accepted", in)
+		}
+	}
 }

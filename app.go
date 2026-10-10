@@ -1,14 +1,13 @@
 package main
 
 import (
-	"context"
 	"fmt"
+	"path"
 	"strings"
+	"time"
 
 	"filesync/config"
 	"filesync/engine"
-	"filesync/fileindex"
-	"filesync/places"
 
 	"github.com/egoist/mygo/ui"
 )
@@ -23,8 +22,10 @@ type app struct {
 	// pickDir asks for a directory, "" when canceled. It blocks, and is
 	// called from goroutines of its own.
 	pickDir func(title, start string) (string, error)
-	// openPath opens a file or directory with the system's default app.
+	// openPath opens a file with the system's default app, and openURL a
+	// web page in the browser.
 	openPath func(string)
+	openURL  func(string)
 	// keepAwake keeps the computer from sleeping until release is called.
 	keepAwake func(reason string) (release func())
 	// closeWindow closes the window, which quits the app.
@@ -49,12 +50,17 @@ type app struct {
 
 // draft is a task being created or edited.
 type draft struct {
-	id                      string // "" for a new task
-	name, source, target    string
-	targetName              string // of a target on the NAS
+	id           string // "" for a new task
+	name, source string
+	// The target: a directory of a root of a server.
+	server         string
+	root           int64
+	rootName, path string
+	withDir        bool   // back up the source directory itself
+	compress       string // of an archive
+
 	mode                    int
 	excludes                string
-	tolerance               float64
 	nameErr, srcErr, dstErr string
 }
 
@@ -65,6 +71,7 @@ func newApp(store *config.Store) *app {
 		post:        func(fn func()) { fn() },
 		pickDir:     func(string, string) (string, error) { return "", nil },
 		openPath:    func(string) {},
+		openURL:     func(string) {},
 		keepAwake:   func(string) func() { return func() {} },
 		closeWindow: func() {},
 	}
@@ -91,7 +98,6 @@ func (a *app) busy() bool {
 }
 
 func (a *app) view(c *ui.Context) {
-	t := c.Theme()
 	ui.Row(c).Fill().AlignItems(ui.Stretch).Children(func() {
 		a.sidebar(c)
 		ui.Column(c).Grow(1).Shrink(1).MinWidth(0).Padding(24, 28).Gap(16).Children(func() {
@@ -99,13 +105,7 @@ func (a *app) view(c *ui.Context) {
 			case a.editing:
 				a.editor(c)
 			case a.task() == nil:
-				ui.Column(c).Grow(1).Center().Gap(12).Children(func() {
-					ui.Text(c, "还没有备份任务").FontSize(18).Bold()
-					ui.Text(c, "新建一个任务，选择要备份的源目录和备份到的目标目录。").TextColor(t.TextMuted)
-					if ui.PrimaryButton(c, "新建任务").Clicked() {
-						a.startEditing(nil)
-					}
-				})
+				a.welcome(c)
 			case a.job != nil && a.job.taskID == a.task().ID:
 				a.jobView(c)
 			default:
@@ -115,7 +115,7 @@ func (a *app) view(c *ui.Context) {
 	})
 	if a.askQuit {
 		switch ui.AlertDialog(c, &a.askQuit, "正在备份，要停止并退出吗？",
-			"已复制完成的文件会保留，正在复制的文件不会写入。下次备份会接着复制剩下的文件。", "继续备份", "停止并退出") {
+			"已传输完成的文件会保留，正在传输的文件不会写入。下次备份会接着传输剩下的文件。", "继续备份", "停止并退出") {
 		case 1:
 			a.quit()
 		}
@@ -124,11 +124,31 @@ func (a *app) view(c *ui.Context) {
 	if a.confirmRemove {
 		if task := a.task(); task != nil {
 			if ui.AlertDialog(c, &a.confirmRemove, fmt.Sprintf("删除任务“%s”？", task.Name),
-				"只删除任务设置和运行记录，不会删除源目录或目标目录中的任何文件。", "取消", "删除") == 1 {
+				"只删除任务设置和运行记录，不会删除本地或 NAS 上的任何文件。", "取消", "删除") == 1 {
 				a.removeTask()
 			}
 		}
 	}
+}
+
+// welcome is shown while there is no task.
+func (a *app) welcome(c *ui.Context) {
+	t := c.Theme()
+	ui.Column(c).Grow(1).Center().Gap(12).Children(func() {
+		ui.Text(c, "还没有备份任务").FontSize(18).Bold()
+		if len(a.store.Servers) == 0 {
+			ui.Text(c, "FileSync 把本机的目录备份到 NAS 上的 fileindex。先添加 fileindex 服务器的地址。").TextColor(t.TextMuted)
+			if ui.PrimaryButton(c, "添加服务器…").Clicked() {
+				a.openServers()
+				a.nasStartEdit(nil)
+			}
+			return
+		}
+		ui.Text(c, "新建一个任务，选择本机要备份的目录，和 NAS 上备份到的目录。").TextColor(t.TextMuted)
+		if ui.PrimaryButton(c, "新建任务").Clicked() {
+			a.startEditing(nil)
+		}
+	})
 }
 
 func (a *app) sidebar(c *ui.Context) {
@@ -165,12 +185,24 @@ func (a *app) sidebar(c *ui.Context) {
 				a.job = nil
 			}
 		}
-		ui.Column(c).Padding(12).Children(func() {
+		ui.Column(c).Padding(12).Gap(8).Children(func() {
 			if ui.Button(c, "＋ 新建任务").Disabled(a.busy() || a.editing).Clicked() {
 				a.startEditing(nil)
 			}
+			if ui.Button(c, "服务器…").Disabled(a.busy()).Clicked() {
+				a.openServers()
+			}
 		})
 	})
+}
+
+// target describes where a task backs up to.
+func (a *app) target(server string, rootName, p string) string {
+	sv := a.store.Server(server)
+	if sv == nil {
+		return "（服务器已删除）"
+	}
+	return sv.Title() + " · " + path.Join(rootName, p)
 }
 
 // detail shows the task chosen.
@@ -186,8 +218,21 @@ func (a *app) detail(c *ui.Context) {
 	}
 	card(c, func() {
 		ui.Form(c, func() {
-			ui.Field(c, "源目录", func() { location(c, task.Source, "") })
-			ui.Field(c, "目标目录", func() { location(c, task.Target, task.TargetName) })
+			ui.Field(c, "源目录", func() { ui.Text(c, task.Source).Selectable() })
+			ui.Field(c, "备份到", func() {
+				ui.Column(c).Gap(2).Children(func() {
+					where := a.target(task.Server, task.RootName, task.BackupPath())
+					if task.Mode == engine.Archive {
+						ext := config.ArchiveExt(task.Compress)
+						name := strings.TrimSuffix(config.ArchiveName(task.Source, time.Time{}, task.Compress), "-00010101-000000"+ext)
+						where += "（每次生成一个 " + name + "-日期时间" + ext + "）"
+					}
+					ui.Text(c, where).Selectable()
+					if sv := a.store.Server(task.Server); sv != nil {
+						ui.Text(c, "fileindex "+sv.Addr+"；完全一致模式删除的文件会进入 fileindex 回收站").FontSize(12).TextColor(t.TextMuted)
+					}
+				})
+			})
 			ui.Field(c, "模式", func() { ui.Text(c, modeHelp[task.Mode]).TextColor(t.TextMuted) })
 			excl := "无"
 			if len(task.Excludes) > 0 {
@@ -230,8 +275,9 @@ func (a *app) detail(c *ui.Context) {
 }
 
 var modeHelp = map[engine.Mode]string{
-	engine.Incremental: "复制新增和修改过的文件，目标中多出来的文件保留不动。",
-	engine.Mirror:      "让目标与源完全相同：复制新增和修改过的文件，并删除目标中源没有的文件。",
+	engine.Incremental: "上传新增和修改过的文件，NAS 上多出来的文件保留不动。",
+	engine.Mirror:      "让 NAS 上的目录与本机完全相同：上传新增和修改过的文件，并把本机没有的文件移到 fileindex 回收站。",
+	engine.Archive:     "把整个源目录打包成一个 tar 文件保存到 NAS，每次备份生成一个新文件（文件名带日期时间），不和 NAS 上已有的内容比较。",
 }
 
 func (a *app) startEditing(task *config.Task) {
@@ -239,19 +285,17 @@ func (a *app) startEditing(task *config.Task) {
 	a.errorMsg = ""
 	if task == nil {
 		a.draft = draft{
-			name:      fmt.Sprintf("备份任务 %d", len(a.store.Tasks)+1),
-			excludes:  strings.Join(config.DefaultExcludes, "\n"),
-			tolerance: engine.DefaultTimeTolerance.Seconds(),
+			name:     fmt.Sprintf("备份任务 %d", len(a.store.Tasks)+1),
+			excludes: strings.Join(config.DefaultExcludes, "\n"),
+			withDir:  true,
+			compress: "gzip",
 		}
 		return
 	}
-	tol := float64(task.TimeTolerance)
-	if tol == 0 {
-		tol = engine.DefaultTimeTolerance.Seconds()
-	}
 	a.draft = draft{
-		id: task.ID, name: task.Name, source: task.Source, target: task.Target, targetName: task.TargetName,
-		mode: int(task.Mode), excludes: strings.Join(task.Excludes, "\n"), tolerance: tol,
+		id: task.ID, name: task.Name, source: task.Source,
+		server: task.Server, root: task.Root, rootName: task.RootName, path: task.Path, withDir: task.WithDir, compress: task.Compress,
+		mode: int(task.Mode), excludes: strings.Join(task.Excludes, "\n"),
 	}
 }
 
@@ -263,83 +307,130 @@ func (a *app) editor(c *ui.Context) {
 		title = "编辑任务"
 	}
 	ui.Text(c, title).FontSize(22).Bold()
+	if a.errorMsg != "" {
+		notice(c, t.Danger, a.errorMsg)
+	}
 	ui.Scroll(c).Grow(1).Children(func() {
 		ui.Column(c).Gap(14).MaxWidth(720).Children(func() {
 			ui.Field(c, "名称", func() {
 				ui.TextInput(c.Key("name"), &d.name).AutoFocus()
 			}).Error(d.nameErr)
-			a.dirField(c, "源目录", "要备份的目录", &d.source, d.srcErr, false)
-			a.dirField(c, "目标目录", "备份到的目录；点“NAS…”可以高速备份到 NAS", &d.target, d.dstErr, true)
+			ui.Field(c, "源目录", func() {
+				ui.Row(c).Gap(8).Children(func() {
+					ui.TextInput(c.Key("source"), &d.source).Placeholder("本机要备份的目录").Grow(1).Shrink(1).MinWidth(0)
+					if ui.Button(c, "浏览…").Clicked() {
+						a.browseSource()
+					}
+				})
+			}).Error(d.srcErr)
+			ui.Field(c, "备份到", func() {
+				ui.Row(c).Gap(8).Children(func() {
+					name, color := "未选择", t.TextMuted
+					if d.server != "" {
+						name, color = a.target(d.server, d.rootName, d.path), t.Text
+					}
+					ui.Text(c, name).TextColor(color).Grow(1).Shrink(1).SingleLine().Tooltip(name)
+					if ui.Button(c, "选择…").Clicked() {
+						a.openPicker(d.server, d.root, d.path, func(server string, root int64, rootName, p string) {
+							d.server, d.root, d.rootName, d.path = server, root, rootName, p
+							d.dstErr = ""
+						})
+					}
+				})
+			}).Error(d.dstErr)
+			name := config.SourceName(d.source)
+			label := "在目标中创建与源目录同名的文件夹"
+			switch {
+			case d.mode == int(engine.Archive) && name != "":
+				label = "归档里包含“" + name + "”文件夹"
+			case d.mode == int(engine.Archive):
+				label = "归档里包含与源目录同名的文件夹"
+			case name != "":
+				label = "在目标中创建“" + name + "”文件夹"
+			}
+			ui.Column(c).Gap(4).Children(func() {
+				ui.Checkbox(c.Key("with-dir"), &d.withDir, label).Disabled(name == "")
+				ui.Text(c, a.landing(d)).FontSize(12).TextColor(t.TextMuted).Margin(0, 0, 0, 26)
+			})
 			ui.Field(c, "模式", func() {
 				ui.RadioGroup(c, func() {
 					ui.Radio(c, &d.mode, int(engine.Incremental), "增量备份")
 					ui.Text(c, modeHelp[engine.Incremental]).FontSize(12).TextColor(t.TextMuted).Margin(0, 0, 6, 26)
 					ui.Radio(c, &d.mode, int(engine.Mirror), "完全一致")
-					ui.Text(c, modeHelp[engine.Mirror]).FontSize(12).TextColor(t.TextMuted).Margin(0, 0, 0, 26)
+					ui.Text(c, modeHelp[engine.Mirror]).FontSize(12).TextColor(t.TextMuted).Margin(0, 0, 6, 26)
+					ui.Radio(c, &d.mode, int(engine.Archive), "tar 归档")
+					ui.Text(c, modeHelp[engine.Archive]).FontSize(12).TextColor(t.TextMuted).Margin(0, 0, 0, 26)
 				}).Label("模式")
 			})
+			if d.mode == int(engine.Archive) {
+				ui.Field(c, "压缩", func() {
+					ui.RadioGroup(c, func() {
+						ui.Radio(c, &d.compress, "gzip", "gzip（.tar.gz，推荐）")
+						ui.Radio(c, &d.compress, "", "不压缩（.tar）")
+						ui.Radio(c, &d.compress, "zstd", "zstd（.tar.zst，压得更小但稍慢，较旧的解压软件可能打不开）")
+					}).Label("压缩")
+				}).Description("多核并行压缩，不会拖慢备份。代码、文本通常能压缩一半左右；照片、视频、压缩包几乎压不动。")
+			}
 			ui.Field(c, "排除规则", func() {
 				ui.TextArea(c.Key("excludes"), &d.excludes).Lines(4, 10).Font("monospace")
-			}).Description("每行一条。*.tmp 匹配任意位置的文件名；以 / 结尾只匹配目录，如 cache/；含 / 的规则从根目录匹配，如 /build/out。被排除的文件不会复制，也不会被删除。")
-			ui.Field(c, "时间容差（秒）", func() {
-				ui.NumberInput(c, &d.tolerance, 0, 3600, 1).Width(140)
-			}).Description("修改时间相差不超过这么多秒、大小又相同的文件视为没有变化。FAT 盘或 FTP 挂载的时间精度较低，可以调大，例如 FTP 用 60。")
+			}).Description("每行一条。*.tmp 匹配任意位置的文件名；以 / 结尾只匹配目录，如 cache/；含 / 的规则从根目录匹配，如 /build/out。被排除的文件不会上传，NAS 上的也不会被删除。")
 		})
 	})
 	ui.Row(c).Gap(8).Children(func() {
 		if ui.PrimaryButton(c, "保存").Clicked() {
 			a.saveDraft()
 		}
-		if ui.Button(c, "取消").Clicked() || c.Shortcut(0, ui.KeyEscape) {
+		if ui.Button(c, "取消").Clicked() || c.Shortcut(0, ui.KeyEscape) && !a.nas.open {
 			a.editing = false
+			a.errorMsg = ""
 		}
 	})
 }
 
-func (a *app) dirField(c *ui.Context, label, help string, value *string, errMsg string, nas bool) {
-	ui.Field(c, label, func() {
-		ui.Row(c).Gap(8).Children(func() {
-			ui.TextInput(c.Key(label), value).Placeholder(help).Grow(1).Shrink(1).MinWidth(0)
-			if nas && ui.Button(c.Key(label+"-nas"), "NAS…").Tooltip("通过 NAS 上的 fileindex 服务备份，速度最快").Clicked() {
-				a.openNAS(*value, func(url, name string) {
-					*value = url
-					a.draft.targetName = name
-				}, nil)
-			}
-			if ui.Button(c.Key(label+"-browse"), "浏览…").Clicked() {
-				start := *value
-				if fileindex.IsURL(start) {
-					start = ""
-				}
-				go func() {
-					// A URL is opened first, for the dialog to start in it.
-					dir, err := places.Resolve(context.Background(), start)
-					if err != nil {
-						dir = ""
-					}
-					if dir, err = a.pickDir("选择"+label, dir); err == nil && dir != "" {
-						dir = places.Stable(context.Background(), dir)
-					}
-					a.post(func() {
-						if err != nil {
-							a.errorMsg = err.Error()
-						} else if dir != "" {
-							*value = dir
-						}
-					})
-				}()
+// landing says where the draft's files go.
+func (a *app) landing(d *draft) string {
+	src := config.SourceName(d.source)
+	if src == "" {
+		src = "源目录"
+	}
+	if d.server == "" {
+		if d.withDir {
+			return "源目录本身会备份为目标中的一个文件夹。"
+		}
+		return "只备份源目录里的内容，直接放在目标目录中。"
+	}
+	if d.mode == int(engine.Archive) {
+		where := a.target(d.server, d.rootName, path.Join(d.path, config.ArchiveName(d.source, time.Now(), d.compress)))
+		if d.withDir && config.SourceName(d.source) != "" {
+			return "每次备份生成一个归档，如 " + where + "，解开后得到“" + src + "”文件夹"
+		}
+		return "每次备份生成一个归档，如 " + where + "，解开后直接是“" + src + "”里的内容"
+	}
+	where := a.target(d.server, d.rootName, config.BackupPath(d.path, d.source, d.withDir))
+	if d.withDir && config.SourceName(d.source) != "" {
+		return "“" + src + "”会备份为 " + where
+	}
+	return "“" + src + "”里的内容会直接放在 " + where + " 中"
+}
+
+func (a *app) browseSource() {
+	start := a.draft.source
+	go func() {
+		dir, err := a.pickDir("选择源目录", start)
+		a.post(func() {
+			if err != nil {
+				a.errorMsg = err.Error()
+			} else if dir != "" {
+				a.draft.source = dir
 			}
 		})
-	}).Error(errMsg)
+	}()
 }
 
 func (a *app) saveDraft() {
 	d := &a.draft
 	d.name = strings.TrimSpace(d.name)
-	// A directory of kio-fuse is kept as its URL, as its path changes with
-	// the session.
-	d.source = places.Stable(context.Background(), strings.TrimSpace(d.source))
-	d.target = places.Stable(context.Background(), strings.TrimSpace(d.target))
+	d.source = strings.TrimSpace(d.source)
 	d.nameErr, d.srcErr, d.dstErr = "", "", ""
 	if d.name == "" {
 		d.nameErr = "请输入名称。"
@@ -347,8 +438,8 @@ func (a *app) saveDraft() {
 	if d.source == "" {
 		d.srcErr = "请选择源目录。"
 	}
-	if d.target == "" {
-		d.dstErr = "请选择目标目录。"
+	if d.server == "" || a.store.Server(d.server) == nil {
+		d.dstErr = "请选择 NAS 上备份到的目录。"
 	}
 	var excludes []string
 	for _, line := range strings.Split(d.excludes, "\n") {
@@ -370,17 +461,15 @@ func (a *app) saveDraft() {
 		a.store.Add(task)
 		a.selected = len(a.store.Tasks) - 1
 	}
-	task.Name, task.Source, task.Target = d.name, d.source, d.target
-	task.TargetName = ""
-	if fileindex.IsURL(d.target) {
-		task.TargetName = d.targetName
+	task.Name, task.Source = d.name, d.source
+	task.Server, task.Root, task.RootName, task.Path = d.server, d.root, d.rootName, d.path
+	task.WithDir = d.withDir
+	task.Compress = ""
+	if engine.Mode(d.mode) == engine.Archive {
+		task.Compress = d.compress
 	}
 	task.Mode = engine.Mode(d.mode)
 	task.Excludes = excludes
-	task.TimeTolerance = int(d.tolerance)
-	if d.tolerance == engine.DefaultTimeTolerance.Seconds() {
-		task.TimeTolerance = 0
-	}
 	a.editing = false
 	a.errorMsg = ""
 	a.save()
@@ -427,24 +516,6 @@ func (a *app) save() {
 	}
 }
 
-// location shows a task's directory, and how a URL is reached.
-func location(c *ui.Context, p, name string) {
-	ui.Column(c).Gap(2).Children(func() {
-		if fileindex.IsURL(p) {
-			if name == "" {
-				name = p
-			}
-			ui.Text(c, name).Selectable()
-			ui.Text(c, "NAS 上的目录，通过 fileindex 服务批量高速传输；完全一致模式删除的文件会进入 fileindex 回收站").FontSize(12).TextColor(c.Theme().TextMuted)
-			return
-		}
-		ui.Text(c, p).Selectable()
-		if places.IsURL(p) {
-			ui.Text(c, "网络位置，备份时通过 KDE 的 kio-fuse 打开（文件很多时较慢）").FontSize(12).TextColor(c.Theme().TextMuted)
-		}
-	})
-}
-
 // card is a bordered box.
 func card(c *ui.Context, fn func()) {
 	t := c.Theme()
@@ -486,7 +557,7 @@ func runCounts(r config.Run) string {
 	if r.Status == config.StatusFailed && r.Message != "" {
 		return r.Message
 	}
-	s := fmt.Sprintf("复制 %d 个文件（%s）", r.Copied, formatBytes(r.Bytes))
+	s := fmt.Sprintf("上传 %d 个文件（%s）", r.Copied, formatBytes(r.Bytes))
 	if r.Deleted > 0 {
 		s += fmt.Sprintf("，删除 %d 个", r.Deleted)
 	}

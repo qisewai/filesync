@@ -1,7 +1,8 @@
 // Package fileindex backs up to a fileindex server, the file index running
-// on the NAS: it lists the target directory there in one request, sends the
-// files in batches over several connections at once, and moves what a
-// mirror deletes to the server's trash.
+// on the NAS: it lists the target directory there in one request, sends
+// the files as one tar stream over one connection, which the server
+// unpacks and acknowledges file by file, and moves what a mirror deletes
+// to the server's trash.
 package fileindex
 
 import (
@@ -149,6 +150,13 @@ func (c *Client) Login(ctx context.Context, password string) error {
 	return errors.New("NAS 没有返回登录会话")
 }
 
+// Logout ends the session on the server.
+func (c *Client) Logout(ctx context.Context) error {
+	err := c.do(ctx, "POST", "/api/auth/logout", nil, nil, nil)
+	c.Token = ""
+	return err
+}
+
 // Authed reports whether the session is valid.
 func (c *Client) Authed(ctx context.Context) (bool, error) {
 	var st struct {
@@ -217,6 +225,8 @@ type ManifestEntry struct {
 	Dir     bool   `json:"d"`
 	Size    int64  `json:"s"`
 	MTime   int64  `json:"m"` // unix nanoseconds
+	Mode    uint32 `json:"o"`
+	Link    string `json:"l"` // the target of a symbolic link
 	Special bool   `json:"x"`
 	Err     string `json:"e"`
 	// Error, on the last line, says the listing stopped before its end.
@@ -260,37 +270,18 @@ func (c *Client) Manifest(ctx context.Context, root int64, path string, fn func(
 	return false, nil
 }
 
-// Item heads an item of a Put: a directory, or a file whose Size bytes
-// follow it.
-type Item struct {
-	Path  string `json:"p"`
-	Dir   bool   `json:"d,omitempty"`
-	Size  int64  `json:"s,omitempty"`
-	MTime int64  `json:"m,omitempty"` // unix nanoseconds
-}
-
-// PutResult is what the server did with a Put.
-type PutResult struct {
-	Written int `json:"written"`
-	Failed  []struct {
-		Path  string `json:"p"`
-		Error string `json:"e"`
-	} `json:"failed"`
-	// Error says the server stopped reading the body: the items after the
-	// written and failed ones were not read.
-	Error string `json:"error"`
-}
-
-// Put sends items below path of a root, body being the items, each a JSON
-// line followed by a file's bytes.
-func (c *Client) Put(ctx context.Context, root int64, path string, body io.Reader) (*PutResult, error) {
+// Tar starts sending a tar stream below path of a root, body being the
+// stream. It returns as soon as the server answers, while body still goes:
+// the answer is a JSON line for each entry as it lands, which Answer
+// decodes.
+func (c *Client) Tar(ctx context.Context, root int64, path string, body io.Reader) (io.ReadCloser, error) {
 	q := url.Values{"root": {strconv.FormatInt(root, 10)}, "path": {path}}
-	req, err := http.NewRequestWithContext(ctx, "POST", c.url("/api/backup/put", q), body)
+	req, err := http.NewRequestWithContext(ctx, "POST", c.url("/api/backup/tar", q), body)
 	if err != nil {
 		return nil, err
 	}
 	req.Header.Set(csrfHeader, csrfValue)
-	req.Header.Set("Content-Type", "application/octet-stream")
+	req.Header.Set("Content-Type", "application/x-tar")
 	req.AddCookie(&http.Cookie{Name: cookieName, Value: c.Token})
 	res, err := c.hc.Do(req)
 	if err != nil {
@@ -299,22 +290,105 @@ func (c *Client) Put(ctx context.Context, root int64, path string, body io.Reade
 		}
 		return nil, fmt.Errorf("发送到 NAS 失败: %w", err)
 	}
-	defer res.Body.Close()
-	if res.StatusCode == http.StatusUnauthorized {
+	switch {
+	case res.StatusCode == http.StatusUnauthorized:
+		res.Body.Close()
 		return nil, ErrAuth
-	}
-	if res.StatusCode/100 != 2 {
+	case res.StatusCode == http.StatusNotFound:
+		res.Body.Close()
+		return nil, errors.New("NAS 不支持备份接口，请先更新 NAS 上的 fileindex")
+	case res.StatusCode/100 != 2:
+		defer res.Body.Close()
 		var e struct {
 			Error string `json:"error"`
 		}
-		json.NewDecoder(res.Body).Decode(&e)
+		json.NewDecoder(io.LimitReader(res.Body, 64<<10)).Decode(&e)
+		if e.Error == "" {
+			e.Error = res.Status
+		}
 		return nil, &StatusError{Code: res.StatusCode, Msg: e.Error}
 	}
-	var out PutResult
-	if err := json.NewDecoder(res.Body).Decode(&out); err != nil {
-		return nil, fmt.Errorf("NAS 的回答无法解析: %w", err)
+	return res.Body, nil
+}
+
+// Answer is a line of the answer to Tar: an entry written, or that failed,
+// or the end.
+type Answer struct {
+	Path  string `json:"p"`
+	Error string `json:"e"`
+	End   bool   `json:"end"`
+	// Fatal, at the end, says the server stopped reading the stream.
+	Fatal string `json:"error"`
+}
+
+// Discard is the entry that tells the server to remove the file just
+// sent, with its path in the PAX record DiscardKey.
+const (
+	DiscardName = ".fileindex-backup-discard"
+	DiscardKey  = "FILEINDEX.discard"
+)
+
+// SaveFile sends body as the file name in dir of a root, which the server
+// shows under that name only once complete, numbered if the name is taken.
+// It returns the path the file got.
+func (c *Client) SaveFile(ctx context.Context, root int64, dir, name string, body io.Reader) (string, error) {
+	q := url.Values{"root": {strconv.FormatInt(root, 10)}, "path": {dir}, "name": {name}}
+	sized := &sizeTrailer{r: body}
+	req, err := http.NewRequestWithContext(ctx, "POST", c.url("/api/backup/file", q), sized)
+	if err != nil {
+		return "", err
 	}
-	return &out, nil
+	// The body ends with its length, for the server to tell a file cut
+	// short.
+	req.Trailer = http.Header{sizeTrailerName: nil}
+	sized.req = req
+	req.Header.Set(csrfHeader, csrfValue)
+	req.Header.Set("Content-Type", "application/octet-stream")
+	req.AddCookie(&http.Cookie{Name: cookieName, Value: c.Token})
+	res, err := c.hc.Do(req)
+	if err != nil {
+		if ctx.Err() != nil {
+			return "", ctx.Err()
+		}
+		return "", fmt.Errorf("发送到 NAS 失败: %w", err)
+	}
+	defer res.Body.Close()
+	var out struct {
+		Path  string `json:"path"`
+		Error string `json:"error"`
+	}
+	json.NewDecoder(io.LimitReader(res.Body, 64<<10)).Decode(&out)
+	switch {
+	case res.StatusCode == http.StatusUnauthorized:
+		return "", ErrAuth
+	case res.StatusCode == http.StatusNotFound && out.Error == "not found":
+		return "", errors.New("NAS 不支持 tar 归档，请先更新 NAS 上的 fileindex")
+	case res.StatusCode/100 != 2:
+		if out.Error == "" {
+			out.Error = res.Status
+		}
+		return "", &StatusError{Code: res.StatusCode, Msg: out.Error}
+	}
+	return out.Path, nil
+}
+
+const sizeTrailerName = "X-Backup-Size"
+
+// sizeTrailer counts a request body, and sets its length as the trailer
+// once the body ends well.
+type sizeTrailer struct {
+	r   io.Reader
+	req *http.Request
+	n   int64
+}
+
+func (s *sizeTrailer) Read(p []byte) (int, error) {
+	n, err := s.r.Read(p)
+	s.n += int64(n)
+	if err == io.EOF {
+		s.req.Trailer.Set(sizeTrailerName, strconv.FormatInt(s.n, 10))
+	}
+	return n, err
 }
 
 // Trash moves paths of a root to its trash, where they stay for a while.

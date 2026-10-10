@@ -28,11 +28,17 @@ const (
 	// Mirror makes the target the same as the source, deleting the target's
 	// files that the source has not.
 	Mirror
+	// Archive packs the whole source into one archive, a new one each time,
+	// whatever the target has: its target lists nothing.
+	Archive
 )
 
 func (m Mode) String() string {
-	if m == Mirror {
+	switch m {
+	case Mirror:
 		return "完全一致"
+	case Archive:
+		return "tar 归档"
 	}
 	return "增量备份"
 }
@@ -44,13 +50,13 @@ const DefaultTimeTolerance = 2 * time.Second
 
 // Options describe a backup.
 type Options struct {
-	Source, Target string
-	Mode           Mode
-	Excludes       []string
+	// Source is the directory backed up.
+	Source   string
+	Mode     Mode
+	Excludes []string
 	// TimeTolerance is DefaultTimeTolerance when zero.
 	TimeTolerance time.Duration
-	// Dest is where the backup writes, in place of the local directory
-	// Target, as a server.
+	// Dest is where the backup writes.
 	Dest Target
 }
 
@@ -81,8 +87,10 @@ type Action struct {
 	// Reason says why an entry is skipped, or why a target entry is deleted
 	// when it is not simply missing from the source.
 	Reason string
-
-	perm os.FileMode
+	// Mode is the permission bits of a file or directory of the source.
+	Mode os.FileMode
+	// Link is the target of a symbolic link to make.
+	Link string
 }
 
 // Summary counts a plan's actions.
@@ -144,9 +152,7 @@ func Prepare(ctx context.Context, opts Options, onProgress func(ScanProgress)) (
 	}
 	dest := opts.Dest
 	if dest == nil {
-		if dest, err = newLocalTarget(source, opts.Target); err != nil {
-			return nil, err
-		}
+		return nil, errors.New("请选择目标目录")
 	}
 	filter, err := NewFilter(opts.Excludes)
 	if err != nil {
@@ -209,18 +215,6 @@ func checkSource(source string) (string, error) {
 		return "", fmt.Errorf("源 %s 不是目录", source)
 	}
 	return src, nil
-}
-
-// within reports whether p is dir or inside it.
-func within(p, dir string) bool {
-	if runtime.GOOS == "windows" {
-		p, dir = strings.ToLower(p), strings.ToLower(dir)
-	}
-	rel, err := filepath.Rel(dir, p)
-	if err != nil {
-		return false
-	}
-	return rel != ".." && !strings.HasPrefix(rel, ".."+string(filepath.Separator))
 }
 
 func (p *Plan) build(src, dst *Tree) {
@@ -288,7 +282,7 @@ func (p *Plan) build(src, dst *Tree) {
 		seen[k] = e.Path
 
 		d := dstIndex[k]
-		if d != nil && (d.IsDir != e.IsDir || d.Special != "") {
+		if d != nil && (d.kind() != e.kind() || d.Special != "") {
 			if !mirror {
 				skip("目标中已有同名但类型不同的项，增量备份不会删除它")
 				continue
@@ -302,12 +296,16 @@ func (p *Plan) build(src, dst *Tree) {
 		}
 		switch {
 		case e.IsDir && d == nil:
-			creates = append(creates, Action{Kind: ActMkdir, Path: e.Path, perm: e.Perm})
+			creates = append(creates, Action{Kind: ActMkdir, Path: e.Path, Mode: e.Perm, ModTime: e.ModTime})
 		case e.IsDir:
 		case d == nil:
-			creates = append(creates, Action{Kind: ActCreate, Path: e.Path, Size: e.Size, ModTime: e.ModTime, perm: e.Perm})
+			creates = append(creates, Action{Kind: ActCreate, Path: e.Path, Size: e.Size, ModTime: e.ModTime, Mode: e.Perm, Link: e.Link})
+		case e.Link != "":
+			if d.Link != e.Link {
+				creates = append(creates, Action{Kind: ActUpdate, Path: e.Path, ModTime: e.ModTime, Link: e.Link})
+			}
 		case d.Size != e.Size || absDuration(d.ModTime.Sub(e.ModTime)) > tolerance:
-			creates = append(creates, Action{Kind: ActUpdate, Path: e.Path, Size: e.Size, ModTime: e.ModTime, perm: e.Perm})
+			creates = append(creates, Action{Kind: ActUpdate, Path: e.Path, Size: e.Size, ModTime: e.ModTime, Mode: e.Perm})
 		}
 	}
 

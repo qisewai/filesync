@@ -1,7 +1,7 @@
-// FileSync backs up directories by hand, in two modes: incremental, which
-// adds and updates files, and mirror, which also deletes what the source no
-// longer has. Shares and FTP servers are backed up once the system mounts
-// them.
+// FileSync backs up directories of this computer to a NAS, through the
+// fileindex server running there, in two modes: incremental, which adds and
+// updates files, and mirror, which also moves to the server's trash what
+// the source no longer has.
 package main
 
 import (
@@ -60,6 +60,11 @@ func main() {
 		a.openPath = func(path string) {
 			if err := mygo.Shell.OpenPath(path); err != nil {
 				win.Update(func() { a.errorMsg = "无法打开 " + path + ": " + err.Error() })
+			}
+		}
+		a.openURL = func(u string) {
+			if err := mygo.Shell.OpenExternal(u); err != nil {
+				win.Update(func() { a.errorMsg = "无法打开 " + u + ": " + err.Error() })
 			}
 		}
 		a.keepAwake = func(reason string) func() { return mygo.Power.KeepAwake(reason, false) }

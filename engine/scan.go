@@ -19,7 +19,20 @@ type Entry struct {
 	Size    int64
 	ModTime time.Time
 	Perm    fs.FileMode
-	Special string // why it cannot be copied (a symbolic link…), or ""
+	// Link is the target of a symbolic link, which is copied as a link.
+	Link    string
+	Special string // why it cannot be copied (a device…), or ""
+}
+
+// kind tells files, directories and symbolic links apart.
+func (e *Entry) kind() int {
+	switch {
+	case e.IsDir:
+		return 1
+	case e.Link != "":
+		return 2
+	}
+	return 0
 }
 
 // Tree is what a scan found under a root.
@@ -90,7 +103,10 @@ func scan(ctx context.Context, root string, f *Filter, onEntry func()) (*Tree, e
 		e := Entry{Path: rel, IsDir: isDir, Size: info.Size(), ModTime: info.ModTime(), Perm: info.Mode().Perm()}
 		switch mode := info.Mode(); {
 		case mode&fs.ModeSymlink != 0:
-			e.Special = "符号链接"
+			e.Size = 0
+			if e.Link, ierr = os.Readlink(p); ierr != nil || e.Link == "" {
+				e.Special = "无法读取的符号链接"
+			}
 		case mode&fs.ModeIrregular != 0:
 			e.Special = "特殊文件（如 Windows 的连接点）"
 		case !mode.IsRegular() && !isDir:
@@ -117,59 +133,6 @@ func underAny(rel string, dirs map[string]bool, key func(string) string) bool {
 		}
 	}
 	return false
-}
-
-// caseInsensitive reports whether the file system at dir, or at its nearest
-// existing ancestor, folds the case of names, as NTFS, FAT and SMB shares
-// do.
-func caseInsensitive(dir string) bool {
-	for {
-		if info, err := os.Stat(dir); err == nil && info.IsDir() {
-			break
-		}
-		parent := filepath.Dir(dir)
-		if parent == dir {
-			return false
-		}
-		dir = parent
-	}
-	// Ask an existing name in the other case, which changes nothing.
-	if des, err := os.ReadDir(dir); err == nil {
-		for _, de := range des {
-			name := de.Name()
-			other := swapCase(name)
-			if other == name {
-				continue
-			}
-			a, err1 := os.Lstat(filepath.Join(dir, name))
-			b, err2 := os.Lstat(filepath.Join(dir, other))
-			if err1 != nil {
-				continue
-			}
-			if err2 != nil {
-				return false
-			}
-			return os.SameFile(a, b)
-		}
-	}
-	// Else write a file to ask.
-	f, err := os.CreateTemp(dir, ".filesync-case-")
-	if err != nil {
-		return false
-	}
-	name := f.Name()
-	f.Close()
-	defer os.Remove(name)
-	base := filepath.Base(name)
-	_, err = os.Lstat(filepath.Join(dir, strings.ToUpper(base)))
-	return err == nil
-}
-
-func swapCase(s string) string {
-	if u := strings.ToUpper(s); u != s {
-		return u
-	}
-	return strings.ToLower(s)
 }
 
 // windowsNameProblem returns why name cannot be a file name on Windows or an
