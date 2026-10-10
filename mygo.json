@@ -1,0 +1,6 @@
+{
+  "name": "FileSync",
+  "identifier": "com.ning.filesync",
+  "version": "0.1.0",
+  "out": "build"
+}
