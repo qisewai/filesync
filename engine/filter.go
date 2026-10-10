@@ -21,6 +21,7 @@ import (
 type Filter struct {
 	rules []rule
 	fold  bool
+	only  map[string]bool // the top-level names kept, nil for all
 }
 
 type rule struct {
@@ -63,13 +64,34 @@ func NewFilter(patterns []string) (*Filter, error) {
 	return f, nil
 }
 
+// Only keeps the paths in the top-level entries named, and leaves out the
+// others; none keeps all.
+func (f *Filter) Only(names []string) {
+	f.only = nil
+	for _, n := range names {
+		if f.only == nil {
+			f.only = map[string]bool{}
+		}
+		if f.fold {
+			n = strings.ToLower(n)
+		}
+		f.only[n] = true
+	}
+}
+
 // Excluded reports whether the slash-separated relative path rel is left out.
 func (f *Filter) Excluded(rel string, isDir bool) bool {
-	if f == nil || len(f.rules) == 0 {
+	if f == nil {
 		return false
 	}
 	if f.fold {
 		rel = strings.ToLower(rel)
+	}
+	if f.only != nil {
+		top, _, _ := strings.Cut(rel, "/")
+		if !f.only[top] {
+			return true
+		}
 	}
 	name := path.Base(rel)
 	for _, r := range f.rules {

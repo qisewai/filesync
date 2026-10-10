@@ -31,8 +31,8 @@ func openRunLog(dir string, task *config.Task, target string, p *engine.Plan) (*
 	}
 	l := &runLog{path: path, f: f, w: bufio.NewWriter(f)}
 	s := p.Summary
-	fmt.Fprintf(l.w, "任务: %s\n开始: %s\n模式: %s\n源目录: %s\n备份到: %s\n",
-		task.Name, time.Now().Format("2006-01-02 15:04:05"), task.Mode, task.Source, target)
+	fmt.Fprintf(l.w, "任务: %s\n开始: %s\n模式: %s\n备份内容: %s\n备份到: %s\n",
+		task.Name, time.Now().Format("2006-01-02 15:04:05"), task.Mode, task.Contents(), target)
 	fmt.Fprintf(l.w, "计划: 新增 %d，更新 %d，新建目录 %d，删除 %d，删除目录 %d，跳过 %d，共需复制 %s\n",
 		s.Create, s.Update, s.Mkdir, s.Delete, s.Rmdir, s.Skip, formatBytes(s.CopyBytes))
 	for _, w := range p.Warnings {

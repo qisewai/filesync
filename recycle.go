@@ -244,11 +244,10 @@ func (a *app) trashView(c *ui.Context) {
 		it := b.shown[row]
 		switch col {
 		case 0:
-			icon := "📃 "
-			if it.IsDir {
-				icon = "📁 "
-			}
-			ui.Text(c, icon+it.Name).SingleLine()
+			ui.Row(c).Gap(8).AlignItems(ui.Center).Children(func() {
+				fileIcon(c, fileindex.Entry{Name: it.Name, IsDir: it.IsDir, Ext: extOf(it.Name)}, 16)
+				ui.Text(c, it.Name).SingleLine().Grow(1).Shrink(1)
+			})
 		case 1:
 			ui.Text(c, it.RootName+"/"+it.OrigPath).SingleLine().TextColor(t.TextMuted)
 		case 2:

@@ -196,7 +196,7 @@ func (a *app) locateManagedEntry(server string, e fileindex.Entry) {
 func (a *app) dupesView(c *ui.Context, m *adminPage) {
 	ui.Row(c).Gap(8).Wrap().Children(func() {
 		a.scopePicker(c, m)
-		if ui.Select(c.Key("dupe-min"), &m.minSize, []string{"全部非空文件", "≥ 1 MiB", "≥ 10 MiB", "≥ 100 MiB", "≥ 1 GiB"}).Width(140).Label("查重最小大小").Disabled(m.busy).Changed() {
+		if ui.Select(c.Key("dupe-min"), &m.minSize, []string{"全部非空文件", "≥ 1 MB", "≥ 10 MB", "≥ 100 MB", "≥ 1 GB"}).Width(140).Label("查重最小大小").Disabled(m.busy).Changed() {
 			m.page = 1
 			a.reloadAdmin()
 		}

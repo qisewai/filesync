@@ -60,7 +60,7 @@ func (a *app) cacheDirectories(server string, root int64, dir string, items []fi
 func (a *app) directoryView(c *ui.Context, sv *config.Server, root fileindex.Root, dir, name string) {
 	key := treeKey(sv.ID, root.ID, dir)
 	n := a.treeNode(sv.ID, root.ID, dir)
-	ui.TreeItem(c.Key(key), "📁 "+name, &n.open, func() {
+	item := ui.TreeItem(c.Key(key), "", &n.open, func() {
 		if !n.loaded && !n.loading {
 			a.loadDirectory(sv, root.ID, dir, n)
 		}
@@ -74,7 +74,14 @@ func (a *app) directoryView(c *ui.Context, sv *config.Server, root fileindex.Roo
 				a.directoryView(c, sv, root, e.Path, e.Name)
 			}
 		}
-	}).Selected(a.br != nil && a.place == rootPlace(sv.ID, root.ID) && a.br.server == sv.ID && a.br.root.ID == root.ID && a.br.path == dir).
+	})
+	chosen := a.br != nil && a.place == rootPlace(sv.ID, root.ID) && a.br.server == sv.ID && a.br.root.ID == root.ID && a.br.path == dir
+	color := ui.Hex("#d99a2b")
+	if chosen {
+		color = c.Theme().AccentText
+	}
+	item.Children(func() { labeled(c, iconFolder, name, color) }).Label("文件夹 " + name)
+	item.Selected(a.br != nil && a.place == rootPlace(sv.ID, root.ID) && a.br.server == sv.ID && a.br.root.ID == root.ID && a.br.path == dir).
 		OnClick(func() {
 			a.goPlace(rootPlace(sv.ID, root.ID))
 			if a.br != nil && (a.br.path != dir || a.br.results) {

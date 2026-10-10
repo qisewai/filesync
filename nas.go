@@ -7,6 +7,7 @@ import (
 	"net"
 	"path"
 	"strings"
+	"time"
 
 	"filesync/config"
 	"filesync/fileindex"
@@ -56,8 +57,9 @@ type nasBrowser struct {
 	dirs  []string
 	crumb int
 	// where to open once signed in
-	startRoot int64
-	startPath string
+	startServer string
+	startRoot   int64
+	startPath   string
 
 	// sel is the row chosen in the list of roots or of directories, -1
 	// for none: a click chooses a row, a double click or Enter opens it.
@@ -67,6 +69,30 @@ type nasBrowser struct {
 
 	naming  bool
 	newName string
+
+	// probes are the connections tried to the servers, as the dialog
+	// choosing a target lists them.
+	probes map[string]*serverProbe
+}
+
+// probeState is how a server answered.
+type probeState int
+
+const (
+	probeChecking    probeState = iota
+	probeOK                     // signed in, its directories read
+	probeNeedLogin              // reachable, but without a session
+	probeUnreachable            // no answer, or an error
+)
+
+// probeTimeout is how long a server may take to answer the dialog: a
+// NAS on the network answers at once.
+const probeTimeout = 6 * time.Second
+
+type serverProbe struct {
+	state probeState
+	err   string
+	roots []fileindex.Root
 }
 
 // openServers opens the dialog to manage the servers.
@@ -76,14 +102,78 @@ func (a *app) openServers() {
 
 // openPicker opens the dialog to choose a target directory, at the one
 // chosen before if any.
+//
+// The servers are listed first, each connected to at once; only those
+// that answer can be entered.
 func (a *app) openPicker(server string, root int64, p string, pick func(server string, root int64, rootName, path string)) {
-	a.nas = nasBrowser{open: true, pick: pick}
-	if sv := a.store.Server(server); sv != nil {
-		a.nas.startRoot, a.nas.startPath = root, p
-		a.nasUse(sv)
-	} else if len(a.store.Servers) == 1 {
-		a.nasUse(a.store.Servers[0])
+	a.nas = nasBrowser{open: true, pick: pick, probes: map[string]*serverProbe{}}
+	if a.store.Server(server) != nil {
+		a.nas.startServer, a.nas.startRoot, a.nas.startPath = server, root, p
 	}
+	for _, sv := range a.store.Servers {
+		a.probe(sv)
+	}
+}
+
+// openPickerIn opens the dialog to choose a directory of the server in
+// use, at once: copies and moves stay on it.
+func (a *app) openPickerIn(server string, root int64, p string, pick func(server string, root int64, rootName, path string)) {
+	sv := a.store.Server(server)
+	if sv == nil {
+		return
+	}
+	a.nas = nasBrowser{open: true, pick: pick, sameServer: server, probes: map[string]*serverProbe{}}
+	a.nas.startServer, a.nas.startRoot, a.nas.startPath = server, root, p
+	a.nasUse(sv)
+}
+
+// probe connects to a server for the dialog choosing a target: it reads
+// its directories when signed in, or checks it answers otherwise.
+func (a *app) probe(sv *config.Server) {
+	b := &a.nas
+	pr := &serverProbe{}
+	b.probes[sv.ID] = pr
+	c := fileindex.New(sv.Addr, sv.Token)
+	go func() {
+		ctx, cancel := context.WithTimeout(context.Background(), probeTimeout)
+		defer cancel()
+		var roots []fileindex.Root
+		var err error
+		if c.Token != "" {
+			roots, err = c.Roots(ctx)
+		} else {
+			_, err = c.Authed(ctx)
+		}
+		a.post(func() {
+			if a.closed || !b.open || b.probes[sv.ID] != pr {
+				return
+			}
+			switch {
+			case errors.Is(err, fileindex.ErrAuth) || err == nil && c.Token == "":
+				pr.state = probeNeedLogin
+			case err != nil:
+				pr.state, pr.err = probeUnreachable, connectError(err)
+			default:
+				pr.state, pr.roots = probeOK, roots
+			}
+		})
+	}()
+}
+
+// connectError says why a server could not be reached, shortly.
+func connectError(err error) string {
+	var ne net.Error
+	switch {
+	case errors.Is(err, context.DeadlineExceeded) || errors.As(err, &ne) && ne.Timeout():
+		return "连接超时，请检查 NAS 是否开机、地址是否正确"
+	case strings.Contains(err.Error(), "connection refused"):
+		return "连接被拒绝，fileindex 可能没有运行，或端口不对"
+	case strings.Contains(err.Error(), "no route to host") || strings.Contains(err.Error(), "network is unreachable"):
+		return "网络不通，请检查是否和 NAS 在同一网络"
+	case strings.Contains(err.Error(), "no such host"):
+		return "找不到这个主机名"
+	}
+	return err.Error()
 }
 
 // openLogin opens the dialog to sign in to a server again, then runs after.
@@ -178,15 +268,21 @@ func (a *app) nasSignedIn() {
 	}
 	var roots []fileindex.Root
 	c := b.client
-	a.nasDo("正在读取 "+b.server.Title()+" 的目录…", func(ctx context.Context) (err error) {
-		roots, err = c.Roots(ctx)
-		return err
-	}, func(err error) {
+	show := func(err error) {
 		if err != nil {
 			b.screen = screenServers
+			if pr := b.probes[b.server.ID]; pr != nil {
+				pr.state, pr.err = probeUnreachable, connectError(err)
+			}
 			return
 		}
+		if pr := b.probes[b.server.ID]; pr != nil {
+			pr.state, pr.err, pr.roots = probeOK, "", roots
+		}
 		b.roots, b.screen, b.sel = roots, screenRoots, -1
+		if b.startServer != "" && b.startServer != b.server.ID {
+			b.startRoot, b.startPath = 0, ""
+		}
 		if b.startRoot != 0 {
 			start, p := b.startRoot, b.startPath
 			b.startRoot = 0
@@ -200,7 +296,17 @@ func (a *app) nasSignedIn() {
 				}
 			}
 		}
-	})
+	}
+	// The directories the connection read show at once.
+	if pr := b.probes[b.server.ID]; pr != nil && pr.state == probeOK && pr.roots != nil {
+		roots = pr.roots
+		show(nil)
+		return
+	}
+	a.nasDo("正在读取 "+b.server.Title()+" 的目录…", func(ctx context.Context) (err error) {
+		roots, err = c.Roots(ctx)
+		return err
+	}, show)
 }
 
 // nasGo lists the directory p of a root, choosing the subdirectory named
@@ -293,7 +399,9 @@ func (a *app) nasSaveServer() {
 	a.serverChanged(sv.ID)
 	b.err = ""
 	if b.pick != nil {
-		a.nasUse(sv)
+		// Back to the list, connecting to it at its address.
+		b.screen = screenServers
+		a.probe(sv)
 		return
 	}
 	b.screen = screenServers
@@ -389,17 +497,18 @@ func (a *app) nasServers(c *ui.Context) {
 						sub += fmt.Sprintf(" · %d 个任务", n)
 					}
 					ui.Text(c, sub).FontSize(12).TextColor(t.TextMuted).SingleLine()
+					if pr := b.probes[sv.ID]; b.pick != nil && pr != nil && pr.state == probeUnreachable {
+						ui.Text(c, pr.err).FontSize(12).TextColor(t.Danger).MaxLines(2)
+					}
 				})
+				if b.pick != nil {
+					a.probeStatus(c, sv)
+					return
+				}
 				if sv.Token != "" {
 					ui.Text(c, "已登录").FontSize(12).TextColor(t.Success)
 				} else {
 					ui.Text(c, "未登录").FontSize(12).TextColor(t.TextMuted)
-				}
-				if b.pick != nil {
-					if ui.PrimaryButton(c.Key("use"), "浏览").Clicked() {
-						a.nasUse(sv)
-					}
-					return
 				}
 				if b.confirmDelID == sv.ID {
 					if ui.Button(c.Key("del-yes"), "确定删除").Clicked() {
@@ -432,7 +541,7 @@ func (a *app) nasServers(c *ui.Context) {
 					b.err, b.confirmDelID = "", sv.ID
 				}
 			})
-			if b.pick != nil && row.Hovered() {
+			if pr := b.probes[sv.ID]; b.pick != nil && pr != nil && pr.state == probeOK && row.Hovered() {
 				row.Background(t.SurfaceHover)
 			}
 		}
@@ -442,6 +551,41 @@ func (a *app) nasServers(c *ui.Context) {
 			a.nasStartEdit(nil)
 		}
 	})
+}
+
+// probeStatus shows how a server answered, and what can be done with it.
+func (a *app) probeStatus(c *ui.Context, sv *config.Server) {
+	b := &a.nas
+	t := c.Theme()
+	pr := b.probes[sv.ID]
+	if pr == nil {
+		a.probe(sv)
+		return
+	}
+	switch pr.state {
+	case probeChecking:
+		ui.Spinner(c).FontSize(14).Label("正在连接 " + sv.Title())
+		ui.Text(c, "正在连接…").FontSize(12).TextColor(t.TextMuted)
+		ui.PrimaryButton(c.Key("use"), "浏览").Disabled(true)
+	case probeOK:
+		ui.Text(c, "● 已连接").FontSize(12).TextColor(t.Success)
+		if ui.PrimaryButton(c.Key("use"), "浏览").Clicked() {
+			a.nasUse(sv)
+		}
+	case probeNeedLogin:
+		ui.Text(c, "● 需要登录").FontSize(12).TextColor(t.Warning)
+		if ui.PrimaryButton(c.Key("use"), "登录并浏览").Clicked() {
+			a.nasUse(sv)
+		}
+	case probeUnreachable:
+		ui.Text(c, "● 无法连接").FontSize(12).TextColor(t.Danger).Tooltip(pr.err)
+		if ui.Button(c.Key("edit"), "编辑地址").Clicked() {
+			a.nasStartEdit(sv)
+		}
+		if ui.Button(c.Key("retry"), "重试").Clicked() {
+			a.probe(sv)
+		}
+	}
 }
 
 func (a *app) nasEdit(c *ui.Context) {
@@ -593,7 +737,7 @@ func (a *app) nasDirs(c *ui.Context) {
 	list := ui.List(c.Key("nas-dirs:"+b.path), &b.dirsList, len(b.dirs)).Grow(1).Border(1, t.Border).Radius(t.Radius * 2).Clip().Label("子目录").
 		Rows(func(row ui.ListRow) {
 			ui.Row(c).Gap(8).Padding(7, 12).Children(func() {
-				ui.Text(c, "📁")
+				ui.Icon(c, iconFolder).FontSize(16).TextColor(ui.Hex("#d99a2b"))
 				ui.Text(c, b.dirs[row.Index]).Grow(1).Shrink(1).SingleLine()
 			})
 		})

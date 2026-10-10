@@ -252,25 +252,6 @@ func paths(es []fileindex.Entry) []string {
 	return out
 }
 
-func kindIcon(e fileindex.Entry) string {
-	if e.IsDir {
-		return "📁"
-	}
-	switch e.Ext {
-	case "jpg", "jpeg", "png", "gif", "bmp", "webp", "heic", "heif", "tif", "tiff", "svg", "raw", "cr2", "nef", "arw", "dng", "psd":
-		return "🖼"
-	case "mp4", "mkv", "avi", "mov", "wmv", "flv", "webm", "m4v", "ts", "m2ts", "rmvb", "rm", "3gp", "mpg", "mpeg", "vob", "iso":
-		return "🎬"
-	case "mp3", "flac", "wav", "aac", "m4a", "ogg", "wma", "ape", "opus":
-		return "🎵"
-	case "zip", "rar", "7z", "tar", "gz", "tgz", "bz2", "xz", "zst":
-		return "📦"
-	case "pdf", "doc", "docx", "xls", "xlsx", "ppt", "pptx", "txt", "md", "wps", "et", "dps":
-		return "📄"
-	}
-	return "📃"
-}
-
 // browserView is the page of a root.
 func (a *app) browserView(c *ui.Context) {
 	b := a.br
@@ -456,20 +437,24 @@ func (a *app) tableView(c *ui.Context) {
 	}
 	table := ui.Table(c.Key("files"), &b.list, cols, len(b.items), func(row, col int) {
 		e := b.items[row]
+		muted := t.TextMuted
+		if b.sel.Has(e.Path) {
+			muted = t.AccentText.Alpha(0.85)
+		}
 		switch col {
 		case 0:
-			ui.Row(c).Gap(8).Children(func() {
-				ui.Text(c, kindIcon(e))
+			ui.Row(c).Gap(8).AlignItems(ui.Center).Children(func() {
+				fileIcon(c, e, 16)
 				ui.Text(c, e.Name).SingleLine().Grow(1).Shrink(1)
 			})
 		case 1:
 			if !e.IsDir {
-				ui.Text(c, formatBytes(e.Size)).FontFeatures("tnum").TextColor(t.TextMuted)
+				ui.Text(c, formatBytes(e.Size)).FontFeatures("tnum").TextColor(muted)
 			}
 		case 2:
-			ui.Text(c, e.ModTime().Format("2006-01-02 15:04")).FontFeatures("tnum").TextColor(t.TextMuted)
+			ui.Text(c, e.ModTime().Format("2006-01-02 15:04")).FontFeatures("tnum").TextColor(muted)
 		case 3:
-			ui.Text(c, path.Join(b.root.Name, e.Parent)).SingleLine().TextColor(t.TextMuted)
+			ui.Text(c, path.Join(b.root.Name, e.Parent)).SingleLine().TextColor(muted)
 		}
 	}).Grow(1).Label("文件")
 	table.Children(func() {
@@ -497,7 +482,7 @@ func (a *app) gridView(c *ui.Context) {
 			if bmp := a.thumb(e); bmp != nil {
 				ui.Image(c, bmp).Size(96, 84).Fit(ui.Contain).Radius(4)
 			} else {
-				ui.Text(c, kindIcon(e)).FontSize(44).Height(84)
+				ui.Column(c).Size(96, 84).Center().Children(func() { fileIcon(c, e, 48) })
 			}
 			ui.Text(c, e.Name).FontSize(12).MaxLines(2).TextAlign(ui.Center)
 		})
@@ -818,7 +803,7 @@ func (a *app) transferTo(move bool, es []fileindex.Entry) {
 	if c == nil || len(es) == 0 {
 		return
 	}
-	a.openPicker(server, b.root.ID, b.path, func(sv string, root int64, rootName, dir string) {
+	a.openPickerIn(server, b.root.ID, b.path, func(sv string, root int64, rootName, dir string) {
 		if sv != server {
 			a.br.err = "只能复制或移动到同一个服务器上"
 			return

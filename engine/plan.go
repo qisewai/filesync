@@ -54,6 +54,9 @@ type Options struct {
 	Source   string
 	Mode     Mode
 	Excludes []string
+	// Only, when set, are the names of the entries of Source backed up,
+	// the others left out as excluded ones are.
+	Only []string
 	// TimeTolerance is DefaultTimeTolerance when zero.
 	TimeTolerance time.Duration
 	// Dest is where the backup writes.
@@ -158,6 +161,7 @@ func Prepare(ctx context.Context, opts Options, onProgress func(ScanProgress)) (
 	if err != nil {
 		return nil, err
 	}
+	filter.Only(opts.Only)
 
 	var n int
 	last := time.Now()

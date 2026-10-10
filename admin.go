@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"slices"
 	"strings"
 	"time"
 
@@ -76,7 +77,7 @@ func (a *app) openAdmin(server, tab string) {
 	if a.admin != nil {
 		a.admin.stop()
 	}
-	m := &adminPage{server: server, tab: tab, rootCursor: -1, largestCursor: -1, scope: "全部目录", minSize: "≥ 1 MiB", page: 1, selected: map[int64]bool{}}
+	m := &adminPage{server: server, tab: tab, rootCursor: -1, largestCursor: -1, scope: "全部目录", minSize: "≥ 1 MB", page: 1, selected: map[int64]bool{}}
 	m.rootList.Selected = &m.rootCursor
 	m.rootList.Key = func(i int) any { return a.roots[server][i].ID }
 	m.largestList.Selected = &m.largestCursor
@@ -98,13 +99,13 @@ func rootOption(r fileindex.Root) string     { return fmt.Sprintf("%s (#%d)", r.
 func (a *app) adminScope(m *adminPage) int64 { return m.scopeID }
 func dupeMin(label string) int64 {
 	switch label {
-	case "≥ 1 MiB":
+	case "≥ 1 MB":
 		return 1 << 20
-	case "≥ 10 MiB":
+	case "≥ 10 MB":
 		return 10 << 20
-	case "≥ 100 MiB":
+	case "≥ 100 MB":
 		return 100 << 20
-	case "≥ 1 GiB":
+	case "≥ 1 GB":
 		return 1 << 30
 	}
 	return 1
@@ -381,10 +382,13 @@ func (a *app) adminView(c *ui.Context) {
 	}
 	ui.Row(c).Gap(12).AlignItems(ui.Center).Children(func() {
 		ui.Text(c, title).FontSize(22).Bold().Grow(1)
-		for _, tab := range []struct{ id, label string }{{"roots", "目录管理"}, {"dupes", "查重"}, {"stats", "空间统计"}} {
-			ui.Button(c.Key("admin-tab/"+tab.id), tab.label).Disabled(m.tab == tab.id || m.busy).OnClick(func() { a.openAdmin(m.server, tab.id) })
+		tabs := []string{"roots", "dupes", "stats"}
+		at := max(0, slices.Index(tabs, m.tab))
+		seg := ui.Segmented(c.Key("admin-tabs"), &at, "目录管理", "查重", "空间统计").Label("管理页面").Disabled(m.busy)
+		if seg.Changed() && tabs[at] != m.tab {
+			a.openAdmin(m.server, tabs[at])
 		}
-		ui.Button(c, "刷新管理页面").Disabled(m.busy).OnClick(a.reloadAdmin)
+		ui.Button(c, "刷新").Tooltip("重新读取管理数据").Disabled(m.busy).OnClick(a.reloadAdmin)
 	})
 	if m.err != "" {
 		notice(c, t.Danger, m.err)

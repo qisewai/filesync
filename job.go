@@ -116,14 +116,15 @@ func (a *app) options(task *config.Task) (engine.Options, error) {
 		Source:   task.Source,
 		Mode:     task.Mode,
 		Excludes: task.Excludes,
+		Only:     task.Items,
 		Dest:     fileindex.NewTarget(loc, sv.Token),
 	}
 	if task.Mode == engine.Archive {
 		prefix := ""
-		if task.WithDir {
+		if task.WithDir && len(task.Items) == 0 {
 			prefix = config.SourceName(task.Source)
 		}
-		opts.Dest = fileindex.NewArchive(loc, sv.Token, config.ArchiveName(task.Source, time.Now(), task.Compress), prefix, task.Compress)
+		opts.Dest = fileindex.NewArchive(loc, sv.Token, config.ArchiveName(task.Named(), time.Now(), task.Compress), prefix, task.Compress)
 	}
 	return opts, nil
 }

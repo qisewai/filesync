@@ -49,12 +49,12 @@ func TestNativeBrowserTreeSearchAndFileOperations(t *testing.T) {
 	os.WriteFile(filepath.Join(f.Root, "项目", "报告.txt"), []byte("report"), 0644)
 	os.WriteFile(filepath.Join(f.Root, "项目", "其他.txt"), []byte("other"), 0644)
 	h := browserHarness(t, f)
-	h.click("📁 项目")
+	h.click("文件夹 项目")
 	h.want("报告.txt")
 	h.click("新建文件夹")
 	h.tt.Type("新目录")
 	h.click("创建")
-	h.want("📁 新目录")
+	h.want("文件夹 新目录")
 	h.click("报告.txt")
 	h.click("重命名")
 	h.tt.Key(ui.Ctrl, ui.KeyA)
@@ -85,7 +85,7 @@ func TestNativeBrowserTreeSearchAndFileOperations(t *testing.T) {
 		t.Fatal(err)
 	}
 	h.click("备份任务")
-	h.click("📁 子目录")
+	h.click("文件夹 子目录")
 	if h.a.br.path != "项目/子目录" {
 		t.Fatalf("tree opened %q", h.a.br.path)
 	}
@@ -252,7 +252,7 @@ func TestNativeBrowserReadOnlyAndRendering(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	h.click("📁 只读")
+	h.click("文件夹 只读")
 	h.a.upload([]string{"/missing"})
 	if len(h.a.transfers) != 0 {
 		t.Fatal("read-only root accepted an upload")
@@ -262,7 +262,7 @@ func TestNativeBrowserReadOnlyAndRendering(t *testing.T) {
 		t.Fatal("read-only root enabled mkdir")
 	}
 	h.click("备份任务")
-	h.click("📁 nas")
+	h.click("文件夹 nas")
 	for i := 0; i < 3; i++ {
 		h.tt.Frame()
 	}

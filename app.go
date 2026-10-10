@@ -60,11 +60,13 @@ type app struct {
 	rootsLoading map[string]*fileindex.Client
 	tree         map[string]*directoryNode
 
-	br      *browser // the root shown
-	preview *preview
-	proxy   *fileindex.LocalProxy
-	recycle *recycleBrowser
-	admin   *adminPage
+	br         *browser // the root shown
+	local      *localBrowser
+	localRoots []localRoot
+	preview    *preview
+	proxy      *fileindex.LocalProxy
+	recycle    *recycleBrowser
+	admin      *adminPage
 
 	transfers     []*transfer
 	transferSeq   int
@@ -83,6 +85,7 @@ type app struct {
 type draft struct {
 	id           string // "" for a new task
 	name, source string
+	items        []string // the entries of source backed up, nil for all
 	// The target: a directory of a root of a server.
 	server         string
 	root           int64
@@ -163,13 +166,13 @@ func (a *app) detail(c *ui.Context) {
 	}
 	card(c, func() {
 		ui.Form(c, func() {
-			ui.Field(c, "源目录", func() { ui.Text(c, task.Source).Selectable() })
+			ui.Field(c, "备份内容", func() { ui.Text(c, task.Contents()).Selectable() })
 			ui.Field(c, "备份到", func() {
 				ui.Column(c).Gap(2).Children(func() {
 					where := a.target(task.Server, task.RootName, task.BackupPath())
 					if task.Mode == engine.Archive {
 						ext := config.ArchiveExt(task.Compress)
-						name := strings.TrimSuffix(config.ArchiveName(task.Source, time.Time{}, task.Compress), "-00010101-000000"+ext)
+						name := strings.TrimSuffix(config.ArchiveName(task.Named(), time.Time{}, task.Compress), "-00010101-000000"+ext)
 						where += "（每次生成一个 " + name + "-日期时间" + ext + "）"
 					}
 					ui.Text(c, where).Selectable()
@@ -225,111 +228,171 @@ var modeHelp = map[engine.Mode]string{
 	engine.Archive:     "把整个源目录打包成一个 tar 文件保存到 NAS，每次备份生成一个新文件（文件名带日期时间），不和 NAS 上已有的内容比较。",
 }
 
+// newTaskFrom starts a task backing up the entries es of the local
+// directory dir, or dir itself without any.
+func (a *app) newTaskFrom(dir string, es []fileindex.Entry) {
+	source, withDir := dir, true
+	var items []string
+	switch {
+	case len(es) == 1 && es[0].IsDir:
+		source = es[0].Path
+	case len(es) > 0:
+		withDir = false
+		for _, e := range es {
+			items = append(items, e.Name)
+		}
+	}
+	name := config.SourceName(source)
+	if len(items) > 0 {
+		name = items[0]
+		if len(items) > 1 {
+			name += fmt.Sprintf(" 等 %d 项", len(items))
+		}
+	}
+	if name == "" {
+		name = fmt.Sprintf("备份任务 %d", len(a.store.Tasks)+1)
+	}
+	a.editing = true
+	a.errorMsg = ""
+	a.draft = draft{
+		name:     "备份 " + name,
+		source:   source,
+		items:    items,
+		excludes: strings.Join(config.DefaultExcludes, "\n"),
+		withDir:  withDir,
+		compress: "gzip",
+	}
+	// The target of the last task is likely the next one's too.
+	if n := len(a.store.Tasks); n > 0 {
+		last := a.store.Tasks[n-1]
+		if a.store.Server(last.Server) != nil {
+			a.draft.server, a.draft.root, a.draft.rootName, a.draft.path = last.Server, last.Root, last.RootName, last.Path
+		}
+	}
+}
+
 func (a *app) startEditing(task *config.Task) {
 	a.editing = true
 	a.errorMsg = ""
-	if task == nil {
-		a.draft = draft{
-			name:     fmt.Sprintf("备份任务 %d", len(a.store.Tasks)+1),
-			excludes: strings.Join(config.DefaultExcludes, "\n"),
-			withDir:  true,
-			compress: "gzip",
-		}
-		return
-	}
 	a.draft = draft{
-		id: task.ID, name: task.Name, source: task.Source,
+		id: task.ID, name: task.Name, source: task.Source, items: task.Items,
 		server: task.Server, root: task.Root, rootName: task.RootName, path: task.Path, withDir: task.WithDir, compress: task.Compress,
 		mode: int(task.Mode), excludes: strings.Join(task.Excludes, "\n"),
 	}
 }
 
-func (a *app) editor(c *ui.Context) {
+// taskDialog creates or edits a task.
+func (a *app) taskDialog(c *ui.Context) {
+	// The dialog of the servers, choosing the target, shows instead of it
+	// while open.
+	if !a.editing || a.nas.open {
+		return
+	}
 	t := c.Theme()
 	d := &a.draft
-	title := "新建任务"
-	if d.id != "" {
-		title = "编辑任务"
-	}
-	ui.Text(c, title).FontSize(22).Bold()
-	if a.errorMsg != "" {
-		notice(c, t.Danger, a.errorMsg)
-	}
-	ui.Scroll(c).Grow(1).Children(func() {
-		ui.Column(c).Gap(14).MaxWidth(720).Children(func() {
-			ui.Field(c, "名称", func() {
-				ui.TextInput(c.Key("name"), &d.name).AutoFocus()
-			}).Error(d.nameErr)
-			ui.Field(c, "源目录", func() {
-				ui.Row(c).Gap(8).Children(func() {
-					ui.TextInput(c.Key("source"), &d.source).Placeholder("本机要备份的目录").Grow(1).Shrink(1).MinWidth(0)
-					if ui.Button(c, "浏览…").Clicked() {
-						a.browseSource()
-					}
-				})
-			}).Error(d.srcErr)
-			ui.Field(c, "备份到", func() {
-				ui.Row(c).Gap(8).Children(func() {
-					name, color := "未选择", t.TextMuted
-					if d.server != "" {
-						name, color = a.target(d.server, d.rootName, d.path), t.Text
-					}
-					ui.Text(c, name).TextColor(color).Grow(1).Shrink(1).SingleLine().Tooltip(name)
-					if ui.Button(c, "选择…").Clicked() {
-						a.openPicker(d.server, d.root, d.path, func(server string, root int64, rootName, p string) {
-							d.server, d.root, d.rootName, d.path = server, root, rootName, p
-							d.dstErr = ""
-						})
-					}
-				})
-			}).Error(d.dstErr)
-			name := config.SourceName(d.source)
-			label := "在目标中创建与源目录同名的文件夹"
-			switch {
-			case d.mode == int(engine.Archive) && name != "":
-				label = "归档里包含“" + name + "”文件夹"
-			case d.mode == int(engine.Archive):
-				label = "归档里包含与源目录同名的文件夹"
-			case name != "":
-				label = "在目标中创建“" + name + "”文件夹"
-			}
-			ui.Column(c).Gap(4).Children(func() {
-				ui.Checkbox(c.Key("with-dir"), &d.withDir, label).Disabled(name == "")
-				ui.Text(c, a.landing(d)).FontSize(12).TextColor(t.TextMuted).Margin(0, 0, 0, 26)
+	open := true
+	ui.DialogBase(c.Key("task-dialog"), &open, func(backdrop, panel ui.Element) {
+		backdrop.Background(ui.RGBA(0, 0, 0, 0.35))
+		w, h := c.Size()
+		panel.Width(min(720, w-32)).Height(min(680, h-32)).Padding(20).Gap(12).Radius(t.Radius*3).Background(t.Background).Border(1, t.Border)
+		title := "新建备份任务"
+		if d.id != "" {
+			title = "编辑备份任务"
+		}
+		ui.Text(c, title).FontSize(18).Bold()
+		if a.errorMsg != "" {
+			notice(c, t.Danger, a.errorMsg)
+		}
+		ui.Scroll(c).Grow(1).MinHeight(0).Children(func() {
+			ui.Column(c).Gap(14).Padding(0, 4, 0, 0).Children(func() {
+				a.editorFields(c, d)
 			})
-			ui.Field(c, "模式", func() {
-				ui.RadioGroup(c, func() {
-					ui.Radio(c, &d.mode, int(engine.Incremental), "增量备份")
-					ui.Text(c, modeHelp[engine.Incremental]).FontSize(12).TextColor(t.TextMuted).Margin(0, 0, 6, 26)
-					ui.Radio(c, &d.mode, int(engine.Mirror), "完全一致")
-					ui.Text(c, modeHelp[engine.Mirror]).FontSize(12).TextColor(t.TextMuted).Margin(0, 0, 6, 26)
-					ui.Radio(c, &d.mode, int(engine.Archive), "tar 归档")
-					ui.Text(c, modeHelp[engine.Archive]).FontSize(12).TextColor(t.TextMuted).Margin(0, 0, 0, 26)
-				}).Label("模式")
-			})
-			if d.mode == int(engine.Archive) {
-				ui.Field(c, "压缩", func() {
-					ui.RadioGroup(c, func() {
-						ui.Radio(c, &d.compress, "gzip", "gzip（.tar.gz，推荐）")
-						ui.Radio(c, &d.compress, "", "不压缩（.tar）")
-						ui.Radio(c, &d.compress, "zstd", "zstd（.tar.zst，压得更小但稍慢，较旧的解压软件可能打不开）")
-					}).Label("压缩")
-				}).Description("多核并行压缩，不会拖慢备份。代码、文本通常能压缩一半左右；照片、视频、压缩包几乎压不动。")
+		})
+		ui.Row(c).Gap(8).Children(func() {
+			ui.Spacer(c)
+			if ui.Button(c, "取消").Clicked() {
+				a.editing = false
+				a.errorMsg = ""
 			}
-			ui.Field(c, "排除规则", func() {
-				ui.TextArea(c.Key("excludes"), &d.excludes).Lines(4, 10).Font("monospace")
-			}).Description("每行一条。*.tmp 匹配任意位置的文件名；以 / 结尾只匹配目录，如 cache/；含 / 的规则从根目录匹配，如 /build/out。被排除的文件不会上传，NAS 上的也不会被删除。")
+			if ui.PrimaryButton(c, "保存").Clicked() {
+				a.saveDraft()
+			}
 		})
 	})
-	ui.Row(c).Gap(8).Children(func() {
-		if ui.PrimaryButton(c, "保存").Clicked() {
-			a.saveDraft()
+	// Escape or a click beside the dialog cancels it.
+	if !open {
+		a.editing = false
+		a.errorMsg = ""
+	}
+}
+
+func (a *app) editorFields(c *ui.Context, d *draft) {
+	t := c.Theme()
+	ui.Field(c, "名称", func() {
+		ui.TextInput(c.Key("name"), &d.name).AutoFocus()
+	}).Error(d.nameErr)
+	ui.Field(c, "备份内容", func() {
+		ui.Row(c).Gap(8).AlignItems(ui.Center).Children(func() {
+			svg := iconFolder
+			if len(d.items) > 0 {
+				svg = iconFile
+			}
+			ui.Icon(c, svg).FontSize(16).TextColor(ui.Hex("#d99a2b"))
+			what := config.Contents(d.source, d.items)
+			ui.Text(c, what).Grow(1).Shrink(1).MaxLines(2).Selectable().Tooltip(what)
+		})
+	}).Error(d.srcErr)
+	ui.Field(c, "备份到", func() {
+		ui.Row(c).Gap(8).Children(func() {
+			name, color := "未选择", t.TextMuted
+			if d.server != "" {
+				name, color = a.target(d.server, d.rootName, d.path), t.Text
+			}
+			ui.Text(c, name).TextColor(color).Grow(1).Shrink(1).SingleLine().Tooltip(name)
+			if ui.Button(c, "选择…").Clicked() {
+				a.openPicker(d.server, d.root, d.path, func(server string, root int64, rootName, p string) {
+					d.server, d.root, d.rootName, d.path = server, root, rootName, p
+					d.dstErr = ""
+				})
+			}
+		})
+	}).Error(d.dstErr)
+	if len(d.items) == 0 {
+		name := config.SourceName(d.source)
+		label := "在目标中创建与源目录同名的文件夹"
+		switch {
+		case d.mode == int(engine.Archive) && name != "":
+			label = "归档里包含“" + name + "”文件夹"
+		case d.mode == int(engine.Archive):
+			label = "归档里包含与源目录同名的文件夹"
+		case name != "":
+			label = "在目标中创建“" + name + "”文件夹"
 		}
-		if ui.Button(c, "取消").Clicked() || c.Shortcut(0, ui.KeyEscape) && !a.nas.open {
-			a.editing = false
-			a.errorMsg = ""
-		}
+		ui.Checkbox(c.Key("with-dir"), &d.withDir, label).Disabled(name == "")
+	}
+	ui.Text(c, a.landing(d)).FontSize(12).TextColor(t.TextMuted).Margin(-6, 0, 0, 0)
+	ui.Field(c, "模式", func() {
+		ui.RadioGroup(c, func() {
+			ui.Radio(c, &d.mode, int(engine.Incremental), "增量备份")
+			ui.Text(c, modeHelp[engine.Incremental]).FontSize(12).TextColor(t.TextMuted).Margin(0, 0, 6, 26)
+			ui.Radio(c, &d.mode, int(engine.Mirror), "完全一致")
+			ui.Text(c, modeHelp[engine.Mirror]).FontSize(12).TextColor(t.TextMuted).Margin(0, 0, 6, 26)
+			ui.Radio(c, &d.mode, int(engine.Archive), "tar 归档")
+			ui.Text(c, modeHelp[engine.Archive]).FontSize(12).TextColor(t.TextMuted).Margin(0, 0, 0, 26)
+		}).Label("模式")
 	})
+	if d.mode == int(engine.Archive) {
+		ui.Field(c, "压缩", func() {
+			ui.RadioGroup(c, func() {
+				ui.Radio(c, &d.compress, "gzip", "gzip（.tar.gz，推荐）")
+				ui.Radio(c, &d.compress, "", "不压缩（.tar）")
+				ui.Radio(c, &d.compress, "zstd", "zstd（.tar.zst，压得更小但稍慢，较旧的解压软件可能打不开）")
+			}).Label("压缩")
+		}).Description("多核并行压缩，不会拖慢备份。代码、文本通常能压缩一半左右；照片、视频、压缩包几乎压不动。")
+	}
+	ui.Field(c, "排除规则", func() {
+		ui.TextArea(c.Key("excludes"), &d.excludes).Lines(3, 8).Font("monospace")
+	}).Description("每行一条。*.tmp 匹配任意位置的文件名；以 / 结尾只匹配目录，如 cache/；含 / 的规则从根目录匹配，如 /build/out。被排除的文件不会上传，NAS 上的也不会被删除。")
 }
 
 // landing says where the draft's files go.
@@ -337,6 +400,20 @@ func (a *app) landing(d *draft) string {
 	src := config.SourceName(d.source)
 	if src == "" {
 		src = "源目录"
+	}
+	if len(d.items) > 0 {
+		what := fmt.Sprintf("选中的 %d 项", len(d.items))
+		if len(d.items) == 1 {
+			what = "“" + d.items[0] + "”"
+		}
+		switch {
+		case d.server == "":
+			return what + "会直接放在目标目录中。"
+		case d.mode == int(engine.Archive):
+			named := config.Task{Source: d.source, Items: d.items}
+			return "每次备份生成一个归档，如 " + a.target(d.server, d.rootName, path.Join(d.path, config.ArchiveName(named.Named(), time.Now(), d.compress))) + "，解开后得到" + what
+		}
+		return what + "会备份到 " + a.target(d.server, d.rootName, d.path) + " 中"
 	}
 	if d.server == "" {
 		if d.withDir {
@@ -358,20 +435,6 @@ func (a *app) landing(d *draft) string {
 	return "“" + src + "”里的内容会直接放在 " + where + " 中"
 }
 
-func (a *app) browseSource() {
-	start := a.draft.source
-	go func() {
-		dir, err := a.pickDir("选择源目录", start)
-		a.post(func() {
-			if err != nil {
-				a.errorMsg = err.Error()
-			} else if dir != "" {
-				a.draft.source = dir
-			}
-		})
-	}()
-}
-
 func (a *app) saveDraft() {
 	d := &a.draft
 	d.name = strings.TrimSpace(d.name)
@@ -381,7 +444,7 @@ func (a *app) saveDraft() {
 		d.nameErr = "请输入名称。"
 	}
 	if d.source == "" {
-		d.srcErr = "请选择源目录。"
+		d.srcErr = "请在“本机”中选择要备份的文件夹或文件。"
 	}
 	if d.server == "" || a.store.Server(d.server) == nil {
 		d.dstErr = "请选择 NAS 上备份到的目录。"
@@ -405,8 +468,10 @@ func (a *app) saveDraft() {
 		task = &config.Task{}
 		a.store.Add(task)
 		a.selected = len(a.store.Tasks) - 1
+		a.job = nil
+		a.place = "backup"
 	}
-	task.Name, task.Source = d.name, d.source
+	task.Name, task.Source, task.Items = d.name, d.source, d.items
 	task.Server, task.Root, task.RootName, task.Path = d.server, d.root, d.rootName, d.path
 	task.WithDir = d.withDir
 	task.Compress = ""

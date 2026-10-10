@@ -163,6 +163,16 @@ func TestExcludes(t *testing.T) {
 	})
 }
 
+// Only the entries chosen are backed up; a mirror leaves the target's
+// others alone.
+func TestOnly(t *testing.T) {
+	src, dst := t.TempDir(), t.TempDir()
+	write(t, src, map[string]string{"photos/a.jpg": "a", "note.txt": "n", "other/b": "b", "notes.txt": "x"})
+	write(t, dst, map[string]string{"photos/gone.jpg": "g", "unrelated": "u"})
+	run(t, Options{Source: src, Dest: local(dst), Mode: Mirror, Only: []string{"photos", "note.txt"}})
+	equal(t, files(t, dst), map[string]string{"photos/": "", "photos/a.jpg": "a", "note.txt": "n", "unrelated": "u"})
+}
+
 func TestMirrorRefusesEmptySource(t *testing.T) {
 	src, dst := t.TempDir(), t.TempDir()
 	write(t, dst, map[string]string{"precious": "p"})

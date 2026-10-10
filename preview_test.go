@@ -206,7 +206,7 @@ func TestNativeRecycleRestoreCollisionPurgeAndFilter(t *testing.T) {
 	if len(h.a.recycle.shown) != 1 {
 		t.Fatal("filter failed")
 	}
-	h.click("📃 a.txt")
+	h.click("a.txt")
 	h.click("恢复所选")
 	h.waitTransfers()
 	data, _ := os.ReadFile(filepath.Join(f.Root, "a.txt"))
@@ -222,7 +222,7 @@ func TestNativeRecycleRestoreCollisionPurgeAndFilter(t *testing.T) {
 	h.tt.Key(0, ui.KeyBackspace)
 	h.tt.Frame()
 	h.settle()
-	h.click("📁 目录")
+	h.click("目录")
 	h.click("彻底删除…")
 	h.click("取消")
 	if len(h.a.recycle.items) != 1 {
@@ -254,7 +254,7 @@ func TestNativeRecycleReadOnlyAndEvents(t *testing.T) {
 	f.Writable.Store(false)
 	h := browserHarness(t, f)
 	h.click("回收站")
-	h.click("📃 locked.txt")
+	h.click("locked.txt")
 	if a := h.a; a.trashWritable(a.recycle) {
 		t.Fatal("read-only trash enabled")
 	}
@@ -309,7 +309,7 @@ func TestPreviewFitsMinimumWindowAndOversizeImage(t *testing.T) {
 	c, sv := h.a.brClient()
 	h.a.showPreview(sv.ID, c, fileindex.Entry{Root: 1, Path: "large.png", Name: "large.png", Size: imagePreviewLimit + 1}, nil)
 	h.settle()
-	if h.a.preview == nil || !strings.Contains(h.a.preview.err, "32 MiB") {
+	if h.a.preview == nil || !strings.Contains(h.a.preview.err, "32 MB") {
 		t.Fatal("oversized image was fetched/decoded")
 	}
 	h.click("关闭预览")

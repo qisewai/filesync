@@ -4,6 +4,7 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
+	"time"
 )
 
 // The logins of version 0.1 become servers, and its tasks to local
@@ -73,5 +74,25 @@ func TestBackupPath(t *testing.T) {
 	}
 	if got := BackupPath("", "/x/y", true); got != "y" {
 		t.Errorf("into a root: %q", got)
+	}
+}
+
+func TestContents(t *testing.T) {
+	task := &Task{Source: "/home/me/文档"}
+	if task.Contents() != "/home/me/文档" || task.Named() != "/home/me/文档" {
+		t.Errorf("%q %q", task.Contents(), task.Named())
+	}
+	task.Items = []string{"报告.pdf"}
+	if task.Contents() != "/home/me/文档 中的 报告.pdf" || ArchiveName(task.Named(), time.Time{}, "") != "报告.pdf-00010101-000000.tar" {
+		t.Errorf("%q %q", task.Contents(), task.Named())
+	}
+	task.Items = []string{"a", "b", "c", "d"}
+	if task.Contents() != "/home/me/文档 中的 a、b、c 等 4 项" {
+		t.Errorf("%q", task.Contents())
+	}
+	// Entries go straight into the target.
+	task.WithDir, task.Path = true, "备份"
+	if task.BackupPath() != "备份" {
+		t.Errorf("%q", task.BackupPath())
 	}
 }

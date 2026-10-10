@@ -13,8 +13,9 @@ import (
 )
 
 func (a *app) view(c *ui.Context) {
-	ui.Row(c).Fill().AlignItems(ui.Stretch).Children(func() {
-		a.sidebar(c)
+	// The page builds before the sidebar, which shows at its left: the
+	// keyboard goes to the page first.
+	ui.Row(c).Fill().AlignItems(ui.Stretch).Reverse().Children(func() {
 		ui.Column(c).Grow(1).Shrink(1).MinWidth(0).Padding(20, 24).Gap(12).Children(func() {
 			if a.errorMsg != "" && a.place != "" && a.place != "backup" {
 				notice(c, c.Theme().Danger, a.errorMsg)
@@ -24,13 +25,21 @@ func (a *app) view(c *ui.Context) {
 				a.adminView(c)
 			case a.place == "backup":
 				a.backupPage(c)
+			case a.place == localPlace && a.local != nil:
+				a.localView(c)
 			case a.recycle != nil && a.place == trashPlace(a.recycle.server):
 				a.trashView(c)
 			case a.place == "transfers":
-				ui.Text(c, "传输任务").FontSize(22).Bold()
-				ui.Button(c.Key("clear-transfers"), "清除已完成").Disabled(a.activeTransfers() == len(a.transfers)).OnClick(a.clearTransfers)
+				ui.Row(c).Gap(12).AlignItems(ui.Center).Children(func() {
+					ui.Text(c, "传输任务").FontSize(22).Bold().Grow(1)
+					ui.Button(c.Key("clear-transfers"), "清除已完成").Disabled(a.activeTransfers() == len(a.transfers)).OnClick(a.clearTransfers)
+				})
 				if len(a.transfers) == 0 {
-					ui.Text(c, "还没有传输任务")
+					ui.Column(c).Grow(1).Center().Gap(8).Children(func() {
+						ui.Icon(c, iconMoves).FontSize(36).TextColor(c.Theme().TextMuted)
+						ui.Text(c, "还没有传输任务").Bold()
+						ui.Text(c, "上传、下载、复制和移动都会显示在这里。").FontSize(12).TextColor(c.Theme().TextMuted)
+					})
 				}
 				ui.Scroll(c).Grow(1).MinHeight(0).Gap(8).Children(func() {
 					for _, tr := range a.transfers {
@@ -46,6 +55,7 @@ func (a *app) view(c *ui.Context) {
 				a.transfersPanel(c)
 			}
 		})
+		a.sidebar(c)
 	})
 	if a.askQuit {
 		switch ui.AlertDialog(c, &a.askQuit, "任务正在进行，要停止并退出吗？",
@@ -55,6 +65,7 @@ func (a *app) view(c *ui.Context) {
 		}
 	}
 	a.filePreviewView(c)
+	a.taskDialog(c)
 	a.nasView(c)
 	if a.confirmRemove {
 		if task := a.task(); task != nil {
@@ -68,28 +79,32 @@ func (a *app) view(c *ui.Context) {
 
 func rootPlace(server string, root int64) string { return fmt.Sprintf("root/%s/%d", server, root) }
 
-// backupPage is the backup tasks: their list, and the one chosen.
+// backupPage is the backup tasks: their list, and the one chosen. Tasks
+// are made from the page of the computer's files.
 func (a *app) backupPage(c *ui.Context) {
 	t := c.Theme()
+	if len(a.store.Tasks) == 0 {
+		ui.Column(c).Grow(1).Center().Gap(10).Children(func() {
+			ui.Icon(c, iconTasks).FontSize(36).TextColor(t.TextMuted)
+			ui.Text(c, "还没有备份任务").FontSize(18).Bold()
+			ui.Text(c, "在左侧“本机”中找到要备份的文件夹或文件，选中后点“创建备份任务…”。").TextColor(t.TextMuted)
+			if ui.PrimaryButton(c, "浏览本机文件").Clicked() {
+				a.openLocal(a.startLocal())
+			}
+		})
+		return
+	}
 	ui.Row(c).Grow(1).MinHeight(0).AlignItems(ui.Stretch).Gap(20).Children(func() {
 		ui.Column(c).Width(220).Gap(8).Children(func() {
 			ui.Text(c, "备份任务").Bold()
 			a.taskList(c)
-			if ui.Button(c, "＋ 新建任务").Disabled(a.busy() || a.editing).Clicked() {
-				a.startEditing(nil)
-			}
+			ui.Text(c, "新任务在“本机”文件页中创建。").FontSize(12).TextColor(t.TextMuted)
 		})
 		ui.Column(c).Grow(1).Shrink(1).MinWidth(0).Gap(16).Children(func() {
 			switch {
-			case a.editing:
-				a.editor(c)
 			case a.task() == nil:
-				ui.Column(c).Grow(1).Center().Gap(12).Children(func() {
-					ui.Text(c, "还没有备份任务").FontSize(18).Bold()
-					ui.Text(c, "新建一个任务，选择本机要备份的目录，和 NAS 上备份到的目录。").TextColor(t.TextMuted)
-					if ui.PrimaryButton(c, "新建任务").Clicked() {
-						a.startEditing(nil)
-					}
+				ui.Column(c).Grow(1).Center().Children(func() {
+					ui.Text(c, "从左边选择一个任务。").TextColor(t.TextMuted)
 				})
 			case a.job != nil && a.job.taskID == a.task().ID:
 				a.jobView(c)
@@ -116,69 +131,119 @@ func (a *app) welcome(c *ui.Context) {
 		if a.errorMsg != "" {
 			notice(c, t.Danger, a.errorMsg)
 		}
-		ui.Text(c, "从左侧选择 NAS 上的目录，或打开备份任务。").TextColor(t.TextMuted)
-		if ui.Button(c, "打开备份任务").Clicked() {
-			a.place = "backup"
+		ui.Text(c, "从左侧选择 NAS 上的目录，或在“本机”中选择要备份的文件。").TextColor(t.TextMuted)
+		if ui.Button(c, "浏览本机文件").Clicked() {
+			a.openLocal(a.startLocal())
 		}
 	})
 }
 
 func (a *app) sidebar(c *ui.Context) {
 	t := c.Theme()
-	ui.Column(c).Width(220).Background(t.Surface).BorderWidth(0, 1, 0, 0).BorderColor(t.Border).Children(func() {
-		ui.Scroll(c).Grow(1).MinHeight(0).Padding(8).Children(func() {
+	ui.Column(c).Width(232).Background(t.Surface).BorderWidth(0, 1, 0, 0).BorderColor(t.Border).Children(func() {
+		ui.Scroll(c).Grow(1).MinHeight(0).Padding(10, 8).Children(func() {
 			ui.Tree(c.Key("servers-tree"), func() {
 				for _, sv := range a.store.Servers {
-					open := a.open[sv.ID]
-					if open == nil {
-						open = new(bool)
-						*open = true
-						a.open[sv.ID] = open
-					}
-					ui.TreeItem(c.Key("server/"+sv.ID), "🖥 "+sv.Title(), open, func() {
-						if sv.Token == "" {
-							ui.TreeItem(c.Key("login/"+sv.ID), "登录…", nil, nil).OnClick(func() { a.openLogin(sv.ID, func() {}) })
-							return
-						}
-						roots, ok := a.roots[sv.ID]
-						if !ok {
-							a.loadRoots(sv)
-							ui.Text(c, "正在读取…")
-							return
-						}
-						if len(roots) == 0 {
-							if a.errorMsg != "" {
-								ui.Text(c, a.errorMsg).FontSize(12).MaxLines(3).TextColor(t.Danger)
-							}
-							ui.Text(c, "（没有索引目录）")
-							ui.Button(c.Key("retry-roots/"+sv.ID), "重新读取目录").OnClick(func() { delete(a.roots, sv.ID) })
-						}
-						for _, tab := range []struct{ id, label string }{{"roots", "目录管理"}, {"dupes", "查重"}, {"stats", "空间统计"}} {
-							ui.TreeItem(c.Key(adminPlace(sv.ID, tab.id)), tab.label, nil, nil).OnClick(func() { a.openAdmin(sv.ID, tab.id) })
-						}
-						ui.TreeItem(c.Key(trashPlace(sv.ID)), "回收站", nil, nil).OnClick(func() { a.openTrash(sv.ID) })
-						for _, r := range roots {
-							a.directoryView(c, sv, r, "", r.Name)
-						}
+					node := ui.TreeItem(c.Key("server/"+sv.ID), "", a.sectionOpen("server/"+sv.ID), func() {
+						a.serverItems(c, sv)
 					})
+					node.Children(func() {
+						labeled(c, iconServer, sv.Title(), t.Text)
+						if sv.Token == "" {
+							ui.Text(c, "未登录").FontSize(11).TextColor(t.TextMuted)
+						}
+					}).Label(sv.Title()).Tooltip(sv.Addr)
 				}
+				local := ui.TreeItem(c.Key("local"), "", a.sectionOpen("local"), func() { a.localItems(c) })
+				local.Children(func() { labeled(c, iconLaptop, "本机", t.Text) }).Label("本机")
+				tasks := ui.TreeItem(c.Key("tasks-section"), "", a.sectionOpen("tasks"), func() {
+					bk := a.navItem(c, "backup", iconBackup, "备份任务", func() { a.place = "backup" })
+					if n := len(a.store.Tasks); n > 0 {
+						color := t.TextMuted
+						if a.place == "backup" {
+							color = t.AccentText
+						}
+						bk.Children(func() { ui.Text(c, fmt.Sprint(n)).FontSize(11).TextColor(color).Padding(0, 4) })
+					}
+					tr := a.navItem(c, "transfers", iconMoves, "传输任务", func() { a.place = "transfers" })
+					if n := a.activeTransfers(); n > 0 {
+						tr.Children(func() { ui.Badge(c, fmt.Sprint(n)) })
+					}
+				})
+				tasks.Children(func() { labeled(c, iconTasks, "任务", t.Text) }).Label("任务")
 			}).Label("位置")
 		})
-		ui.Column(c).Padding(12).Gap(6).Children(func() {
-			ui.Button(c.Key("backup-page"), "备份任务").OnClick(func() { a.place = "backup" })
-			ui.Button(c.Key("transfers-page"), "传输任务").OnClick(func() { a.place = "transfers" })
+		ui.Row(c).Padding(10).Gap(6).BorderWidth(1, 0, 0, 0).BorderColor(t.Border).Children(func() {
+			if ui.Button(c, "服务器…").Grow(1).Clicked() {
+				a.openServers()
+			}
 			ui.MenuButton(c.Key("web-management"), "网页管理", func(m *ui.Menu) {
 				for _, sv := range a.store.Servers {
 					if m.Item(sv.Title() + " · 设置").Chosen() {
 						a.openURL("http://" + sv.Addr + "/settings")
 					}
 				}
-			}).Disabled(len(a.store.Servers) == 0)
-			if ui.Button(c, "服务器…").Clicked() {
-				a.openServers()
-			}
+			}).Disabled(len(a.store.Servers) == 0).Tooltip("在浏览器中打开 fileindex 网页版")
 		})
 	})
+}
+
+// sectionOpen is whether a branch of the sidebar shows its items, open
+// until closed.
+func (a *app) sectionOpen(key string) *bool {
+	open := a.open[key]
+	if open == nil {
+		open = new(bool)
+		*open = true
+		a.open[key] = open
+	}
+	return open
+}
+
+// navItem is a leaf of the sidebar going to place, highlighted there.
+func (a *app) navItem(c *ui.Context, place string, svg *ui.SVG, label string, action func()) ui.Element {
+	t := c.Theme()
+	color := t.TextMuted
+	if a.place == place {
+		color = t.AccentText // on the accent of the item chosen
+	}
+	item := ui.TreeItem(c.Key("nav/"+place), "", nil, nil)
+	item.Children(func() { labeled(c, svg, label, color) }).Label(label)
+	return item.Selected(a.place == place).OnClick(action)
+}
+
+// serverItems are the roots of a server, then its management.
+func (a *app) serverItems(c *ui.Context, sv *config.Server) {
+	t := c.Theme()
+	if sv.Token == "" {
+		a.navItem(c, "login/"+sv.ID, iconServer, "登录…", func() { a.openLogin(sv.ID, func() {}) })
+		return
+	}
+	roots, ok := a.roots[sv.ID]
+	if !ok {
+		a.loadRoots(sv)
+		ui.Text(c, "正在读取…").FontSize(12).TextColor(t.TextMuted).Padding(4, 28)
+		return
+	}
+	if len(roots) == 0 {
+		ui.Column(c).Padding(4, 12, 4, 28).Gap(6).Children(func() {
+			if a.errorMsg != "" {
+				ui.Text(c, a.errorMsg).FontSize(12).MaxLines(3).TextColor(t.Danger)
+			}
+			ui.Text(c, "还没有索引目录").FontSize(12).TextColor(t.TextMuted)
+			ui.Button(c.Key("retry-roots/"+sv.ID), "重新读取目录").OnClick(func() { delete(a.roots, sv.ID) })
+		})
+	}
+	for _, r := range roots {
+		a.directoryView(c, sv, r, "", r.Name)
+	}
+	manage := ui.TreeItem(c.Key("manage/"+sv.ID), "", a.sectionOpen("manage/"+sv.ID), func() {
+		a.navItem(c, adminPlace(sv.ID, "roots"), iconRoots, "目录管理", func() { a.openAdmin(sv.ID, "roots") })
+		a.navItem(c, adminPlace(sv.ID, "dupes"), iconDupes, "查重", func() { a.openAdmin(sv.ID, "dupes") })
+		a.navItem(c, adminPlace(sv.ID, "stats"), iconStats, "空间统计", func() { a.openAdmin(sv.ID, "stats") })
+		a.navItem(c, trashPlace(sv.ID), iconTrash, "回收站", func() { a.openTrash(sv.ID) })
+	})
+	manage.Children(func() { labeled(c, iconManage, "管理", t.TextMuted) }).Label("管理")
 }
 
 // goPlace shows what the sidebar chose.
@@ -187,6 +252,8 @@ func (a *app) goPlace(place string) {
 	switch kind {
 	case "backup":
 		a.place = place
+	case localPlace:
+		a.openLocal(a.startLocal())
 	case "admin":
 		server, tab, _ := strings.Cut(rest, "/")
 		a.openAdmin(server, tab)

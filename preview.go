@@ -84,14 +84,14 @@ func (a *app) showPreview(server string, c *fileindex.Client, e fileindex.Entry,
 		var data []byte
 		var truncated bool
 		if kind == "image" && e.Size > limit {
-			err = fmt.Errorf("图片超过 32 MiB，请用系统程序打开")
+			err = fmt.Errorf("图片超过 32 MB，请用系统程序打开")
 		} else {
 			data, truncated, err = c.ReadPreview(ctx, e.Root, e.Path, limit)
 		}
 		if err == nil {
 			if kind == "image" {
 				if truncated {
-					err = fmt.Errorf("图片超过 32 MiB，请用系统程序打开")
+					err = fmt.Errorf("图片超过 32 MB，请用系统程序打开")
 				} else {
 					var cfg image.Config
 					cfg, _, err = image.DecodeConfig(bytes.NewReader(data))

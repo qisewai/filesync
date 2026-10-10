@@ -47,7 +47,7 @@ func TestNativeRootManagementPickerEditAndRemove(t *testing.T) {
 	h.want("索引目录管理列表")
 	h.click("添加索引目录…")
 	h.click("浏览服务器目录…")
-	h.click("📁 new")
+	h.click("new")
 	h.click("使用当前目录")
 	if h.a.admin.draft.path != "/data/new" {
 		t.Fatal("NAS picker didn't retain path")
@@ -265,11 +265,12 @@ func TestNativeStatisticsDrillLocateAndSourceLifecycle(t *testing.T) {
 	if h.a.admin.statsDir != "目录/子目录" {
 		t.Fatal("nested usage drill")
 	}
-	h.click("统计上一级")
+	// The breadcrumbs go back up.
+	h.click("目录")
 	if h.a.admin.statsDir != "目录" {
 		t.Fatal("directory up")
 	}
-	h.click("统计目录顶层")
+	h.click("nas")
 	if h.a.admin.statsDir != "" {
 		t.Fatal("directory top")
 	}
@@ -443,7 +444,8 @@ func TestLargeDirectoryUsageListCanNavigateLastRow(t *testing.T) {
 			visible++
 		}
 	}
-	if visible == 0 || visible > 20 {
+	// Only the rows in view, and a few beside, are built.
+	if visible == 0 || visible > 40 {
 		t.Fatalf("unexpected visible directory count: %d", visible)
 	}
 	m.dirList.ScrollTo(1199, ui.End)

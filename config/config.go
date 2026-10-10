@@ -7,6 +7,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"os"
 	"path"
 	"path/filepath"
@@ -55,6 +56,9 @@ type Task struct {
 	// WithDir backs up the source directory itself, as a directory of its
 	// name in the target, rather than only what it holds.
 	WithDir bool `json:"withDir,omitempty"`
+	// Items, when set, are the names of the entries of Source backed up,
+	// straight into the target; the others are left out.
+	Items []string `json:"items,omitempty"`
 	// Compress compresses an archive: "" (not), "gzip" or "zstd".
 	Compress string      `json:"compress,omitempty"`
 	Mode     engine.Mode `json:"mode"`
@@ -69,7 +73,33 @@ func (t *Task) BackupPath() string {
 	if t.Mode == engine.Archive {
 		return t.Path
 	}
-	return BackupPath(t.Path, t.Source, t.WithDir)
+	return BackupPath(t.Path, t.Source, t.WithDir && len(t.Items) == 0)
+}
+
+// Named is the path whose name an archive of the task takes: the entry
+// backed up when it is one, or the source.
+func (t *Task) Named() string {
+	if len(t.Items) == 1 {
+		return path.Join(strings.ReplaceAll(t.Source, `\`, "/"), t.Items[0])
+	}
+	return t.Source
+}
+
+// Contents says what the task backs up, as people read it.
+func (t *Task) Contents() string {
+	return Contents(t.Source, t.Items)
+}
+
+// Contents says what a backup of the entries items of source holds: source
+// itself without them.
+func Contents(source string, items []string) string {
+	switch {
+	case len(items) == 0:
+		return source
+	case len(items) <= 3:
+		return source + " 中的 " + strings.Join(items, "、")
+	}
+	return fmt.Sprintf("%s 中的 %s 等 %d 项", source, strings.Join(items[:3], "、"), len(items))
 }
 
 // ArchiveName is the name of an archive of the source made at t, as
