@@ -12,6 +12,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 	"unicode/utf16"
 
 	"filesync/fileindex"
@@ -92,6 +93,22 @@ func TestNativePreviewTextImageNavigationAndSystemOpen(t *testing.T) {
 		t.Fatal("reopening cache overwrote local application edits")
 	}
 }
+
+// waitOpened runs the work posted until *opened names what was opened.
+func (h *harness) waitOpened(opened *string) {
+	h.t.Helper()
+	deadline := time.After(5 * time.Second)
+	for *opened == "" {
+		select {
+		case fn := <-h.queue:
+			fn()
+			h.tt.Frame()
+		case <-deadline:
+			h.t.Fatal("nothing opened")
+		}
+	}
+}
+
 func TestMediaOpenUsesPlaylistProxyAndFallback(t *testing.T) {
 	t.Setenv("XDG_CACHE_HOME", t.TempDir())
 	f := fitest.New(t)
@@ -101,7 +118,11 @@ func TestMediaOpenUsesPlaylistProxyAndFallback(t *testing.T) {
 	h.a.openPath = func(p string) { opened = p }
 	h.click("电影.mp4")
 	h.tt.Key(0, ui.KeyEnter)
-	h.waitTransfers()
+	// The player opens at once; nothing transfers but what it reads.
+	h.waitOpened(&opened)
+	if len(h.a.transfers) != 0 {
+		t.Fatalf("streaming shows as a transfer: %q", h.a.transfers[0].title)
+	}
 	data, err := os.ReadFile(opened)
 	if err != nil || !strings.HasSuffix(opened, ".m3u") {
 		t.Fatalf("playlist %q %v", opened, err)
@@ -121,6 +142,10 @@ func TestMediaOpenUsesPlaylistProxyAndFallback(t *testing.T) {
 	c, sv := h.a.brClient()
 	h.a.systemOpenSource(sv.ID, c, h.a.br.items[0], true)
 	h.waitTransfers()
+	// Downloaded first, it is a transfer.
+	if len(h.a.transfers) != 1 || h.a.transfers[0].kind != "下载并打开" {
+		t.Fatalf("transfers %d", len(h.a.transfers))
+	}
 	data, err = os.ReadFile(opened)
 	if err != nil || string(data) != "0123456789" || strings.HasSuffix(opened, ".m3u") {
 		t.Fatalf("fallback %q %q %v", opened, data, err)
@@ -280,7 +305,7 @@ func TestProxyExpiryClearsNativeSession(t *testing.T) {
 	opened := ""
 	h.a.openPath = func(p string) { opened = p }
 	h.a.openEntry(h.a.br.items[0])
-	h.waitTransfers()
+	h.waitOpened(&opened)
 	data, _ := os.ReadFile(opened)
 	address := strings.TrimSpace(strings.TrimPrefix(string(data), "#EXTM3U\n"))
 	sv := h.a.store.Servers[0]

@@ -302,24 +302,35 @@ func (a *app) systemOpenSource(server string, c *fileindex.Client, e fileindex.E
 		a.errorMsg = err.Error()
 		return
 	}
-	tr := a.addTransfer("打开", e.Name)
+	if mediaFile(e) && !download {
+		// Played as it streams: nothing transfers but what the player
+		// reads, so no transfer shows. A playlist is a local file, so the
+		// OS chooses a media application instead of treating the proxy's
+		// HTTP URL as an ordinary browser link.
+		go func() {
+			list := dest + ".m3u"
+			err := os.MkdirAll(filepath.Dir(list), 0700)
+			if err == nil {
+				err = os.WriteFile(list, []byte("#EXTM3U\n"+address+"\n"), 0600)
+			}
+			a.post(func() {
+				switch {
+				case err != nil:
+					a.errorMsg = "无法播放 " + e.Name + ": " + err.Error()
+				case a.sourceCurrent(server, c):
+					a.openPath(list)
+				}
+			})
+		}()
+		return
+	}
+	tr := a.addTransfer("下载并打开", e.Name)
 	tr.server = server
 	tr.total = e.Size
 	ctx, cancel := context.WithCancel(context.Background())
 	tr.cancel = cancel
 	go func() {
-		var err error
-		if mediaFile(e) && !download {
-			// A playlist is a local file, so the OS selects a media application instead
-			// of treating the proxy's HTTP URL as an ordinary browser link.
-			dest += ".m3u"
-			err = os.MkdirAll(filepath.Dir(dest), 0700)
-			if err == nil {
-				err = os.WriteFile(dest, []byte("#EXTM3U\n"+address+"\n"), 0600)
-			}
-		} else {
-			err = fileindex.DownloadProxyFile(ctx, address, dest, func(p fileindex.Progress) { a.post(func() { tr.done = p.Done; tr.total = p.Total }) })
-		}
+		err := fileindex.DownloadProxyFile(ctx, address, dest, func(p fileindex.Progress) { a.post(func() { tr.done = p.Done; tr.total = p.Total }) })
 		a.post(func() {
 			defer cancel()
 			if err == nil && ctx.Err() != nil {
