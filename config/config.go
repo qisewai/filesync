@@ -183,6 +183,9 @@ type Store struct {
 	// SidebarWidth is the width the user dragged the sidebar to, 0 for
 	// the default.
 	SidebarWidth float32
+	// QuitOnClose quits as the window closes, rather than keeping the app
+	// in the tray.
+	QuitOnClose bool
 }
 
 // DefaultDir is where the app keeps its settings: ~/.config/filesync on
@@ -207,6 +210,7 @@ type fileData struct {
 	// servers.
 	Sessions     map[string]string `json:"sessions,omitempty"`
 	SidebarWidth float32           `json:"sidebarWidth,omitempty"`
+	QuitOnClose  bool              `json:"quitOnClose,omitempty"`
 }
 
 // Load reads the store in dir; a directory without it has nothing.
@@ -224,7 +228,7 @@ func Load(dir string) (*Store, error) {
 		return nil, err
 	}
 	s.Servers = data.Servers
-	s.SidebarWidth = data.SidebarWidth
+	s.SidebarWidth, s.QuitOnClose = data.SidebarWidth, data.QuitOnClose
 	addrs := make([]string, 0, len(data.Sessions))
 	for addr := range data.Sessions {
 		addrs = append(addrs, addr)
@@ -251,7 +255,7 @@ func (s *Store) Save() error {
 	if err := os.MkdirAll(s.Dir, 0o755); err != nil {
 		return err
 	}
-	data := fileData{Servers: s.Servers, Tasks: s.Tasks, SidebarWidth: s.SidebarWidth}
+	data := fileData{Servers: s.Servers, Tasks: s.Tasks, SidebarWidth: s.SidebarWidth, QuitOnClose: s.QuitOnClose}
 	if data.Servers == nil {
 		data.Servers = []*Server{}
 	}

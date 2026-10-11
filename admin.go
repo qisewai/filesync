@@ -43,6 +43,7 @@ type adminPage struct {
 	deletingDupes                 bool
 	overview                      *fileindex.Overview
 	largest                       []fileindex.Entry
+	largestSort                   tableSort
 	dirs                          []fileindex.DirUsage
 	dirList                       ui.ListState
 	usageRoot                     int64
@@ -82,6 +83,8 @@ func (a *app) openAdmin(server, tab string) {
 	m.rootList.Key = func(i int) any { return a.roots[server][i].ID }
 	m.largestList.Selected = &m.largestCursor
 	m.largestList.Key = func(i int) any { return fmt.Sprintf("%d/%s", m.largest[i].Root, m.largest[i].Path) }
+	m.largestSort.by = ui.SortOrder{Column: colSize, Descending: true}
+	m.largestList.Sort = &m.largestSort.by
 	m.dirList.Key = func(i int) any { return m.dirs[i].Path }
 	m.dupeList.Key = func(i int) any {
 		r := m.dupeRows[i]
@@ -218,6 +221,7 @@ func (a *app) reloadAdmin() {
 			}
 			if tab == "stats" {
 				m.overview = overview
+				sortEntries(&m.largestSort, largest, nil)
 				m.largest = largest
 				m.dirs = dirs
 				if m.usageRoot != scope || m.usagePath != dir {

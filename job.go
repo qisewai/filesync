@@ -179,6 +179,7 @@ func (a *app) startBackup(task *config.Task) {
 			j.logPath = logPath
 			j.logErr = logErr
 			a.recordRun(j, &taskCopy)
+			a.notify(backupNotice(&taskCopy, result))
 			if a.quitWhenDone {
 				a.maybeClose()
 			}
@@ -444,6 +445,20 @@ func (a *app) doneView(c *ui.Context, j *job, task *config.Task) {
 			a.openURL("http://" + sv.Addr + "/")
 		}
 	})
+}
+
+// backupNotice is the notification of a backup that ended.
+func backupNotice(task *config.Task, r *engine.Result) (title, body string) {
+	counts := fmt.Sprintf("上传 %d 个文件（%s）", r.Created+r.Updated, formatBytes(r.Bytes))
+	switch {
+	case r.Fatal != nil:
+		return "备份失败：" + task.Name, r.Fatal.Error()
+	case r.Canceled:
+		return "备份已停止：" + task.Name, counts
+	case len(r.Errors) > 0:
+		return "备份完成，但有错误：" + task.Name, fmt.Sprintf("%s，%d 个错误", counts, len(r.Errors))
+	}
+	return "备份完成：" + task.Name, counts
 }
 
 func stat(c *ui.Context, label, value string, color ui.Color) {

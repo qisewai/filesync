@@ -1,6 +1,7 @@
 package main
 
 import (
+	"cmp"
 	"context"
 	"errors"
 	"fmt"
@@ -20,6 +21,7 @@ type recycleBrowser struct {
 	sel                         ui.Selection[int64]
 	cursor                      int
 	list                        ui.ListState
+	sort                        tableSort
 	cancel                      context.CancelFunc
 	gen                         int
 	refreshPending              bool
@@ -42,6 +44,8 @@ func (a *app) openTrash(server string) {
 	b.list.Key = func(i int) any { return b.shown[i].ID }
 	b.list.Selection = &b.sel
 	b.list.Selected = &b.cursor
+	b.sort.by = ui.SortOrder{Column: colDeleted, Descending: true}
+	b.list.Sort = &b.sort.by
 	a.recycle = b
 	a.place = trashPlace(server)
 	a.loadTrash()
@@ -102,6 +106,32 @@ func (b *recycleBrowser) filter() {
 		}
 	}
 	b.cursor = -1
+	b.sortShown()
+}
+
+// The columns of the trash which are not of other tables.
+const (
+	colOrigin  = "原位置"
+	colDeleted = "删除时间"
+)
+
+// sortShown puts the items shown in the order of the table.
+func (b *recycleBrowser) sortShown() {
+	sortRows(&b.sort, b.shown, &b.cursor, func(it fileindex.TrashItem) any { return it.ID }, func(x, y fileindex.TrashItem, column string) int {
+		var c int
+		switch column {
+		case colOrigin:
+			c = naturalCompare(x.RootName+"/"+x.OrigPath, y.RootName+"/"+y.OrigPath)
+		case colSize:
+			c = cmp.Compare(x.Size, y.Size)
+		case colDeleted:
+			c = cmp.Compare(x.DeletedAt, y.DeletedAt)
+		}
+		if c == 0 {
+			c = naturalCompare(x.Name, y.Name)
+		}
+		return c
+	})
 }
 func (a *app) trashWritable(b *recycleBrowser) bool {
 	if b.loading || b.operating || b.sel.Len() == 0 {
@@ -239,7 +269,15 @@ func (a *app) trashView(c *ui.Context) {
 	if b.loading {
 		ui.Text(c, "正在读取回收站…").TextColor(t.TextMuted)
 	}
-	cols := []ui.TableColumn{{Title: "名称"}, {Title: "原位置", Width: 240}, {Title: "大小", Width: 85}, {Title: "删除时间", Width: 140}}
+	if b.sort.stale() {
+		b.sortShown()
+	}
+	cols := []ui.TableColumn{
+		{Title: colName, Sortable: true},
+		{Title: colOrigin, Width: 240, Sortable: true},
+		{Title: colSize, Width: 85, Align: ui.End, Sortable: true},
+		{Title: colDeleted, Width: 140, Sortable: true},
+	}
 	ui.Table(c.Key("trash-files"), &b.list, cols, len(b.shown), func(row, col int) {
 		it := b.shown[row]
 		switch col {

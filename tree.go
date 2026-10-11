@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"path"
+	"slices"
 	"strings"
 
 	"filesync/config"
@@ -55,6 +56,7 @@ func (a *app) cacheDirectories(server string, root int64, dir string, items []fi
 			n.dirs = append(n.dirs, e)
 		}
 	}
+	slices.SortStableFunc(n.dirs, func(x, y fileindex.Entry) int { return naturalCompare(x.Name, y.Name) })
 }
 
 func (a *app) directoryView(c *ui.Context, sv *config.Server, root fileindex.Root, dir, name string) {

@@ -30,6 +30,7 @@ type localBrowser struct {
 	sel    ui.Selection[string] // by path
 	cursor int
 	list   ui.ListState
+	sort   tableSort
 }
 
 // localRoot is a place the sidebar starts the computer's directories at.
@@ -90,6 +91,8 @@ func (a *app) openLocal(dir string, choose ...string) {
 		b.list.Key = func(i int) any { return b.items[i].Path }
 		b.list.Selection = &b.sel
 		b.list.Selected = &b.cursor
+		b.sort.by = ui.SortOrder{Column: colName}
+		b.list.Sort = &b.sort.by
 	}
 	b := a.local
 	a.place = localPlace
@@ -115,8 +118,9 @@ func (a *app) openLocal(dir string, choose ...string) {
 				b.err = "无法读取 " + dir + ": " + err.Error()
 				return
 			}
-			b.items = items
 			a.cacheLocal(dir, items)
+			sortEntries(&b.sort, items, nil)
+			b.items = items
 			// The selection keeps what is still there.
 			for p := range b.sel.All() {
 				if !slices.ContainsFunc(items, func(e fileindex.Entry) bool { return e.Path == p }) {
@@ -234,8 +238,10 @@ func (a *app) localView(c *ui.Context) {
 			ui.Column(c).Grow(1).Center().Children(func() { ui.Spinner(c).FontSize(22).Label("正在读取") })
 			return
 		}
-		cols := []ui.TableColumn{{Title: "名称"}, {Title: "大小", Width: 90, Align: ui.End}, {Title: "修改时间", Width: 140}}
-		table := ui.Table(c.Key("local-files"), &b.list, cols, len(b.items), func(row, col int) {
+		if b.sort.stale() {
+			sortEntries(&b.sort, b.items, &b.cursor)
+		}
+		table := ui.Table(c.Key("local-files"), &b.list, fileColumns(), len(b.items), func(row, col int) {
 			e := b.items[row]
 			muted := t.TextMuted
 			if b.sel.Has(e.Path) {
@@ -381,6 +387,7 @@ func (a *app) cacheLocal(dir string, items []fileindex.Entry) {
 			n.dirs = append(n.dirs, e)
 		}
 	}
+	slices.SortStableFunc(n.dirs, func(x, y fileindex.Entry) int { return naturalCompare(x.Name, y.Name) })
 }
 
 // localDirectoryView is a directory of the computer in the sidebar.

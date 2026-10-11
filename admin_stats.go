@@ -166,7 +166,10 @@ func (a *app) largestCard(c *ui.Context, m *adminPage) {
 			ui.Text(c, "最大的 50 个文件").Bold().Grow(1)
 			ui.Text(c, "双击预览或用系统程序打开，点位置跳到所在文件夹").FontSize(12).TextColor(t.TextMuted)
 		})
-		cols := []ui.TableColumn{{Title: "名称"}, {Title: "位置", Width: 260}, {Title: "大小", Width: 96, Align: ui.End}}
+		if m.largestSort.stale() {
+			sortEntries(&m.largestSort, m.largest, &m.largestCursor)
+		}
+		cols := []ui.TableColumn{{Title: colName, Sortable: true}, {Title: colWhere, Width: 260, Sortable: true}, {Title: colSize, Width: 96, Align: ui.End, Sortable: true}}
 		height := min(float32(len(m.largest))*34+38, 380)
 		ui.Table(c.Key("largest-files"), &m.largestList, cols, len(m.largest), func(row, col int) {
 			e := m.largest[row]

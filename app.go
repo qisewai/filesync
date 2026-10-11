@@ -33,6 +33,12 @@ type app struct {
 	keepAwake func(reason string) (release func())
 	// closeWindow closes the window, which quits the app.
 	closeWindow func()
+	// tray shows a model in the system tray, nil without one; trayShown
+	// is the model it shows.
+	tray      func(trayModel)
+	trayShown *trayModel
+	// notify shows a desktop notification while the window is hidden.
+	notify func(title, body string)
 
 	selected int // index of the task shown, -1 for none
 	tasks    ui.ListState
@@ -115,6 +121,7 @@ func newApp(store *config.Store) *app {
 		openURL:     func(string) {},
 		keepAwake:   func(string) func() { return func() {} },
 		closeWindow: func() {},
+		notify:      func(string, string) {},
 
 		open:         map[string]*bool{},
 		roots:        map[string][]fileindex.Root{},
@@ -561,6 +568,9 @@ func (a *app) stopBackground() {
 	}
 	if a.br != nil && a.br.cancel != nil {
 		a.br.cancel()
+	}
+	if a.br != nil && a.br.moreCancel != nil {
+		a.br.moreCancel()
 	}
 	if a.br != nil && a.br.thumbCancel != nil {
 		a.br.thumbCancel()

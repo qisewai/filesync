@@ -37,10 +37,16 @@ type browser struct {
 	query   string
 	results bool // items are search results
 	total   int  // of the results, which may be more than shown
+	// page is how many pages of the results are shown; more is set while
+	// the next loads, which moreCancel stops.
+	page       int
+	more       bool
+	moreCancel context.CancelFunc
 
 	sel       ui.Selection[string] // by path
 	cursor    int
 	list      ui.ListState
+	sort      tableSort
 	gridState ui.GridState
 
 	// dialogs
@@ -68,6 +74,9 @@ func (a *app) openRoot(server string, root fileindex.Root) {
 	if a.br != nil && a.br.cancel != nil {
 		a.br.cancel()
 	}
+	if a.br != nil && a.br.moreCancel != nil {
+		a.br.moreCancel()
+	}
 	if a.br != nil && a.br.thumbCancel != nil {
 		a.br.thumbCancel()
 	}
@@ -76,6 +85,8 @@ func (a *app) openRoot(server string, root fileindex.Root) {
 	a.br.list.Key = func(i int) any { return b.items[i].Path }
 	a.br.list.Selection = &a.br.sel
 	a.br.list.Selected = &a.br.cursor
+	a.br.sort.by = ui.SortOrder{Column: colName}
+	a.br.list.Sort = &a.br.sort.by
 	a.br.gridState.Key = a.br.list.Key
 	a.br.gridState.Selection = &a.br.sel
 	a.br.gridState.Selected = &a.br.cursor
@@ -127,6 +138,10 @@ func (a *app) load(fetch func(ctx context.Context, c *fileindex.Client) ([]filei
 	if b.cancel != nil {
 		b.cancel()
 	}
+	if b.moreCancel != nil {
+		b.moreCancel()
+	}
+	b.more = false
 	ctx, cancel := context.WithTimeout(context.Background(), requestTimeout)
 	b.cancel = cancel
 	gen := b.gen
@@ -150,10 +165,11 @@ func (a *app) load(fetch func(ctx context.Context, c *fileindex.Client) ([]filei
 				b.err = err.Error()
 				return
 			}
-			b.items, b.total = items, total
 			if !b.results {
 				a.cacheDirectories(b.server, b.root.ID, b.path, items)
+				sortEntries(&b.sort, items, nil)
 			}
+			b.items, b.total = items, total
 			b.sel.Clear()
 			b.cursor = -1
 			for i, e := range items {
@@ -226,11 +242,80 @@ func (a *app) search(q string) {
 		a.browse(b.path)
 		return
 	}
-	b.results, b.query = true, q
-	root, dir := b.root.ID, b.path
+	b.results, b.query, b.page = true, q, 1
+	b.list.ScrollTo(0, ui.Start) // the first page, from its top
+	// The server orders the results, all of them, before it pages them.
+	b.sort.applied = b.sort.by
+	opts := a.searchOptions(1)
 	a.load(func(ctx context.Context, c *fileindex.Client) ([]fileindex.Entry, int, error) {
-		return c.Search(ctx, q, root, dir, 1000)
+		return c.Search(ctx, q, opts)
 	})
+}
+
+// searchOptions ask for a page of the results of the search shown, in the
+// order of the table.
+func (a *app) searchOptions(page int) fileindex.SearchOptions {
+	b := a.br
+	o := fileindex.SearchOptions{Root: b.root.ID, Dir: b.path, Desc: b.sort.by.Descending, Page: page, Size: fileindex.SearchPageSize}
+	switch b.sort.by.Column {
+	case colSize:
+		o.Sort = "size"
+	case colTime:
+		o.Sort = "mtime"
+	case colWhere:
+		o.Sort = "path"
+	default:
+		o.Sort = "name"
+	}
+	return o
+}
+
+// loadMore adds the next page of the results of the search, if any.
+func (a *app) loadMore() {
+	b := a.br
+	if b == nil || !b.results || b.loading || b.more || len(b.items) >= b.total {
+		return
+	}
+	c, sv := a.brClient()
+	if c == nil {
+		return
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), requestTimeout)
+	b.more, b.moreCancel = true, cancel
+	gen, page, q, opts := b.gen, b.page+1, b.query, a.searchOptions(b.page+1)
+	go func() {
+		defer cancel()
+		items, total, err := c.Search(ctx, q, opts)
+		a.post(func() {
+			if a.closed || a.br != b || b.gen != gen {
+				return
+			}
+			b.more = false
+			switch {
+			case errors.Is(err, fileindex.ErrAuth):
+				b.err = "登录已过期，请重新登录"
+				a.signedOut(sv)
+			case err != nil:
+				b.err = "无法加载更多结果: " + err.Error()
+			default:
+				// What moved between pages as the index changed shows once.
+				seen := make(map[string]bool, len(b.items))
+				for _, e := range b.items {
+					seen[e.Path] = true
+				}
+				for _, e := range items {
+					if !seen[e.Path] {
+						b.items = append(b.items, e)
+						seen[e.Path] = true
+					}
+				}
+				b.page, b.total = page, total
+				if len(items) == 0 {
+					b.total = len(b.items) // the server has no more after all
+				}
+			}
+		})
+	}()
 }
 
 // chosen returns the entries chosen, in the order shown.
@@ -368,9 +453,9 @@ func (a *app) browserView(c *ui.Context) {
 
 	status := fmt.Sprintf("%d 项", len(b.items))
 	if b.results {
-		status = fmt.Sprintf("找到 %d 项", b.total)
+		status = fmt.Sprintf("找到 %s 项", groupDigits(int64(b.total)))
 		if b.total > len(b.items) {
-			status += fmt.Sprintf("，显示前 %d 项", len(b.items))
+			status += fmt.Sprintf("，已显示 %s 项", groupDigits(int64(len(b.items))))
 		}
 	}
 	if n > 0 {
@@ -383,7 +468,16 @@ func (a *app) browserView(c *ui.Context) {
 			status += "，" + formatBytes(size)
 		}
 	}
-	ui.Text(c, status).FontSize(12).TextColor(t.TextMuted)
+	ui.Row(c).Gap(10).AlignItems(ui.Center).Children(func() {
+		ui.Text(c, status).FontSize(12).TextColor(t.TextMuted)
+		if b.results && !b.loading && b.total > len(b.items) {
+			label := fmt.Sprintf("加载更多（还有 %s 项）", groupDigits(int64(b.total-len(b.items))))
+			if b.more {
+				label = "正在加载…"
+			}
+			ui.Button(c.Key("load-more"), label).Disabled(b.more).OnClick(a.loadMore)
+		}
+	})
 
 	a.browserDialogs(c)
 }
@@ -431,9 +525,16 @@ func (a *app) entryMenu(m *ui.Menu, es []fileindex.Entry, writable bool) {
 func (a *app) tableView(c *ui.Context) {
 	b := a.br
 	t := c.Theme()
-	cols := []ui.TableColumn{{Title: "名称"}, {Title: "大小", Width: 90, Align: ui.End}, {Title: "修改时间", Width: 140}}
+	if b.sort.stale() {
+		if b.results {
+			a.search(b.query) // sorted by the server, from the first page
+		} else {
+			sortEntries(&b.sort, b.items, &b.cursor)
+		}
+	}
+	cols := fileColumns()
 	if b.results {
-		cols = append(cols, ui.TableColumn{Title: "位置", Width: 220})
+		cols = append(cols, ui.TableColumn{Title: colWhere, Width: 220, Sortable: true})
 	}
 	table := ui.Table(c.Key("files"), &b.list, cols, len(b.items), func(row, col int) {
 		e := b.items[row]
@@ -470,6 +571,19 @@ func (a *app) tableView(c *ui.Context) {
 	})
 	if table.Submitted() && b.cursor >= 0 && b.cursor < len(b.items) {
 		a.openEntry(b.items[b.cursor])
+	}
+	// Scrolled near the end of the results loaded, the next page loads.
+	if _, last := b.list.Visible(); b.results && last >= len(b.items)-40 {
+		a.loadMore()
+	}
+}
+
+// fileColumns are the columns of a table of files, each sorting it.
+func fileColumns() []ui.TableColumn {
+	return []ui.TableColumn{
+		{Title: colName, Sortable: true},
+		{Title: colSize, Width: 90, Align: ui.End, Sortable: true},
+		{Title: colTime, Width: 140, Sortable: true},
 	}
 }
 

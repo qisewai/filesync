@@ -53,7 +53,14 @@ func main() {
 			StateKey:  "main",
 			Content:   ui.View(a.view),
 		})
-		a.post = win.Update
+		// The tray follows the work posted, which goes on while the window
+		// is hidden and draws no frames.
+		a.post = func(fn func()) {
+			win.Update(func() {
+				fn()
+				a.syncTray()
+			})
+		}
 		a.pickDir = func(title, start string) (string, error) {
 			paths, err := mygo.Dialog.Open(mygo.OpenDialogOptions{
 				Parent:      win,
@@ -80,13 +87,31 @@ func main() {
 			}
 		}
 		a.keepAwake = func(reason string) func() { return mygo.Power.KeepAwake(reason, false) }
+		quitting := false // the window closes to quit, not to the tray
 		a.closeWindow = func() {
 			a.quitWhenDone, a.job = false, nil
+			quitting = true
 			win.Close()
 		}
+		// Quitting, as the session ends or on SIGTERM, closes the window
+		// rather than hiding it.
+		mygo.App.OnBeforeQuit(func(*mygo.QuitEvent) { quitting = true })
+		inTray := setUpTray(a, win, &quitting)
+		hintShown := false
 		win.OnClose(func(e *mygo.CloseEvent) {
+			if inTray && !quitting && !a.store.QuitOnClose {
+				e.PreventDefault()
+				win.Hide()
+				if !hintShown {
+					hintShown = true
+					showNotice(win, "FileSync 仍在后台运行", "可以从系统托盘的图标重新打开窗口或退出。")
+				}
+				return
+			}
+			quitting = false
 			if !a.requestClose() {
 				e.PreventDefault()
+				win.Show()
 				win.Invalidate()
 			}
 		})

@@ -28,9 +28,14 @@ func TestBrowse(t *testing.T) {
 	if err != nil || len(list) != 2 || list[0].Path != "照片/a.jpg" || list[0].Size != 4 || list[0].Ext != "jpg" {
 		t.Fatalf("list %+v, %v", list, err)
 	}
-	found, total, err := c.Search(ctx, "报告", 0, "", 100)
+	found, total, err := c.Search(ctx, "报告", SearchOptions{})
 	if err != nil || total != 1 || found[0].Path != "文档/报告.docx" {
 		t.Fatalf("search %+v %d %v", found, total, err)
+	}
+	// A page of the matches, in the order asked, and how many there are.
+	found, total, err = c.Search(ctx, ".", SearchOptions{Root: 1, Sort: "size", Desc: true, Page: 2, Size: 1})
+	if err != nil || total != 3 || len(found) != 1 || found[0].Path != "文档/报告.docx" {
+		t.Fatalf("page 2 by size %+v %d %v", found, total, err)
 	}
 	info, err := c.Info(ctx)
 	if err != nil || len(info.ThumbExts) == 0 {

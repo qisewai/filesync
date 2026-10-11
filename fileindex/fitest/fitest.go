@@ -4,6 +4,7 @@ package fitest
 
 import (
 	"archive/tar"
+	"cmp"
 	"encoding/json"
 	"fmt"
 	"hash/fnv"
@@ -15,6 +16,7 @@ import (
 	"os"
 	"path"
 	"path/filepath"
+	"slices"
 	"sort"
 	"strconv"
 	"strings"
@@ -50,8 +52,10 @@ type Server struct {
 	// HoldAnswers makes the server answer only once the whole stream is in:
 	// a client waiting for answers before sending more would never end.
 	HoldAnswers atomic.Bool
-	// Streams counts the tar streams received.
+	// Streams counts the tar streams received, and Searches the pages of
+	// searches answered.
 	Streams        atomic.Int32
+	Searches       atomic.Int32
 	DropTaskEvents atomic.Bool
 	HoldScans      atomic.Bool
 
@@ -399,9 +403,15 @@ func (s *Server) file(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) search(w http.ResponseWriter, r *http.Request) {
-	q := strings.ToLower(r.URL.Query().Get("q"))
+	v := r.URL.Query()
+	q := strings.ToLower(v.Get("q"))
+	roots := []int64{1, 2}
+	if id, err := strconv.ParseInt(v.Get("root"), 10, 64); err == nil && id != 0 {
+		roots = []int64{id}
+	}
+	below := strings.Trim(v.Get("dir"), "/")
 	items := []Entry{}
-	for _, id := range []int64{1, 2} {
+	for _, id := range roots {
 		dir, _ := s.rootDir(strconv.FormatInt(id, 10))
 		filepath.WalkDir(dir, func(p string, d os.DirEntry, err error) error {
 			if err != nil || p == dir || !strings.Contains(strings.ToLower(d.Name()), q) {
@@ -409,11 +419,42 @@ func (s *Server) search(w http.ResponseWriter, r *http.Request) {
 			}
 			info, _ := d.Info()
 			rel, _ := filepath.Rel(dir, p)
-			items = append(items, s.entry(id, filepath.ToSlash(rel), info))
+			rel = filepath.ToSlash(rel)
+			if below != "" && !strings.HasPrefix(rel, below+"/") {
+				return nil
+			}
+			items = append(items, s.entry(id, rel, info))
 			return nil
 		})
 	}
-	json.NewEncoder(w).Encode(map[string]any{"items": items, "total": len(items)})
+	// Ordered as the server does: by name unless asked, then a page.
+	slices.SortStableFunc(items, func(a, b Entry) int {
+		var c int
+		switch v.Get("sort") {
+		case "size":
+			c = cmp.Compare(a.Size, b.Size)
+		case "mtime":
+			c = cmp.Compare(a.MTime, b.MTime)
+		case "path":
+			c = strings.Compare(strings.ToLower(a.Path), strings.ToLower(b.Path))
+		default:
+			c = strings.Compare(strings.ToLower(a.Name), strings.ToLower(b.Name))
+		}
+		if v.Get("desc") == "1" {
+			c = -c
+		}
+		return c
+	})
+	total := len(items)
+	size, _ := strconv.Atoi(v.Get("size"))
+	if size <= 0 || size > 1000 {
+		size = 100
+	}
+	page, _ := strconv.Atoi(v.Get("page"))
+	page = max(page, 1)
+	from := min((page-1)*size, total)
+	s.Searches.Add(1)
+	json.NewEncoder(w).Encode(map[string]any{"items": items[from:min(from+size, total)], "total": total})
 }
 
 // abs is the file of ?path= in the root of the path's {id}.

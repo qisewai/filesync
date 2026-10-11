@@ -55,15 +55,41 @@ func (c *Client) List(ctx context.Context, root int64, dir string, live bool) ([
 	}
 }
 
-// Search finds the entries whose names match q, in a root (or all, 0) and
-// below dir, the first limit of total.
-func (c *Client) Search(ctx context.Context, q string, root int64, dir string, limit int) (items []Entry, total int, err error) {
-	v := url.Values{"q": {q}, "size": {strconv.Itoa(limit)}}
-	if root != 0 {
-		v.Set("root", strconv.FormatInt(root, 10))
-		if dir != "" {
-			v.Set("dir", dir)
+// SearchOptions narrow and order a search, and choose a page of it.
+type SearchOptions struct {
+	// Root is the root searched, 0 for all, and Dir the directory below
+	// which, in it.
+	Root int64
+	Dir  string
+	// Sort is "name" (the default), "size", "mtime" or "path".
+	Sort string
+	Desc bool
+	// Page counts from 1, of Size entries, at most SearchPageSize.
+	Page, Size int
+}
+
+// SearchPageSize is the most entries a page of a search may have.
+const SearchPageSize = 1000
+
+// Search finds the entries whose names match q, a page of them, and how
+// many there are.
+func (c *Client) Search(ctx context.Context, q string, o SearchOptions) (items []Entry, total int, err error) {
+	size := o.Size
+	if size <= 0 || size > SearchPageSize {
+		size = SearchPageSize
+	}
+	v := url.Values{"q": {q}, "size": {strconv.Itoa(size)}, "page": {strconv.Itoa(max(o.Page, 1))}}
+	if o.Root != 0 {
+		v.Set("root", strconv.FormatInt(o.Root, 10))
+		if o.Dir != "" {
+			v.Set("dir", o.Dir)
 		}
+	}
+	if o.Sort != "" {
+		v.Set("sort", o.Sort)
+	}
+	if o.Desc {
+		v.Set("desc", "1")
 	}
 	var res struct {
 		Items []Entry `json:"items"`
