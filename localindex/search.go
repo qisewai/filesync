@@ -16,6 +16,10 @@ type Query struct {
 	Text, Dir, Sort, Category string
 	Exts                      []string
 	Desc, Hidden              bool
+	// MinSize and MaxSize bound the size, in bytes, and From and To the
+	// time of the last change, in Unix seconds; 0 bounds nothing.
+	MinSize, MaxSize int64
+	From, To         int64
 }
 type Results struct {
 	snap  *snapshot
@@ -106,6 +110,10 @@ func (x *Index) Search(ctx context.Context, q Query) (*Results, error) {
 						return
 					}
 					if len(extSet) > 0 && !extSet[r.exts[c.ext[i]]] {
+						return
+					}
+					if q.MinSize > 0 && c.size[i] < q.MinSize || q.MaxSize > 0 && c.size[i] > q.MaxSize ||
+						q.From > 0 && c.mtime[i] < q.From || q.To > 0 && c.mtime[i] > q.To {
 						return
 					}
 					for _, term := range terms[min(1, len(terms)):] {

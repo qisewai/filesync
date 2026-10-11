@@ -413,6 +413,18 @@ func (s *Server) file(w http.ResponseWriter, r *http.Request) {
 	json.NewEncoder(w).Encode(map[string]any{"path": path.Join(q.Get("path"), q.Get("name")), "size": n})
 }
 
+// categories are the kinds of files the search filters by, as fileindex
+// has them, in part.
+var categories = map[string][]string{
+	"image":   {"jpg", "jpeg", "png", "gif", "webp"},
+	"video":   {"mp4", "mkv", "mov"},
+	"audio":   {"mp3", "flac", "wav"},
+	"doc":     {"pdf", "doc", "docx", "txt", "md"},
+	"archive": {"zip", "rar", "7z", "tar", "gz"},
+	"disk":    {"iso", "img", "vmdk", "qcow2"},
+	"code":    {"go", "py", "js", "ts"},
+}
+
 func (s *Server) search(w http.ResponseWriter, r *http.Request) {
 	v := r.URL.Query()
 	q := strings.ToLower(v.Get("q"))
@@ -421,6 +433,33 @@ func (s *Server) search(w http.ResponseWriter, r *http.Request) {
 		roots = []int64{id}
 	}
 	below := strings.Trim(v.Get("dir"), "/")
+	exts := map[string]bool{}
+	for _, e := range strings.Split(v.Get("ext"), ",") {
+		if e != "" {
+			exts[strings.ToLower(e)] = true
+		}
+	}
+	for _, e := range categories[v.Get("cat")] {
+		exts[e] = true
+	}
+	bound := func(name string) int64 {
+		n, _ := strconv.ParseInt(v.Get(name), 10, 64)
+		return n
+	}
+	minSize, maxSize, since, until := bound("min"), bound("max"), bound("from"), bound("to")
+	keep := func(e Entry) bool {
+		switch {
+		case v.Get("type") == "file" && e.IsDir, v.Get("type") == "dir" && !e.IsDir:
+			return false
+		case len(exts) > 0 && !exts[e.Ext]:
+			return false
+		case minSize > 0 && e.Size < minSize, maxSize > 0 && e.Size > maxSize:
+			return false
+		case since > 0 && e.MTime < since, until > 0 && e.MTime > until:
+			return false
+		}
+		return true
+	}
 	items := []Entry{}
 	for _, id := range roots {
 		dir, _ := s.rootDir(strconv.FormatInt(id, 10))
@@ -434,7 +473,9 @@ func (s *Server) search(w http.ResponseWriter, r *http.Request) {
 			if below != "" && !strings.HasPrefix(rel, below+"/") {
 				return nil
 			}
-			items = append(items, s.entry(id, rel, info))
+			if e := s.entry(id, rel, info); keep(e) {
+				items = append(items, e)
+			}
 			return nil
 		})
 	}

@@ -62,6 +62,10 @@ func TestScanSearchScopesAndFilters(t *testing.T) {
 	writeFile(t, root, "文档/node_modules/ignored.js", "excluded")
 	writeFile(t, root, "文档/skip.tmp", "excluded")
 	writeFile(t, root, "系统.GHO", "disk")
+	old := time.Date(2020, 5, 1, 0, 0, 0, 0, time.UTC)
+	if err := os.Chtimes(filepath.Join(root, "图片", "报告.jpg"), old, old); err != nil {
+		t.Fatal(err)
+	}
 	x := New()
 	opts := ScanOptions{Roots: []string{filepath.Join(root, "文档"), root, root}, Excludes: []string{".cache/", "node_modules/", "*.tmp"}}
 	p := scan(t, x, opts)
@@ -85,6 +89,10 @@ func TestScanSearchScopesAndFilters(t *testing.T) {
 		{Query{Category: "disk"}, 1},
 		{Query{Category: "dir"}, 2},
 		{Query{Category: "file"}, 5},
+		{Query{Text: "报告", MinSize: 4}, 1},
+		{Query{Text: "报告", MaxSize: 3}, 2},
+		{Query{Text: "报告", From: old.Add(24 * time.Hour).Unix()}, 2},
+		{Query{Text: "报告", To: old.Add(24 * time.Hour).Unix()}, 1},
 		{Query{Text: "istanbul"}, 1},
 		{Query{Text: "文档"}, 1}, // names, not full paths
 		{Query{Text: "ignored"}, 0},

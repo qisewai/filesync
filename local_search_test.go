@@ -95,7 +95,7 @@ func TestLocalSearchManualWorkflow(t *testing.T) {
 		t.Fatalf("total %d, index %+v", b.total, m.status)
 	}
 	h.captureLocal("search")
-	h.replaceField("本机扩展名", "PDF")
+	h.replaceField("扩展名", "PDF")
 	if b.total != 2 || b.items[0].Name != "项目 报告2.pdf" {
 		t.Fatalf("filter %+v", b.items)
 	}
@@ -198,8 +198,8 @@ func TestLocalSearchPagesAndGlobalSort(t *testing.T) {
 	if b.items[0].Size != n || b.items[0].Name != "match-0000.txt" {
 		t.Fatal("descending global order")
 	}
-	b.scope = "当前目录及子目录"
-	b.category = "文档"
+	b.here = true
+	b.filter.kind = "文档"
 	h.a.queueLocalSearch(0)
 	h.settle()
 	if b.total != n {

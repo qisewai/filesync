@@ -64,6 +64,13 @@ type app struct {
 	// of the place it shows (see nav.go).
 	nav      *ui.Router
 	navShown string
+	// gsearch is the search of every place; searchFocus the field of the
+	// toolbar, which focusSearch gives the keyboard in the next frame, and
+	// searchTyping says has it.
+	gsearch      *globalSearch
+	searchFocus  ui.Handle
+	focusSearch  bool
+	searchTyping bool
 	// sidebarW is the sidebar's width; sidebarMoved says it was dragged
 	// since the settings were saved.
 	sidebarW     float32

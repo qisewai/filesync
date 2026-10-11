@@ -69,12 +69,17 @@ func TestDeleteForever(t *testing.T) {
 		t.Fatal("Enter deleted it:", err)
 	}
 	// Typing the search, Delete deletes text, not files.
-	h.click("搜索")
+	h.click("搜索文件")
 	h.tt.Type("临")
 	h.tt.Key(0, ui.KeyDelete)
 	if h.a.br.toDelete != nil {
 		t.Fatal("Delete in the search asked to delete files")
 	}
+	// The search, as typed, shows its results after a moment; Escape goes
+	// back to the folder.
+	h.settle()
+	h.tt.Key(0, ui.KeyEscape)
+	h.settle()
 	// Delete asks to move it to the trash, which the status tells.
 	h.clickPage("临时.txt")
 	h.tt.Key(0, ui.KeyDelete)

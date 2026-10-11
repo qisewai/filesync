@@ -187,6 +187,26 @@ type Store struct {
 	// in the tray.
 	QuitOnClose bool
 	LocalIndex  *LocalIndexSettings
+	// RecentSearches are the searches made last, the latest first.
+	RecentSearches []string
+}
+
+// maxRecentSearches is how many searches RecentSearches keeps.
+const maxRecentSearches = 8
+
+// AddRecentSearch puts a search first among the recent ones, once.
+func (s *Store) AddRecentSearch(q string) {
+	q = strings.TrimSpace(q)
+	if q == "" {
+		return
+	}
+	kept := []string{q}
+	for _, r := range s.RecentSearches {
+		if r != q && len(kept) < maxRecentSearches {
+			kept = append(kept, r)
+		}
+	}
+	s.RecentSearches = kept
 }
 
 // LocalIndexSettings persists scan scopes, not search data. Scans are manual.
@@ -219,6 +239,7 @@ type fileData struct {
 	SidebarWidth float32             `json:"sidebarWidth,omitempty"`
 	QuitOnClose  bool                `json:"quitOnClose,omitempty"`
 	LocalIndex   *LocalIndexSettings `json:"localIndex,omitempty"`
+	Recent       []string            `json:"recentSearches,omitempty"`
 }
 
 // Load reads the store in dir; a directory without it has nothing.
@@ -238,6 +259,7 @@ func Load(dir string) (*Store, error) {
 	s.Servers = data.Servers
 	s.SidebarWidth, s.QuitOnClose = data.SidebarWidth, data.QuitOnClose
 	s.LocalIndex = data.LocalIndex
+	s.RecentSearches = data.Recent
 	addrs := make([]string, 0, len(data.Sessions))
 	for addr := range data.Sessions {
 		addrs = append(addrs, addr)
@@ -264,7 +286,7 @@ func (s *Store) Save() error {
 	if err := os.MkdirAll(s.Dir, 0o755); err != nil {
 		return err
 	}
-	data := fileData{Servers: s.Servers, Tasks: s.Tasks, SidebarWidth: s.SidebarWidth, QuitOnClose: s.QuitOnClose, LocalIndex: s.LocalIndex}
+	data := fileData{Servers: s.Servers, Tasks: s.Tasks, SidebarWidth: s.SidebarWidth, QuitOnClose: s.QuitOnClose, LocalIndex: s.LocalIndex, Recent: s.RecentSearches}
 	if data.Servers == nil {
 		data.Servers = []*Server{}
 	}

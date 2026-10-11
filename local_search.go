@@ -231,11 +231,10 @@ func (a *app) cancelLocalSearch() {
 func (a *app) localQuery() localindex.Query {
 	b := a.local
 	q := localindex.Query{Text: b.query, Hidden: b.hidden, Desc: b.sort.by.Descending}
-	if b.scope == "当前目录及子目录" {
+	if b.here {
 		q.Dir = b.dir
 	}
-	q.Exts = strings.Fields(strings.NewReplacer(",", " ", "，", " ", ";", " ").Replace(b.extensions))
-	q.Category = localCategoryKeys[b.category]
+	b.filter.local(&q)
 	switch b.sort.by.Column {
 	case colSize:
 		q.Sort = "size"
@@ -338,79 +337,51 @@ func (a *app) loadMoreLocal() {
 	}()
 }
 
-var (
-	localCategories   = []string{"全部类型", "文件夹", "文件", "图片", "视频", "音频", "文档", "压缩文件", "磁盘镜像", "代码", "其他"}
-	localCategoryKeys = map[string]string{"全部类型": "", "文件夹": "dir", "文件": "file", "图片": "image", "视频": "video", "音频": "audio", "文档": "doc", "压缩文件": "archive", "磁盘镜像": "disk", "代码": "code", "其他": "other"}
-	// localScopes are the values of localBrowser.scope, as the segments
-	// show them.
-	localScopes = []string{"全部索引", "当前目录及子目录"}
-)
-
-// filtered reports whether the search asks for some type or extension,
-// which searches with no words too.
-func (b *localBrowser) filtered() bool {
-	return b.category != localCategories[0] || strings.TrimSpace(b.extensions) != ""
-}
-
 // localSearchField searches the index as one types; cleared, with its
 // button or Escape, it goes back to the directory. Enter, without words,
-// lists what the filters ask for.
+// lists what the filters ask for. Its chip chooses all the index, or the
+// folder shown, or every place.
 func (a *app) localSearchField(c *ui.Context) {
-	b, t := a.local, c.Theme()
-	clear := func() {
+	b := a.local
+	scope := "本机"
+	if b.here {
+		scope = "此文件夹"
+	}
+	changed, submitted, cleared := a.searchBox(c, "local-search", "本机搜索", &b.query, scope, "搜索本机文件", func(m *ui.Menu) {
+		if m.Item("本机（全部索引）").Checked(!b.here).Chosen() && b.here {
+			b.here = false
+			a.requeryLocal()
+		}
+		if m.Item("当前文件夹").Checked(b.here).Chosen() && !b.here {
+			b.here = true
+			a.requeryLocal()
+		}
+		m.Separator()
+		if m.Item("全部位置").Chosen() {
+			q := b.query
+			a.openSearch(q)
+			a.gsearch.filter = b.filter
+		}
+	})
+	b.searching = a.searchTyping
+	empty := strings.TrimSpace(b.query) == ""
+	switch {
+	case cleared, changed && empty:
 		if b.results {
 			a.openLocal(b.dir)
 		}
-		b.query = ""
-	}
-	var in ui.Element
-	box := ui.Row(c.Key("local-search-box")).Width(280).Shrink(1).MinWidth(160).AlignItems(ui.Center).Gap(6).
-		Padding(5, 6, 5, 10).Radius(t.Radius).Background(t.Surface).Border(1, t.Border).Cursor(ui.CursorText)
-	box.Children(func() {
-		ui.Icon(c, iconSearch).FontSize(14).TextColor(t.TextMuted)
-		in = ui.TextInputBase(c.Key("local-search"), &b.query).Label("本机搜索").Placeholder("搜索本机文件").Grow(1).Shrink(1).MinWidth(0)
-		if b.query != "" {
-			ui.ButtonBase(c.Key("clear-local-search")).Size(18, 18).Radius(9).Background(t.TextMuted.Alpha(0.3)).
-				Label("清除搜索").Tooltip("清除搜索（Esc）").OnClick(clear).Children(func() {
-				ui.Icon(c, iconClose).FontSize(10).TextColor(t.Background)
-			})
-		} else {
-			ui.Row(c).Size(18, 18)
-		}
-	})
-	if in.Focused() {
-		box.BorderColor(t.Accent)
-	}
-	if box.Clicked() {
-		in.Focus()
-	}
-	// Each reports once.
-	changed, submitted, escape := in.Changed(), in.Submitted(), in.Shortcut(0, ui.KeyEscape)
-	b.searching = in.Focused()
-	empty := strings.TrimSpace(b.query) == ""
-	switch {
-	case escape && b.query != "", changed && empty:
-		clear()
 	case changed:
 		a.queueLocalSearch(100 * time.Millisecond)
-	case submitted && (!empty || b.filtered()):
+	case submitted && (!empty || b.filter.active()):
+		a.remember(b.query)
 		a.queueLocalSearch(0)
 	}
 }
 
-// localFilters narrow the results: where, of which type, which extensions.
-func (a *app) localFilters(c *ui.Context) {
-	b := a.local
-	scope := max(slices.Index(localScopes, b.scope), 0)
-	if ui.Segmented(c.Key("local-scope"), &scope, "全部索引", "当前目录").Label("本机搜索范围").Tooltip("当前目录：" + b.dir).Changed() {
-		b.scope = localScopes[scope]
+// requeryLocal searches again, as the scope changed, when it searches.
+func (a *app) requeryLocal() {
+	if b := a.local; b.results || strings.TrimSpace(b.query) != "" {
 		a.queueLocalSearch(0)
-	}
-	if ui.Select(c.Key("local-category"), &b.category, localCategories).MinWidth(0).Width(106).Label("本机文件类型").Changed() {
-		a.queueLocalSearch(0)
-	}
-	if ui.TextInput(c.Key("local-extensions"), &b.extensions).Width(72).Label("本机扩展名").Placeholder("扩展名").Tooltip("多个扩展名用空格分隔，例如 pdf docx").Changed() {
-		a.queueLocalSearch(100 * time.Millisecond)
 	}
 }
 

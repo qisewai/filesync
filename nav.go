@@ -20,6 +20,7 @@ import (
 //	/                          nothing chosen
 //	/local?dir=<dir>           a directory of this computer
 //	/nas/<server>/<root>?path= a directory of a root of a server
+//	/search?q=<query>          the search of every place
 //	/backup                    the backup tasks
 //	/admin/<server>/<tab>      the management of a server
 //	/trash/<server>            the trash of a server
@@ -32,6 +33,8 @@ func (a *app) location() string {
 	switch {
 	case a.place == "backup":
 		return "/backup"
+	case a.place == "search" && a.gsearch != nil:
+		return "/search?q=" + url.QueryEscape(a.gsearch.query)
 	case a.place == localPlace && a.local != nil:
 		return "/local?dir=" + url.QueryEscape(a.local.dir)
 	case a.admin != nil && a.place == adminPlace(a.admin.server, a.admin.tab):
@@ -59,6 +62,8 @@ func (a *app) goLocation(loc string) {
 	switch {
 	case parts[0] == "backup":
 		a.place = "backup"
+	case parts[0] == "search":
+		a.openSearch(q.Get("q"))
 	case parts[0] == "local":
 		dir := q.Get("dir")
 		if dir == "" || !filepath.IsAbs(dir) {
@@ -96,7 +101,9 @@ func (a *app) recordHistory() {
 	if loc == a.navShown {
 		return
 	}
-	if a.nav.Location() == "/" && !a.nav.CanGoBack() {
+	// The search as it is typed is one place.
+	searching := strings.HasPrefix(loc, "/search") && strings.HasPrefix(a.navShown, "/search")
+	if a.nav.Location() == "/" && !a.nav.CanGoBack() || searching {
 		a.nav.Replace(loc)
 	} else {
 		a.nav.Push(loc)
@@ -116,6 +123,8 @@ func (a *app) pageTitle() string {
 	switch {
 	case a.place == "backup":
 		return "备份任务"
+	case a.place == "search":
+		return "搜索"
 	case a.place == localPlace && a.local != nil:
 		return "本机 · " + filepath.Base(a.local.dir)
 	case a.admin != nil && a.place == adminPlace(a.admin.server, a.admin.tab):
@@ -130,7 +139,8 @@ func (a *app) pageTitle() string {
 
 // onLocal and onRoot report whether the page shown is a directory of this
 // computer, or of a server.
-func (a *app) onLocal() bool { return a.place == localPlace && a.local != nil }
+func (a *app) onLocal() bool  { return a.place == localPlace && a.local != nil }
+func (a *app) onSearch() bool { return a.place == "search" && a.gsearch != nil }
 func (a *app) onRoot() bool {
 	return a.br != nil && a.place == rootPlace(a.br.server, a.br.root.ID)
 }
@@ -158,10 +168,26 @@ func (a *app) topBar(c *ui.Context) {
 			a.localHeader(c)
 		case a.onRoot():
 			a.browserHeader(c)
+		case a.onSearch():
+			a.searchHeader(c)
 		default:
 			ui.Text(c, a.pageTitle()).FontSize(15).Bold().SingleLine().Grow(1).Shrink(1).Padding(0, 6)
+			a.anywhereSearch(c)
 		}
 	})
+}
+
+// anywhereSearch is the field of the toolbar of the pages without files,
+// which searches every place.
+func (a *app) anywhereSearch(c *ui.Context) {
+	q := ""
+	changed, submitted, _ := a.searchBox(c, "anywhere-search", "搜索", &q, "全部位置", "搜索本机和所有服务器", func(m *ui.Menu) {
+		m.Item("全部位置").Checked(true)
+	})
+	if changed || submitted {
+		a.openSearch(q)
+		a.focusSearch = true
+	}
 }
 
 // upward goes to the folder holding the one shown, nil where there is
@@ -199,7 +225,8 @@ func pathBase(p string) string {
 func (a *app) statusBar(c *ui.Context) {
 	t := c.Theme()
 	onTrash := a.recycle != nil && a.place == trashPlace(a.recycle.server)
-	if !a.onLocal() && !a.onRoot() && !onTrash && len(a.transfers) == 0 {
+	searched := a.onSearch() && len(a.gsearch.groups) > 0
+	if !a.onLocal() && !a.onRoot() && !onTrash && !searched && len(a.transfers) == 0 {
 		a.showTransfers = false
 		return
 	}
@@ -211,6 +238,8 @@ func (a *app) statusBar(c *ui.Context) {
 			a.browserStatus(c)
 		case onTrash:
 			a.trashStatus(c)
+		case a.onSearch():
+			a.searchStatus(c)
 		}
 		ui.Spacer(c)
 		a.transferIndicator(c)

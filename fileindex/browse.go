@@ -69,6 +69,14 @@ type SearchOptions struct {
 	Desc bool
 	// Page counts from 1, of Size entries, at most SearchPageSize.
 	Page, Size int
+	// What the results are: Type "file" or "dir", "" for both; Category a
+	// kind of file, as "image" or "doc"; Exts extensions, without dots.
+	Type, Category string
+	Exts           []string
+	// MinSize and MaxSize bound the size, in bytes, and From and To the
+	// time of the last change, in Unix seconds; 0 bounds nothing.
+	MinSize, MaxSize int64
+	From, To         int64
 }
 
 // SearchPageSize is the most entries a page of a search may have.
@@ -93,6 +101,16 @@ func (c *Client) Search(ctx context.Context, q string, o SearchOptions) (items [
 	}
 	if o.Desc {
 		v.Set("desc", "1")
+	}
+	for name, value := range map[string]string{"type": o.Type, "cat": o.Category, "ext": strings.Join(o.Exts, ",")} {
+		if value != "" {
+			v.Set(name, value)
+		}
+	}
+	for name, n := range map[string]int64{"min": o.MinSize, "max": o.MaxSize, "from": o.From, "to": o.To} {
+		if n > 0 {
+			v.Set(name, strconv.FormatInt(n, 10))
+		}
 	}
 	var res struct {
 		Items []Entry `json:"items"`

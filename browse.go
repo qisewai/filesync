@@ -35,10 +35,13 @@ type browser struct {
 	live bool // list from the disk rather than the index
 	grid bool
 
-	query   string
-	typing  bool // the search has the keyboard focus
-	results bool // items are search results
-	total   int  // of the results, which may be more than shown
+	query    string
+	filter   searchFilter
+	here     bool        // the search is of the folder shown, not of all the server
+	debounce *time.Timer // the search as typed, after a moment
+	typing   bool        // the search has the keyboard focus
+	results  bool        // items are search results
+	total    int         // of the results, which may be more than shown
 	// page is how many pages of the results are shown; more is set while
 	// the next loads, which moreCancel stops.
 	page       int
@@ -57,6 +60,7 @@ type browser struct {
 	newName  string
 	renaming bool
 	renameOf string
+	renameIn int64 // the root of renameOf
 	renameTo string
 	// toDelete are the entries the delete dialog asks about, nil while
 	// it is closed; forever asks to delete them, not to the trash.
@@ -124,6 +128,13 @@ func (a *app) browse(p string, choose ...string) {
 		b.sel.Clear()
 		b.cursor = -1
 	}
+	if b.debounce != nil {
+		b.debounce.Stop()
+		b.debounce = nil
+	}
+	if b.results {
+		b.filter = searchFilter{}
+	}
 	b.path, b.results, b.query = p, false, ""
 	a.revealDirectory(b)
 	root, live := b.root.ID, b.live
@@ -131,6 +142,22 @@ func (a *app) browse(p string, choose ...string) {
 		items, err := c.List(ctx, root, p, live)
 		return items, len(items), err
 	}, choose...)
+}
+
+// browseIn shows a directory of a root of the server shown: of the root
+// shown, or of another, which a search of all the server found.
+func (a *app) browseIn(root int64, p string, choose ...string) {
+	b := a.br
+	if root == 0 || root == b.root.ID {
+		a.browse(p, choose...)
+		return
+	}
+	for _, r := range a.roots[b.server] {
+		if r.ID == root {
+			a.showDirectory(b.server, r, p, choose...)
+			return
+		}
+	}
 }
 
 // load replaces the items with what fetch gets, off the main thread.
@@ -245,7 +272,11 @@ func (a *app) reloadKeeping() {
 func (a *app) search(q string) {
 	b := a.br
 	q = strings.TrimSpace(q)
-	if q == "" {
+	if b.debounce != nil {
+		b.debounce.Stop()
+		b.debounce = nil
+	}
+	if q == "" && !b.filter.active() {
 		a.browse(b.path)
 		return
 	}
@@ -263,7 +294,11 @@ func (a *app) search(q string) {
 // order of the table.
 func (a *app) searchOptions(page int) fileindex.SearchOptions {
 	b := a.br
-	o := fileindex.SearchOptions{Root: b.root.ID, Dir: b.path, Desc: b.sort.by.Descending, Page: page, Size: fileindex.SearchPageSize}
+	o := fileindex.SearchOptions{Desc: b.sort.by.Descending, Page: page, Size: fileindex.SearchPageSize}
+	if b.here {
+		o.Root, o.Dir = b.root.ID, b.path
+	}
+	b.filter.nas(&o)
 	switch b.sort.by.Column {
 	case colSize:
 		o.Sort = "size"
@@ -344,6 +379,13 @@ func paths(es []fileindex.Entry) []string {
 	return out
 }
 
+// researchNAS searches again, as the scope changed, when it searches.
+func (a *app) researchNAS() {
+	if b := a.br; b.results || strings.TrimSpace(b.query) != "" {
+		a.search(b.query)
+	}
+}
+
 // browserHeader is, in the toolbar, where the page is, and the search.
 func (a *app) browserHeader(c *ui.Context) {
 	b := a.br
@@ -365,14 +407,54 @@ func (a *app) browserHeader(c *ui.Context) {
 			a.browse(b.path)
 		}
 	}
-	if b.root.ReadOnly {
-		ui.Badge(c, "只读")
+	server := "服务器"
+	if sv := a.store.Server(b.server); sv != nil {
+		server = sv.Title()
 	}
-	search := ui.TextInput(c.Key("search"), &b.query).Placeholder("在这里搜索…").Label("搜索").Width(220)
-	if search.Submitted() {
+	scope := server
+	if b.here {
+		scope = "此文件夹"
+	}
+	changed, submitted, cleared := a.searchBox(c, "search", "搜索文件", &b.query, scope, "搜索"+server+"上的文件", func(m *ui.Menu) {
+		if m.Item(server+"（全部目录）").Checked(!b.here).Chosen() && b.here {
+			b.here = false
+			a.researchNAS()
+		}
+		if m.Item("当前文件夹").Checked(b.here).Chosen() && !b.here {
+			b.here = true
+			a.researchNAS()
+		}
+		m.Separator()
+		if m.Item("全部位置").Chosen() {
+			q, f := b.query, b.filter
+			a.openSearch(q)
+			a.gsearch.filter = f
+		}
+	})
+	b.typing = a.searchTyping
+	empty := strings.TrimSpace(b.query) == ""
+	switch {
+	case cleared, changed && empty:
+		if b.results {
+			a.browse(b.path)
+		}
+	case changed:
+		// As typed, after a moment: the server answers each.
+		if b.debounce != nil {
+			b.debounce.Stop()
+		}
+		b.debounce = time.AfterFunc(300*time.Millisecond, func() {
+			a.post(func() {
+				if !a.closed && a.br == b && b.debounce != nil {
+					b.debounce = nil
+					a.search(b.query)
+				}
+			})
+		})
+	case submitted && (!empty || b.filter.active()):
+		a.remember(b.query)
 		a.search(b.query)
 	}
-	b.typing = search.Focused()
 }
 
 // browserView is the page of a root: its commands, and its files.
@@ -388,14 +470,20 @@ func (a *app) browserView(c *ui.Context) {
 		es = nil
 	}
 	n := len(es)
+	// A selection of the results of all the server may span roots, which
+	// the operations do not.
+	oneRoot := true
+	for _, e := range es {
+		oneRoot = oneRoot && e.Root == es[0].Root
+	}
 	// Delete asks to move the files chosen to the trash, Shift+Delete to
 	// delete them for good, F2 renames, Escape lets go of them; not while
 	// typing the search. (Dialogs over the page take the keys themselves.)
 	if !typing && b.toDelete == nil {
 		switch {
-		case n > 0 && writable && c.Shortcut(ui.Shift, ui.KeyDelete):
+		case n > 0 && writable && oneRoot && c.Shortcut(ui.Shift, ui.KeyDelete):
 			a.askDelete(es, true)
-		case n > 0 && writable && c.Shortcut(0, ui.KeyDelete):
+		case n > 0 && writable && oneRoot && c.Shortcut(0, ui.KeyDelete):
 			a.askDelete(es, false)
 		case n == 1 && writable && c.Shortcut(0, ui.KeyF2):
 			a.startRename(es[0])
@@ -407,6 +495,26 @@ func (a *app) browserView(c *ui.Context) {
 		a.refresh()
 	}
 	commandBar(c, n, filesSize(es), func() { b.sel.Clear() }, func() {
+		if b.results {
+			filterBar(c, "nas", &b.filter, func(wait bool) {
+				if wait {
+					if b.debounce != nil {
+						b.debounce.Stop()
+					}
+					b.debounce = time.AfterFunc(300*time.Millisecond, func() {
+						a.post(func() {
+							if !a.closed && a.br == b && b.debounce != nil {
+								b.debounce = nil
+								a.search(b.query)
+							}
+						})
+					})
+				} else {
+					a.search(b.query)
+				}
+			})
+			return
+		}
 		toolButton(c, "new-folder", iconNewDir, "新建文件夹", "", !writable || b.results, func() {
 			b.naming, b.newName = true, ""
 		})
@@ -423,13 +531,19 @@ func (a *app) browserView(c *ui.Context) {
 			ui.Badge(c, "只读")
 		}
 	}, func() {
-		toolButton(c, "download", iconSave, "下载…", "下载到本机", false, func() { a.download(es) })
-		toolButton(c, "copy-to", iconCopy, "复制到…", "复制到这台服务器的其他位置", false, func() { a.transferTo(false, es) })
-		toolButton(c, "move-to", iconMove, "移动到…", "", !writable, func() { a.transferTo(true, es) })
+		tip := func(s string) string {
+			if !oneRoot {
+				return "选中的项来自不同的索引目录，请分别操作"
+			}
+			return s
+		}
+		toolButton(c, "download", iconSave, "下载…", tip("下载到本机"), !oneRoot, func() { a.download(es) })
+		toolButton(c, "copy-to", iconCopy, "复制到…", tip("复制到这台服务器的其他位置"), !oneRoot, func() { a.transferTo(false, es) })
+		toolButton(c, "move-to", iconMove, "移动到…", tip(""), !writable || !oneRoot, func() { a.transferTo(true, es) })
 		if n == 1 {
 			toolButton(c, "rename", iconRename, "重命名", "重命名（F2）", !writable, func() { a.startRename(es[0]) })
 		}
-		toolButton(c, "delete", iconTrash, "删除", "移到回收站（Delete），或彻底删除（Shift+Delete）", !writable, func() { a.askDelete(es, false) })
+		toolButton(c, "delete", iconTrash, "删除", tip("移到回收站（Delete），或彻底删除（Shift+Delete）"), !writable || !oneRoot, func() { a.askDelete(es, false) })
 	}, func() {
 		viewToggle(c, "view-toggle", &b.grid)
 		moreMenu(c, "more", func(m *ui.Menu) {
@@ -452,7 +566,7 @@ func (a *app) browserView(c *ui.Context) {
 		key: "files", label: "文件", items: b.items, sel: &b.sel, cursor: &b.cursor,
 		list: &b.list, gridSt: &b.gridState, grid: b.grid, sort: &b.sort,
 		loading: b.loading, results: b.results,
-		where: func(e fileindex.Entry) string { return path.Join(b.root.Name, e.Parent) },
+		where: func(e fileindex.Entry) string { return path.Join(e.RootName, e.Parent) },
 		thumb: a.thumb,
 		open:  a.openEntry,
 		resort: func() {
@@ -658,7 +772,7 @@ func (a *app) thumbExt(ext string) bool {
 // through the local proxy to a system application.
 func (a *app) openEntry(e fileindex.Entry) {
 	if e.IsDir {
-		a.browse(e.Path)
+		a.browseIn(e.Root, e.Path)
 		return
 	}
 	c, sv := a.brClient()
@@ -908,7 +1022,7 @@ func (a *app) transferTo(move bool, es []fileindex.Entry) {
 
 func (a *app) startRename(e fileindex.Entry) {
 	b := a.br
-	b.renaming, b.renameOf, b.renameTo = true, e.Path, e.Name
+	b.renaming, b.renameOf, b.renameIn, b.renameTo = true, e.Path, e.Root, e.Name
 }
 
 // ask asks to confirm an action, which runs if confirmed.
@@ -1046,7 +1160,7 @@ func (a *app) browserDialogs(c *ui.Context) {
 				ok := name != "" && name != path.Base(b.renameOf)
 				if ui.PrimaryButton(c, "重命名").Disabled(!ok).Clicked() || done && ok {
 					b.renaming = false
-					root, p := b.root.ID, b.renameOf
+					root, p := b.renameIn, b.renameOf
 					a.op("正在重命名为“"+name+"”…", func(ctx context.Context, c *fileindex.Client) error { return c.Rename(ctx, root, p, name) }, name)
 				}
 			})

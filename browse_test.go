@@ -62,7 +62,7 @@ func TestNativeBrowserTreeSearchAndFileOperations(t *testing.T) {
 	h.tt.Key(0, ui.KeyEnter)
 	h.settle()
 	h.want("计划.txt")
-	h.typeInto("搜索", "计划")
+	h.typeInto("搜索文件", "计划")
 	h.tt.Key(0, ui.KeyEnter)
 	h.settle()
 	if !h.a.br.results || len(h.a.br.items) != 1 {

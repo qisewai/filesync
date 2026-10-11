@@ -19,6 +19,7 @@ func (a *app) view(c *ui.Context) {
 		c.SetTheme(&t)
 	}
 	a.followHistory()
+	a.searchShortcuts(c)
 	// The sidebar, then the page under its toolbar: the divider between
 	// them drags.
 	split := ui.Split(c.Key("main-split"), &a.sidebarW, func() { a.sidebar(c) }, func() {
@@ -71,6 +72,8 @@ func (a *app) page(c *ui.Context) {
 		a.adminView(c)
 	case a.place == "backup":
 		a.backupPage(c)
+	case a.onSearch():
+		a.searchPage(c)
 	case a.onLocal():
 		a.localView(c)
 	case a.recycle != nil && a.place == trashPlace(a.recycle.server):
@@ -155,6 +158,14 @@ func (a *app) sidebar(c *ui.Context) {
 	ui.Column(c).Fill().Background(t.Surface).Children(func() {
 		ui.Scroll(c).Grow(1).MinHeight(0).Padding(10, 8).Children(func() {
 			ui.Tree(c.Key("servers-tree"), func() {
+				a.navItem(c, "search", iconSearch, "搜索", func() {
+					query := ""
+					if a.gsearch != nil {
+						query = a.gsearch.query
+					}
+					a.openSearch(query)
+					a.focusSearch = true
+				})
 				local := ui.TreeItem(c.Key("local"), "", a.sectionOpen("local"), func() { a.localItems(c) })
 				local.Children(func() { labeled(c, iconLaptop, "本机", t.Text) }).Label("本机")
 				for _, sv := range a.store.Servers {

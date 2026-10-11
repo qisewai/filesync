@@ -23,20 +23,22 @@ const localPlace = "local"
 // localBrowser shows a directory of this computer, to back up what is
 // chosen in it.
 type localBrowser struct {
-	dir                                string
-	items                              []fileindex.Entry // Path is the full path
-	loading, opening                   bool
-	err                                string
-	gen                                int
-	hidden                             bool // shows the files whose names start with a dot
-	query, scope, category, extensions string
-	results, queryPending, more        bool
-	awaitTop                           bool // wait for the new result's scroll request to commit
-	searching                          bool // the search has the keyboard focus
-	total                              int
-	matched                            *localindex.Results
-	searchCancel                       context.CancelFunc
-	debounce                           *time.Timer
+	dir                         string
+	items                       []fileindex.Entry // Path is the full path
+	loading, opening            bool
+	err                         string
+	gen                         int
+	hidden                      bool // shows the files whose names start with a dot
+	query                       string
+	filter                      searchFilter
+	here                        bool // searches the folder shown, not all the index
+	results, queryPending, more bool
+	awaitTop                    bool // wait for the new result's scroll request to commit
+	searching                   bool // the search has the keyboard focus
+	total                       int
+	matched                     *localindex.Results
+	searchCancel                context.CancelFunc
+	debounce                    *time.Timer
 
 	grid        bool
 	gridSt      ui.GridState
@@ -178,7 +180,6 @@ func (a *app) openLocal(dir string, choose ...string) {
 		b.list.Selected = &b.cursor
 		b.sort.by = ui.SortOrder{Column: colName}
 		b.list.Sort = &b.sort.by
-		b.scope, b.category = "全部索引", "全部类型"
 		b.gridSt.Key = b.list.Key
 		b.gridSt.Selection = &b.sel
 		b.gridSt.Selected = &b.cursor
@@ -191,7 +192,7 @@ func (a *app) openLocal(dir string, choose ...string) {
 	a.ensureLocalIndex()
 	a.cancelLocalSearch()
 	b.results, b.query, b.matched = false, "", nil
-	b.category, b.extensions = "全部类型", ""
+	b.filter = searchFilter{}
 	a.place = localPlace
 	if b.dir != dir {
 		b.items = nil
@@ -321,7 +322,13 @@ func (a *app) localView(c *ui.Context) {
 	}
 	commandBar(c, n, filesSize(es), func() { b.sel.Clear() }, func() {
 		if b.results {
-			a.localFilters(c)
+			filterBar(c, "local", &b.filter, func(wait bool) {
+				if wait {
+					a.queueLocalSearch(150 * time.Millisecond)
+				} else {
+					a.queueLocalSearch(0)
+				}
+			})
 			return
 		}
 		backup := ui.PrimaryButton(c, "创建备份任务…").Disabled(busy || b.err != "").Tooltip("备份当前文件夹；也可以先选中要备份的文件夹或文件")
