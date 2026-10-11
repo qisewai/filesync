@@ -55,7 +55,10 @@ func (a *app) serversCard(c *ui.Context) {
 				state, color := a.serverState(t, sv)
 				statusDot(c, color)
 				ui.Column(c).Grow(1).Shrink(1).MinWidth(0).Gap(2).Children(func() {
-					ui.Text(c, sv.Title()).SingleLine()
+					title := ui.Text(c, sv.Title()).SingleLine()
+					if a.unreachable(sv) {
+						title.TextColor(t.TextMuted)
+					}
 					detail := sv.Addr + " · " + state
 					if roots, ok := a.roots[sv.ID]; ok && sv.Token != "" && a.serverErr[sv.ID] == nil {
 						detail += fmt.Sprintf(" · %d 个索引目录", len(roots))

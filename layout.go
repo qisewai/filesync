@@ -139,10 +139,19 @@ func (a *app) sidebar(c *ui.Context) {
 					node := ui.TreeItem(c.Key("server/"+sv.ID), "", a.sectionOpen("server/"+sv.ID), func() {
 						a.serverItems(c, sv)
 					})
+					tip := sv.Addr
 					node.Children(func() {
-						labeled(c, iconServer, sv.Title(), t.Text)
+						if a.unreachable(sv) {
+							// Grayed, as what cannot be used now.
+							dim := t.TextMuted.Alpha(0.55)
+							ui.Icon(c, iconServer).FontSize(15).TextColor(dim)
+							ui.Text(c, sv.Title()).SingleLine().Grow(1).Shrink(1).MinWidth(0).TextColor(dim)
+							tip = sv.Addr + " · 无法连接，点右侧图标或右键重新连接"
+						} else {
+							labeled(c, iconServer, sv.Title(), t.Text)
+						}
 						a.serverMark(c, sv)
-					}).Label(sv.Title()).Tooltip(sv.Addr)
+					}).Label(sv.Title()).Tooltip(tip)
 					node.ContextMenu(func(m *ui.Menu) { a.serverMenu(m, sv) })
 				}
 				bk := a.navItem(c, "backup", iconBackup, "备份任务", func() { a.place = "backup" })
@@ -226,8 +235,9 @@ func (a *app) serverItems(c *ui.Context, sv *config.Server) {
 	}
 	if err := a.serverErr[sv.ID]; err != nil {
 		ui.Column(c).Padding(2, 8, 4, 28).Gap(2).Children(func() {
-			ui.Text(c, "无法连接").FontSize(12).TextColor(t.Danger)
-			ui.Text(c, connectError(err)).FontSize(11).MaxLines(3).TextColor(t.TextMuted).Tooltip(err.Error())
+			dim := t.TextMuted.Alpha(0.7)
+			ui.Text(c, "无法连接").FontSize(12).TextColor(dim)
+			ui.Text(c, connectError(err)).FontSize(11).MaxLines(3).TextColor(dim).Tooltip(err.Error())
 		})
 		return
 	}
@@ -244,6 +254,12 @@ func (a *app) serverItems(c *ui.Context, sv *config.Server) {
 		tab = a.admin.tab
 	}
 	a.navItem(c, adminPlace(sv.ID, tab), iconGear, "管理", func() { a.openAdmin(sv.ID, tab) }).Label("管理 " + sv.Title())
+}
+
+// unreachable reports whether a server could not be reached, the last
+// time it was tried.
+func (a *app) unreachable(sv *config.Server) bool {
+	return sv.Token != "" && a.rootsLoading[sv.ID] == nil && a.serverErr[sv.ID] != nil
 }
 
 // serverMark shows, beside a server in the sidebar, whether it is
