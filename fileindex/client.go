@@ -400,6 +400,20 @@ func (s *sizeTrailer) Read(p []byte) (int, error) {
 	return n, err
 }
 
+// DeleteForever deletes paths of a root, not to its trash, as a task of
+// the server.
+func (c *Client) DeleteForever(ctx context.Context, root int64, paths []string) (*Task, error) {
+	b, _ := json.Marshal(map[string]any{"root": root, "paths": paths, "permanent": true})
+	var out struct {
+		Task *Task `json:"task"`
+	}
+	err := c.do(ctx, "POST", "/api/fs/delete", nil, strings.NewReader(string(b)), &out)
+	if err == nil && out.Task == nil {
+		err = fmt.Errorf("NAS 没有返回删除任务")
+	}
+	return out.Task, err
+}
+
 // Trash moves paths of a root to its trash, where they stay for a while.
 func (c *Client) Trash(ctx context.Context, root int64, paths []string) error {
 	b, _ := json.Marshal(map[string]any{"root": root, "paths": paths})

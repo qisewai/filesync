@@ -7,6 +7,7 @@ import (
 	"os"
 	"path"
 	"path/filepath"
+	"slices"
 	"strings"
 	"time"
 
@@ -50,12 +51,16 @@ type browser struct {
 	gridState ui.GridState
 
 	// dialogs
-	naming    bool
-	newName   string
-	renaming  bool
-	renameOf  string
-	renameTo  string
-	deleting  bool
+	naming   bool
+	newName  string
+	renaming bool
+	renameOf string
+	renameTo string
+	// toDelete are the entries the delete dialog asks about, nil while
+	// it is closed; forever asks to delete them, not to the trash.
+	toDelete  []fileindex.Entry
+	forever   bool
+	opLabel   string // what the operation under way does
 	confirm   bool
 	confirmT  string
 	confirmM  string
@@ -344,6 +349,7 @@ func (a *app) browserView(c *ui.Context) {
 	writable := !b.root.ReadOnly && !b.loading && !b.operating
 
 	// The bar: where, and the search.
+	typing := false
 	ui.Row(c).Gap(10).Children(func() {
 		crumbs := []string{b.root.Name}
 		if b.path != "" {
@@ -366,9 +372,11 @@ func (a *app) browserView(c *ui.Context) {
 		if b.root.ReadOnly {
 			ui.Badge(c, "只读")
 		}
-		if ui.TextInput(c.Key("search"), &b.query).Placeholder("在这里搜索…").Label("搜索").Width(220).Submitted() {
+		search := ui.TextInput(c.Key("search"), &b.query).Placeholder("在这里搜索…").Label("搜索").Width(220)
+		if search.Submitted() {
 			a.search(b.query)
 		}
+		typing = search.Focused()
 	})
 
 	// The actions.
@@ -377,6 +385,16 @@ func (a *app) browserView(c *ui.Context) {
 		es = nil
 	}
 	n := len(es)
+	// Delete asks to move the files chosen to the trash, Shift+Delete to
+	// delete them for good; not while typing the search, where Delete
+	// deletes text. (Dialogs over the page take the keys themselves.)
+	if n > 0 && writable && !typing && b.toDelete == nil {
+		if c.Shortcut(ui.Shift, ui.KeyDelete) {
+			a.askDelete(es, true)
+		} else if c.Shortcut(0, ui.KeyDelete) {
+			a.askDelete(es, false)
+		}
+	}
 	ui.Row(c).Gap(6).Wrap().AlignItems(ui.Center).Children(func() {
 		up := ui.MenuButton(c.Key("upload"), "上传", func(m *ui.Menu) {
 			if m.Item("上传文件…").Chosen() {
@@ -405,8 +423,8 @@ func (a *app) browserView(c *ui.Context) {
 		if ui.Button(c, "重命名").Disabled(n != 1 || !writable).Clicked() {
 			a.startRename(es[0])
 		}
-		if ui.Button(c, "删除").Disabled(n == 0 || !writable).Clicked() {
-			b.deleting = true
+		if ui.Button(c, "删除").Disabled(n == 0 || !writable).Tooltip("移到回收站，或彻底删除（Shift+Delete）").Clicked() {
+			a.askDelete(es, false)
 		}
 		ui.Spacer(c)
 		live := ui.Switch(c.Key("live"), &b.live).Label("实时").Tooltip("开启后直接读取 NAS 硬盘上的当前内容；关闭时只读索引，不唤醒休眠的硬盘")
@@ -469,6 +487,19 @@ func (a *app) browserView(c *ui.Context) {
 		}
 	}
 	ui.Row(c).Gap(10).AlignItems(ui.Center).Children(func() {
+		// What is under way, which can take a while on a large folder.
+		busy := b.opLabel
+		switch {
+		case busy != "":
+		case b.loading && b.results:
+			busy = "正在搜索…"
+		case b.loading && len(b.items) > 0:
+			busy = "正在读取…"
+		}
+		if busy != "" {
+			ui.Spinner(c).FontSize(12).Label(busy)
+			ui.Text(c, busy).FontSize(12).TextColor(t.Accent)
+		}
 		ui.Text(c, status).FontSize(12).TextColor(t.TextMuted)
 		if b.results && !b.loading && b.total > len(b.items) {
 			label := fmt.Sprintf("加载更多（还有 %s 项）", groupDigits(int64(b.total-len(b.items))))
@@ -517,8 +548,11 @@ func (a *app) entryMenu(m *ui.Menu, es []fileindex.Entry, writable bool) {
 		a.startRename(es[0])
 	}
 	m.Separator()
-	if m.Item("删除").Disabled(n == 0 || !writable).Chosen() {
-		b.deleting = true
+	if m.Item("删除…").Disabled(n == 0 || !writable).Chosen() {
+		a.askDelete(es, false)
+	}
+	if m.Item("彻底删除…").Disabled(n == 0 || !writable).Chosen() {
+		a.askDelete(es, true)
 	}
 }
 
@@ -968,7 +1002,7 @@ func (a *app) ask(title, msg, ok string, action func()) {
 }
 
 // op runs a quick operation of the server, then lists the directory again.
-func (a *app) op(fn func(ctx context.Context, c *fileindex.Client) error, choose string) {
+func (a *app) op(label string, fn func(ctx context.Context, c *fileindex.Client) error, choose string) {
 	b := a.br
 	if b.operating {
 		return
@@ -977,13 +1011,13 @@ func (a *app) op(fn func(ctx context.Context, c *fileindex.Client) error, choose
 	if c == nil {
 		return
 	}
-	b.operating = true
+	b.operating, b.opLabel = true, label
 	go func() {
 		ctx, cancel := context.WithTimeout(context.Background(), requestTimeout)
 		defer cancel()
 		err := fn(ctx, c)
 		a.post(func() {
-			b.operating = false
+			b.operating, b.opLabel = false, ""
 			if a.br != b {
 				return
 			}
@@ -1008,6 +1042,63 @@ func (a *app) op(fn func(ctx context.Context, c *fileindex.Client) error, choose
 	}()
 }
 
+// askDelete asks before deleting es, to the trash or, with forever, not.
+func (a *app) askDelete(es []fileindex.Entry, forever bool) {
+	if len(es) == 0 {
+		return
+	}
+	a.br.toDelete, a.br.forever = slices.Clone(es), forever
+}
+
+// trash moves es to the trash.
+func (a *app) trash(es []fileindex.Entry) {
+	b := a.br
+	label := fmt.Sprintf("正在把 %d 项移到回收站…", len(es))
+	if len(es) == 1 {
+		label = "正在把“" + es[0].Name + "”移到回收站…"
+	}
+	root, ps := es[0].Root, paths(es)
+	a.op(label, func(ctx context.Context, c *fileindex.Client) error { return c.Trash(ctx, root, ps) }, "")
+	b.sel.Clear()
+}
+
+// deleteForever deletes es, not to the trash, as a task of the server
+// that the transfers show.
+func (a *app) deleteForever(es []fileindex.Entry) {
+	b := a.br
+	c, _ := a.brClient()
+	if c == nil {
+		return
+	}
+	title := es[0].Name
+	if len(es) > 1 {
+		title = fmt.Sprintf("%s 等 %d 项", title, len(es))
+	}
+	tr := a.addTransfer("彻底删除", title)
+	tr.server = b.server
+	ctx, cancel := context.WithTimeout(context.Background(), requestTimeout)
+	tr.cancel = cancel
+	root, ps := es[0].Root, paths(es)
+	b.sel.Clear()
+	go func() {
+		defer cancel()
+		task, err := c.DeleteForever(ctx, root, ps)
+		a.post(func() {
+			if err != nil {
+				a.finishTransfer(tr, err, nil)
+				return
+			}
+			tr.task = task.ID
+			tr.after = func() {
+				if a.br == b {
+					a.reloadKeeping()
+				}
+			}
+			a.trackServerTask(c, tr, task)
+		})
+	}()
+}
+
 func (a *app) browserDialogs(c *ui.Context) {
 	b := a.br
 	if b.naming {
@@ -1022,7 +1113,7 @@ func (a *app) browserDialogs(c *ui.Context) {
 				if ui.PrimaryButton(c, "创建").Disabled(name == "").Clicked() || done && name != "" {
 					b.naming = false
 					root, dir := b.root.ID, b.path
-					a.op(func(ctx context.Context, c *fileindex.Client) error { return c.Mkdir(ctx, root, dir, name) }, name)
+					a.op("正在新建文件夹“"+name+"”…", func(ctx context.Context, c *fileindex.Client) error { return c.Mkdir(ctx, root, dir, name) }, name)
 				}
 			})
 		})
@@ -1040,21 +1131,58 @@ func (a *app) browserDialogs(c *ui.Context) {
 				if ui.PrimaryButton(c, "重命名").Disabled(!ok).Clicked() || done && ok {
 					b.renaming = false
 					root, p := b.root.ID, b.renameOf
-					a.op(func(ctx context.Context, c *fileindex.Client) error { return c.Rename(ctx, root, p, name) }, name)
+					a.op("正在重命名为“"+name+"”…", func(ctx context.Context, c *fileindex.Client) error { return c.Rename(ctx, root, p, name) }, name)
 				}
 			})
 		})
 	}
-	if b.deleting {
-		es := b.chosen()
-		msg := fmt.Sprintf("%d 项会移到 fileindex 的回收站，可以在左侧的回收站中恢复。", len(es))
-		title := "删除所选的项？"
+	if es := b.toDelete; es != nil {
+		open := true
+		title := fmt.Sprintf("删除所选的 %d 项？", len(es))
 		if len(es) == 1 {
 			title = "删除“" + es[0].Name + "”？"
 		}
-		if ui.AlertDialog(c, &b.deleting, title, msg, "取消", "移到回收站") == 1 {
-			root, ps := b.root.ID, paths(es)
-			a.op(func(ctx context.Context, c *fileindex.Client) error { return c.Trash(ctx, root, ps) }, "")
+		if b.forever {
+			msg := "彻底删除后无法恢复：不会进入回收站。"
+			if len(es) > 1 || es[0].IsDir {
+				msg = "文件夹里的所有内容也会一起删除。" + msg
+			}
+			// In red, the focus on Cancel: Enter deletes nothing.
+			t := c.Theme()
+			ui.Modal(c.Key("delete-forever"), &open, func() {
+				ui.Column(c).Width(340).Gap(10).Children(func() {
+					ui.Row(c).Gap(8).AlignItems(ui.Center).Children(func() {
+						ui.Icon(c, iconAlert).FontSize(18).TextColor(t.Danger)
+						ui.Text(c, title).Bold().Grow(1).Shrink(1).MaxLines(2)
+					})
+					ui.Text(c, msg).TextColor(t.TextMuted)
+					ui.Row(c).Gap(8).Justify(ui.End).Margin(6, 0, 0, 0).Children(func() {
+						if ui.Button(c, "取消").AutoFocus().Clicked() {
+							open = false
+						}
+						del := ui.PrimaryButton(c, "彻底删除").Background(t.Danger)
+						if del.Hovered() {
+							del.Background(t.Danger.Mix(ui.RGBA(0, 0, 0, 1), 0.12))
+						}
+						if del.Clicked() {
+							open = false
+							a.deleteForever(es)
+						}
+					})
+				})
+			})
+		} else {
+			msg := fmt.Sprintf("%d 项会移到 fileindex 的回收站，可以在左侧的回收站中恢复。", len(es))
+			switch ui.AlertDialog(c, &open, title, msg, "取消", "彻底删除…", "移到回收站") {
+			case 1:
+				b.forever = true
+				open = true
+			case 2:
+				a.trash(es)
+			}
+		}
+		if !open {
+			b.toDelete = nil
 		}
 	}
 	if b.confirm {

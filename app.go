@@ -75,6 +75,7 @@ type app struct {
 	br         *browser // the root shown
 	local      *localBrowser
 	localRoots []localRoot
+	netMounts  []string // where network shares are mounted
 	preview    *preview
 	proxy      *fileindex.LocalProxy
 	recycle    *recycleBrowser

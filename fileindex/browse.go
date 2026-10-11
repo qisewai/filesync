@@ -25,6 +25,9 @@ type Entry struct {
 	Size     int64  `json:"size"`
 	MTime    int64  `json:"mtime"` // unix seconds
 	Ext      string `json:"ext"`
+	// HasDirs, of a directory listed, tells whether it holds directories;
+	// nil when the server does not tell.
+	HasDirs *bool `json:"has_dirs,omitempty"`
 }
 
 // ModTime is the entry's modification time.

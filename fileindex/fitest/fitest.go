@@ -52,6 +52,9 @@ type Server struct {
 	// HoldAnswers makes the server answer only once the whole stream is in:
 	// a client waiting for answers before sending more would never end.
 	HoldAnswers atomic.Bool
+	// OldServer answers as fileindex did before telling whether the
+	// directories listed hold directories.
+	OldServer atomic.Bool
 	// Streams counts the tar streams received, and Searches the pages of
 	// searches answered.
 	Streams        atomic.Int32
@@ -170,6 +173,7 @@ type Entry struct {
 	Size     int64  `json:"size"`
 	MTime    int64  `json:"mtime"`
 	Ext      string `json:"ext"`
+	HasDirs  *bool  `json:"has_dirs,omitempty"`
 }
 
 func (s *Server) entry(root int64, rel string, info os.FileInfo) Entry {
@@ -231,7 +235,14 @@ func (s *Server) list(w http.ResponseWriter, r *http.Request) {
 		if err != nil {
 			continue
 		}
-		items = append(items, s.entry(id, path.Join(r.URL.Query().Get("path"), e.Name()), info))
+		it := s.entry(id, path.Join(r.URL.Query().Get("path"), e.Name()), info)
+		if it.IsDir && !s.OldServer.Load() {
+			// As the index tells: whether it holds directories.
+			sub, _ := os.ReadDir(filepath.Join(dir, filepath.FromSlash(it.Path)))
+			has := slices.ContainsFunc(sub, func(d os.DirEntry) bool { return d.IsDir() })
+			it.HasDirs = &has
+		}
+		items = append(items, it)
 	}
 	sort.SliceStable(items, func(i, j int) bool { return items[i].IsDir && !items[j].IsDir })
 	size, _ := strconv.Atoi(r.URL.Query().Get("size"))
@@ -648,8 +659,9 @@ func (s *Server) events(w http.ResponseWriter, r *http.Request) {
 
 func (s *Server) delete(w http.ResponseWriter, r *http.Request) {
 	var req struct {
-		Root  int64    `json:"root"`
-		Paths []string `json:"paths"`
+		Root      int64    `json:"root"`
+		Paths     []string `json:"paths"`
+		Permanent bool     `json:"permanent"`
 	}
 	json.NewDecoder(r.Body).Decode(&req)
 	if req.Root == 2 && !s.Writable.Load() {
@@ -659,6 +671,28 @@ func (s *Server) delete(w http.ResponseWriter, r *http.Request) {
 	dir := s.Root
 	if req.Root == 2 {
 		dir = s.ReadOnly
+	}
+	if req.Permanent {
+		// A task, as the server's, that ends a moment later.
+		id := s.tasks.Add(1)
+		task := map[string]any{"id": id, "kind": "delete", "title": "删除", "status": "running"}
+		s.mu.Lock()
+		s.taskRecords[id] = task
+		s.mu.Unlock()
+		json.NewEncoder(w).Encode(map[string]any{"task": task})
+		go func() {
+			time.Sleep(20 * time.Millisecond)
+			for _, rel := range req.Paths {
+				os.RemoveAll(filepath.Join(dir, filepath.FromSlash(rel)))
+			}
+			done := map[string]any{"id": id, "kind": "delete", "title": "删除", "status": "done", "finished_at": time.Now().Unix()}
+			s.mu.Lock()
+			s.taskRecords[id] = done
+			s.mu.Unlock()
+			s.publish(map[string]any{"type": "task", "task": done})
+			s.publish(map[string]any{"type": "fs", "root_id": max(req.Root, 1)})
+		}()
+		return
 	}
 	for _, rel := range req.Paths {
 		abs := filepath.Join(dir, filepath.FromSlash(rel))
