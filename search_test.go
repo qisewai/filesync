@@ -7,6 +7,7 @@ import (
 	"testing"
 
 	"filesync/config"
+	"filesync/fileindex"
 	"filesync/fileindex/fitest"
 
 	"github.com/egoist/mygo/ui"
@@ -93,64 +94,65 @@ func TestSearchEverywhere(t *testing.T) {
 		t.Fatalf("back: %q, %d", h.a.location(), len(s.items))
 	}
 
-	// A place's chip goes on there, with all its results.
-	h.click("在本机中查看全部")
-	if !h.a.onLocal() || !h.a.local.results || h.a.local.total != 1 || h.a.local.query != "报告" {
-		t.Fatalf("local: %+v", h.a.local.items)
+	// A place's tab shows all its results, in place.
+	h.click("搜索范围 本机")
+	if !h.a.onSearch() || s.scope != localPlace || len(s.items) != 1 || s.items[0].Name != "本机报告.pdf" {
+		t.Fatalf("local: %q, %+v", h.a.location(), s.items)
+	}
+	h.click("搜索范围 全部位置")
+	if len(s.items) != 4 {
+		t.Fatalf("all: %d", len(s.items))
 	}
 }
 
-// The search of a server is of all of it, or of the folder shown, with
-// the same filters.
+// The search of a server, from its page, is of all of it, or of the
+// folder shown, with the same filters.
 func TestServerSearchScopeAndFilters(t *testing.T) {
 	h, _, _ := searchHarness(t)
 	h.click("文件夹 项目")
-	h.typeInto("搜索文件", "报告")
-	h.tt.Key(0, ui.KeyEnter)
-	h.settle()
-	b := h.a.br
-	if !b.results || b.total != 3 {
-		t.Fatalf("all the server: %d", b.total)
+	g := h.find("报告")
+	s := h.a.gsearch
+	if s.scope != h.a.store.Servers[0].ID || g.total != 3 {
+		t.Fatalf("all the server: %q %d", s.scope, g.total)
 	}
 	roots := map[string]bool{}
-	for _, e := range b.items {
+	for _, e := range s.items {
 		roots[e.RootName] = true
 	}
 	if !roots["只读"] || !roots["nas"] {
 		t.Fatalf("roots %v", roots)
 	}
 	h.want("文件类型")
-	b.filter.kind = "图片"
-	h.a.search(b.query)
+	s.filter.kind = "图片"
+	h.a.runSearch(0)
 	h.settle()
-	if b.total != 1 || b.items[0].Name != "报告封面.jpg" {
-		t.Fatalf("pictures %+v", b.items)
+	if g = s.group(s.scope); g.total != 1 || s.items[0].Name != "报告封面.jpg" {
+		t.Fatalf("pictures %+v", s.items)
 	}
-	b.filter = searchFilter{}
-	b.here = true
-	h.a.search(b.query)
+	s.filter = searchFilter{}
+	h.a.runSearch(0)
 	h.settle()
-	if b.total != 1 || b.items[0].Name != "年度报告.pdf" {
-		t.Fatalf("the folder: %+v", b.items)
+	h.click("搜索范围 此文件夹 · 项目")
+	if g = s.group("folder"); g.total != 1 || s.items[0].Name != "年度报告.pdf" {
+		t.Fatalf("the folder: %+v", s.items)
 	}
 	// A folder found in another root opens there.
-	b.here = false
-	b.filter.kind = "文件夹"
-	h.a.search("")
+	h.click("搜索范围 家里")
+	s.filter.kind = "文件夹"
+	h.a.runSearch(0)
+	h.replaceField("全局搜索", "")
 	h.settle()
-	h.a.openEntry(b.items[0])
+	s.query = ""
+	h.a.runSearch(0)
 	h.settle()
-	if h.a.br.root.ID != b.items[0].Root && h.a.br.path != b.items[0].Path {
-		t.Fatalf("opened %q", h.a.location())
+	for _, hit := range s.hits {
+		if hit.e.RootName == "nas" && hit.e.Name == "项目" {
+			h.a.openHit(hit, false)
+		}
 	}
-
-	// Clearing the search goes back to the folder.
-	h.typeInto("搜索文件", "x")
 	h.settle()
-	h.tt.Key(0, ui.KeyEscape)
-	h.settle()
-	if h.a.br.results || h.a.br.query != "" {
-		t.Fatal("Escape kept the search")
+	if !h.a.onRoot() || h.a.br.path != "项目" {
+		t.Fatalf("opened %q", h.a.location())
 	}
 }
 
@@ -183,5 +185,52 @@ func TestSearchHistoryAndRecent(t *testing.T) {
 	}
 	if !slices.Equal(loaded.RecentSearches, []string{"报告", "合同"}) {
 		t.Fatalf("saved %q", loaded.RecentSearches)
+	}
+}
+
+// The results of a server are acted on in place: renamed, deleted, and
+// the search follows; chosen across places, they are not.
+func TestSearchResultOperations(t *testing.T) {
+	h, f, _ := searchHarness(t)
+	h.click("文件夹 项目")
+	h.find("报告")
+	s := h.a.gsearch
+	choose := func(names ...string) {
+		s.sel.Clear()
+		for _, hit := range s.hits {
+			if slices.Contains(names, hit.e.Name) {
+				s.sel.Add(hit.key())
+			}
+		}
+		h.tt.Frame()
+	}
+	choose("年度报告.pdf")
+	h.want("下载…")
+	h.click("重命名")
+	h.tt.Key(ui.Ctrl, ui.KeyA) // the name, which has the focus
+	h.tt.Type("年度报告-终稿.pdf")
+	h.tt.Key(0, ui.KeyEnter)
+	h.settle()
+	if _, err := os.Stat(filepath.Join(f.Root, "项目", "年度报告-终稿.pdf")); err != nil {
+		t.Fatal("not renamed:", err)
+	}
+	if !slices.ContainsFunc(s.items, func(e fileindex.Entry) bool { return e.Name == "年度报告-终稿.pdf" }) {
+		t.Fatal("the search did not follow")
+	}
+
+	choose("报告封面.jpg")
+	h.tt.Key(0, ui.KeyDelete)
+	h.want("1 项会移到 fileindex 的回收站，可以在左侧的回收站中恢复。")
+	h.click("移到回收站")
+	h.settle()
+	if _, err := os.Stat(filepath.Join(f.Trash, "报告封面.jpg")); err != nil {
+		t.Fatal("not in the trash:", err)
+	}
+
+	// Of two roots, or of a server and this computer: only where they are.
+	h.click("搜索范围 全部位置")
+	choose("旧报告.pdf", "本机报告.pdf")
+	if h.tt.HasText("下载…") || h.tt.HasText("创建备份任务…") {
+		t.Fatal("acts on results of several places at once")
 	}
 }

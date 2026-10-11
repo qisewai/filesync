@@ -9,15 +9,12 @@ import (
 	"runtime"
 	"slices"
 	"strings"
-	"time"
 
 	"filesync/config"
 	"filesync/fileindex"
 	"filesync/localindex"
 	"github.com/egoist/mygo/ui"
 )
-
-const localPageSize = 1000
 
 type localIndexState struct {
 	index           *localindex.Index
@@ -101,9 +98,7 @@ func (a *app) loadLocalSnapshot() {
 					m.note = fmt.Sprintf("已加载索引快照 · %d 处记录未能更新", meta.Errors)
 				}
 			}
-			if b := a.local; b != nil && b.results {
-				a.queueLocalSearch(0)
-			}
+			a.indexChanged()
 		})
 	}()
 }
@@ -148,16 +143,10 @@ func (a *app) scanLocalIndex(full bool) {
 		defer cancel()
 		opts.Skip = indexSkipPaths(opts.Roots)
 		progress := func(p localindex.Progress) {
-			version := x.Status().Version
 			a.post(func() {
 				if !a.closed && a.localIdx == m && m.index == x {
 					m.progress = p
 					m.status.Count = p.Count
-					// Only the explicitly requested scan changes the index.
-					// Refresh an idle query as that scan publishes partial data.
-					if b := a.local; m.running && b != nil && b.results && !b.loading && !b.queryPending && !b.more && !b.opening && b.sel.Len() == 0 && (b.matched == nil || b.matched.Version() != version) {
-						a.queueLocalSearch(0)
-					}
 				}
 			})
 		}
@@ -206,213 +195,17 @@ func (a *app) scanLocalIndex(full bool) {
 					m.savedVersion = status.Version
 				}
 			}
-			if b := a.local; b != nil && b.results && (b.matched == nil || b.matched.Version() != status.Version) {
-				a.queueLocalSearch(0)
-			}
-		})
-	}()
-}
-func (a *app) cancelLocalSearch() {
-	b := a.local
-	if b == nil {
-		return
-	}
-	if b.debounce != nil {
-		b.debounce.Stop()
-		b.debounce = nil
-	}
-	if b.searchCancel != nil {
-		b.searchCancel()
-		b.searchCancel = nil
-	}
-	b.queryPending, b.more, b.opening = false, false, false
-	b.gen++
-}
-func (a *app) localQuery() localindex.Query {
-	b := a.local
-	q := localindex.Query{Text: b.query, Hidden: b.hidden, Desc: b.sort.by.Descending}
-	if b.here {
-		q.Dir = b.dir
-	}
-	b.filter.local(&q)
-	switch b.sort.by.Column {
-	case colSize:
-		q.Sort = "size"
-	case colTime:
-		q.Sort = "mtime"
-	case colWhere:
-		q.Sort = "path"
-	default:
-		q.Sort = "name"
-	}
-	return q
-}
-func (a *app) queueLocalSearch(delay time.Duration) {
-	b := a.local
-	if b == nil {
-		return
-	}
-	a.ensureLocalIndex()
-	a.cancelLocalSearch()
-	b.results, b.queryPending = true, true
-	b.sort.applied = b.sort.by
-	b.sel.Clear()
-	b.cursor = -1
-	b.matched = nil
-	m, x, gen, q := a.localIdx, a.localIdx.index, b.gen, a.localQuery()
-	start := func() {
-		if a.closed || a.local != b || b.gen != gen || a.localIdx != m || m.index != x {
-			return
-		}
-		b.debounce = nil
-		b.queryPending = false
-		b.loading = true
-		b.err = ""
-		ctx, cancel := context.WithCancel(context.Background())
-		b.searchCancel = cancel
-		go func() {
-			defer cancel()
-			matches, err := x.Search(ctx, q)
-			var entries []localindex.Entry
-			if err == nil {
-				entries, err = matches.Page(ctx, 0, localPageSize)
-			}
-			a.post(func() {
-				if a.closed || a.local != b || b.gen != gen || a.localIdx != m || m.index != x {
-					return
-				}
-				b.loading = false
-				if err != nil {
-					if !errors.Is(err, context.Canceled) {
-						b.err = err.Error()
-					}
-					return
-				}
-				b.matched = matches
-				b.total = matches.Total()
-				b.items = localEntries(entries)
-				b.awaitTop = true
-				b.list.ScrollTo(0, ui.Start)
-			})
-		}()
-	}
-	if delay <= 0 {
-		start()
-	} else {
-		b.debounce = time.AfterFunc(delay, func() { a.post(start) })
-	}
-}
-func localEntries(es []localindex.Entry) []fileindex.Entry {
-	out := make([]fileindex.Entry, len(es))
-	for i, e := range es {
-		out[i] = fileindex.Entry{Name: e.Name, Path: e.Path, Parent: e.Parent, Size: e.Size, MTime: e.MTime, IsDir: e.IsDir, Ext: e.Ext}
-	}
-	return out
-}
-func (a *app) loadMoreLocal() {
-	b := a.local
-	if b == nil || !b.results || b.loading || b.queryPending || b.more || b.matched == nil || len(b.items) >= b.total {
-		return
-	}
-	gen, matches, offset := b.gen, b.matched, len(b.items)
-	ctx, cancel := context.WithCancel(context.Background())
-	b.searchCancel = cancel
-	b.more = true
-	go func() {
-		defer cancel()
-		es, err := matches.Page(ctx, offset, localPageSize)
-		a.post(func() {
-			if a.closed || a.local != b || b.gen != gen || b.matched != matches {
-				return
-			}
-			b.more = false
-			if err != nil {
-				if !errors.Is(err, context.Canceled) {
-					b.err = err.Error()
-				}
-				return
-			}
-			b.items = append(b.items, localEntries(es)...)
+			a.indexChanged()
 		})
 	}()
 }
 
-// localSearchField searches the index as one types; cleared, with its
-// button or Escape, it goes back to the directory. Enter, without words,
-// lists what the filters ask for. Its chip chooses all the index, or the
-// folder shown, or every place.
-func (a *app) localSearchField(c *ui.Context) {
-	b := a.local
-	scope := "本机"
-	if b.here {
-		scope = "此文件夹"
+// indexChanged searches again, as the index of this computer changed, on
+// the page of the search.
+func (a *app) indexChanged() {
+	if a.onSearch() && len(a.gsearch.groups) > 0 && !a.gsearch.busy() {
+		a.runSearch(0)
 	}
-	changed, submitted, cleared := a.searchBox(c, "local-search", "本机搜索", &b.query, scope, "搜索本机文件", func(m *ui.Menu) {
-		if m.Item("本机（全部索引）").Checked(!b.here).Chosen() && b.here {
-			b.here = false
-			a.requeryLocal()
-		}
-		if m.Item("当前文件夹").Checked(b.here).Chosen() && !b.here {
-			b.here = true
-			a.requeryLocal()
-		}
-		m.Separator()
-		if m.Item("全部位置").Chosen() {
-			q := b.query
-			a.openSearch(q)
-			a.gsearch.filter = b.filter
-		}
-	})
-	b.searching = a.searchTyping
-	empty := strings.TrimSpace(b.query) == ""
-	switch {
-	case cleared, changed && empty:
-		if b.results {
-			a.openLocal(b.dir)
-		}
-	case changed:
-		a.queueLocalSearch(100 * time.Millisecond)
-	case submitted && (!empty || b.filter.active()):
-		a.remember(b.query)
-		a.queueLocalSearch(0)
-	}
-}
-
-// requeryLocal searches again, as the scope changed, when it searches.
-func (a *app) requeryLocal() {
-	if b := a.local; b.results || strings.TrimSpace(b.query) != "" {
-		a.queueLocalSearch(0)
-	}
-}
-
-// localSearchEmpty is what the results show without any: how to build the
-// index first, or that nothing matched.
-func (a *app) localSearchEmpty(c *ui.Context) {
-	m, t := a.localIdx, c.Theme()
-	ui.Column(c).Fill().Center().Gap(8).Padding(32).Children(func() {
-		ui.Icon(c, iconSearch).FontSize(36).TextColor(t.TextMuted.Alpha(0.6))
-		if m.status.Count == 0 && !m.running && !m.loading {
-			ui.Text(c, "还没有建立本机索引").FontSize(16).Bold()
-			ui.Text(c, "建立索引后可以即时搜索本机文件。只读取文件名、大小和修改时间，不读取文件内容。").FontSize(12).TextColor(t.TextMuted).TextAlign(ui.Center).MaxWidth(360)
-			ui.Row(c).Gap(8).Margin(8, 0, 0, 0).Children(func() {
-				ui.PrimaryButton(c, "建立索引").OnClick(a.startLocalScan)
-				ui.Button(c, "索引范围…").OnClick(a.editLocalIndex)
-			})
-			return
-		}
-		ui.Text(c, "没有找到匹配的文件").FontSize(16).Bold()
-		hint := "换个关键词，或者切换到“全部索引”试试。"
-		switch {
-		case m.running:
-			hint = "索引还在建立，结果会陆续出现。"
-		case !m.status.Updated.IsZero():
-			hint = "索引更新于 " + m.status.Updated.Format("2006-01-02 15:04") + "，之后的文件变化需要更新索引才能搜到。"
-		}
-		ui.Text(c, hint).FontSize(12).TextColor(t.TextMuted).TextAlign(ui.Center).MaxWidth(360)
-		if !m.running && !m.loading {
-			ui.Button(c, "更新索引").Margin(8, 0, 0, 0).OnClick(a.startLocalScan)
-		}
-	})
 }
 
 // localIndexStatus is the index's state, in the status bar, with its menu:
@@ -603,9 +396,7 @@ func (a *app) localIndexDialog(c *ui.Context) {
 				m.progress = localindex.Progress{}
 				m.note = "索引范围已改变，请更新索引"
 				m.err = ""
-				if a.local.results {
-					a.queueLocalSearch(0)
-				}
+				a.indexChanged()
 			})
 		})
 	})
@@ -639,46 +430,23 @@ func nonemptyLines(text string) []string {
 	return out
 }
 
-func (a *app) openIndexedLocal(e fileindex.Entry, systemFolder, nativeFolder bool) {
-	b := a.local
-	if b.opening {
-		return
-	}
-	b.opening = true
-	gen := b.gen
-	go func() {
-		_, err := os.Lstat(e.Path)
-		a.post(func() {
-			if a.closed || a.local != b || b.gen != gen {
-				return
-			}
-			b.opening = false
-			if err != nil {
-				b.err = "索引中的文件已移动、删除或无法访问，请手动更新索引：" + err.Error()
-				return
-			}
-			if systemFolder {
-				a.openPath(e.Parent)
-			} else if nativeFolder {
-				a.openLocal(e.Parent, e.Name)
-			} else {
-				a.openLocalEntry(e)
-			}
-		})
-	}()
-}
-func (a *app) backupLocalSelection(es []fileindex.Entry) {
-	if !a.local.results || len(es) == 0 {
-		a.newTaskFrom(a.local.dir, es)
+// backupLocal starts a task backing up es of this computer, of the
+// directory dir, or dir itself without any; entries of different folders,
+// as found by a search, make a task for each folder, set up one after the
+// other.
+func (a *app) backupLocal(dir string, es []fileindex.Entry) {
+	if len(es) == 0 {
+		a.newTaskFrom(dir, nil)
 		return
 	}
 	groups := map[string][]fileindex.Entry{}
 	var parents []string
 	for _, e := range es {
-		if _, ok := groups[e.Parent]; !ok {
-			parents = append(parents, e.Parent)
+		parent := filepath.Dir(e.Path)
+		if _, ok := groups[parent]; !ok {
+			parents = append(parents, parent)
 		}
-		groups[e.Parent] = append(groups[e.Parent], e)
+		groups[parent] = append(groups[parent], e)
 	}
 	slices.Sort(parents)
 	queue := make([][]fileindex.Entry, 0, len(parents))

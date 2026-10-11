@@ -48,6 +48,10 @@ type app struct {
 	errorMsg string // shown on the task's page, as a failed save
 
 	confirmRemove bool
+	// The dialogs of the operations on files of a server.
+	deleting *deleteAsk
+	renaming *renameAsk
+	asking   *confirmAsk
 	// taskShown is the task whose details and history show in place of
 	// the tasks, "" for none.
 	taskShown string
@@ -74,6 +78,9 @@ type app struct {
 	searchFocus  ui.Handle
 	focusSearch  bool
 	searchTyping bool
+	// searchStart is the scope the field of the pages of files searches,
+	// "" for the place shown, "folder" or "all".
+	searchStart string
 	// sidebarW is the sidebar's width; sidebarMoved says it was dragged
 	// since the settings were saved.
 	sidebarW     float32
@@ -596,8 +603,8 @@ func (a *app) stopBackground() {
 	if a.localIdx != nil && a.localIdx.cancel != nil {
 		a.localIdx.cancel()
 	}
-	if a.local != nil {
-		a.cancelLocalSearch()
+	if a.local != nil && a.local.thumbCancel != nil {
+		a.local.thumbCancel()
 	}
 	if a.admin != nil {
 		a.admin.stop()
@@ -611,9 +618,6 @@ func (a *app) stopBackground() {
 	}
 	if a.br != nil && a.br.cancel != nil {
 		a.br.cancel()
-	}
-	if a.br != nil && a.br.moreCancel != nil {
-		a.br.moreCancel()
 	}
 	if a.br != nil && a.br.thumbCancel != nil {
 		a.br.thumbCancel()

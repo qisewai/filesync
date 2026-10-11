@@ -323,7 +323,7 @@ func (a *app) onEvent(server string, e fileindex.Event) {
 	case "fs":
 		a.adminRefreshSoon(server)
 		a.invalidateTree(server, e.Root)
-		if b := a.br; b != nil && b.server == server && b.root.ID == e.Root && !b.results {
+		if b := a.br; b != nil && b.server == server && b.root.ID == e.Root {
 			a.refreshSoon()
 		}
 	}

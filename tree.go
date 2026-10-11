@@ -131,7 +131,7 @@ func (a *app) directoryView(c *ui.Context, sv *config.Server, root fileindex.Roo
 	item.Selected(a.br != nil && a.place == rootPlace(sv.ID, root.ID) && a.br.server == sv.ID && a.br.root.ID == root.ID && a.br.path == dir).
 		OnClick(func() {
 			a.goPlace(rootPlace(sv.ID, root.ID))
-			if a.br != nil && (a.br.path != dir || a.br.results) {
+			if a.br != nil && a.br.path != dir {
 				a.browse(dir)
 			}
 		})
@@ -182,7 +182,7 @@ func (a *app) showDirectory(server string, root fileindex.Root, dir string, choo
 	if a.br == nil || a.br.server != server || a.br.root.ID != root.ID {
 		return
 	}
-	if a.br.path != dir || a.br.results || len(choose) > 0 {
+	if a.br.path != dir || len(choose) > 0 {
 		a.browse(dir, choose...)
 	}
 }
@@ -263,7 +263,7 @@ func (a *app) directoryMenu(m *ui.Menu, sv *config.Server, root fileindex.Root, 
 func (a *app) refreshDirectory(sv *config.Server, root fileindex.Root, dir string) {
 	n := a.treeNode(sv.ID, root.ID, dir)
 	n.loaded, n.open = false, true
-	if a.br != nil && a.br.server == sv.ID && a.br.root.ID == root.ID && a.br.path == dir && !a.br.results {
+	if a.br != nil && a.br.server == sv.ID && a.br.root.ID == root.ID && a.br.path == dir {
 		a.refresh()
 	}
 }

@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"github.com/egoist/mygo/ui"
 	"os"
 	"path/filepath"
 	"runtime"
@@ -46,10 +47,11 @@ func TestLocalSnapshotRestartAndManualUpdate(t *testing.T) {
 	if m.status.Count != 1 || m.running || m.progress.Scanned != 0 {
 		t.Fatal("startup scanned the filesystem")
 	}
-	h2.replaceField("本机搜索", "hello")
-	if h2.a.local.total != 1 || h2.a.local.items[0].Size != 1 || h2.a.local.items[0].Path != path {
+	if g := h2.find("hello"); g.total != 1 || g.hits[0].e.Size != 1 || g.hits[0].e.Path != path {
 		t.Fatal("snapshot was not restored")
 	}
+	h2.tt.Key(ui.Alt, ui.KeyLeft)
+	h2.settle()
 	h2.captureLocal("snapshot-loaded")
 	h2.tt.SetSize(900, 480)
 	h2.captureLocal("snapshot-minimum")
@@ -128,10 +130,10 @@ func TestLocalSnapshotLoadingAndSaveFailure(t *testing.T) {
 	h.captureLocal("snapshot-loading")
 	// Searches started while the loader publishes its version are refreshed
 	// through the same UI queue as the normal startup path.
-	h.a.local.query = "hello"
-	h.a.queueLocalSearch(0)
+	h.a.openSearch("hello")
+	h.a.setScope(localPlace)
 	h.settle()
-	if h.a.localIdx.loading || h.a.local.total != 1 {
+	if h.a.localIdx.loading || h.a.gsearch.group(localPlace).total != 1 {
 		t.Fatal("loaded version did not refresh the query")
 	}
 	if _, err := h.a.localIdx.index.Search(context.Background(), localindex.Query{Text: "hello"}); err != nil {
@@ -168,8 +170,7 @@ func TestLocalSnapshotRetainsUnreadableRecordsAndWarnings(t *testing.T) {
 	if h2.a.localIdx.progress.Errors == 0 || !strings.Contains(strings.Join(h2.a.localIdx.progress.Messages, "\n"), locked) {
 		t.Fatal("unreadable-path warning did not survive restart")
 	}
-	h2.replaceField("本机搜索", "keep")
-	if h2.a.local.total != 1 {
+	if g := h2.find("keep"); g.total != 1 {
 		t.Fatal("unreadable record did not survive restart")
 	}
 }

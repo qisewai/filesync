@@ -62,23 +62,23 @@ func TestDeleteForever(t *testing.T) {
 	// Enter there is Cancel's: nothing is deleted by a key pressed on.
 	h.tt.Key(0, ui.KeyEnter)
 	h.settle()
-	if h.a.br.toDelete != nil {
+	if h.a.deleting != nil {
 		t.Fatal("still asking")
 	}
 	if _, err := os.Stat(filepath.Join(f.Root, "临时.txt")); err != nil {
 		t.Fatal("Enter deleted it:", err)
 	}
-	// Typing the search, Delete deletes text, not files.
+	// Typing the search, Delete deletes text, not files; the search shows
+	// on its page, which back leaves.
 	h.click("搜索文件")
 	h.tt.Type("临")
+	h.settle()
 	h.tt.Key(0, ui.KeyDelete)
-	if h.a.br.toDelete != nil {
+	h.settle()
+	if h.a.deleting != nil || !h.a.onSearch() {
 		t.Fatal("Delete in the search asked to delete files")
 	}
-	// The search, as typed, shows its results after a moment; Escape goes
-	// back to the folder.
-	h.settle()
-	h.tt.Key(0, ui.KeyEscape)
+	h.a.nav.Back()
 	h.settle()
 	// Delete asks to move it to the trash, which the status tells.
 	h.clickPage("临时.txt")
@@ -105,10 +105,10 @@ func TestDirectoryMenu(t *testing.T) {
 	h.settle()
 
 	h.menu("文件夹 照片", "重命名…")
-	if h.a.br.path != "" || !h.a.br.renaming || h.a.br.renameOf != "照片" {
-		t.Fatalf("rename %q %v %q", h.a.br.path, h.a.br.renaming, h.a.br.renameOf)
+	if h.a.br.path != "" || h.a.renaming == nil || h.a.renaming.e.Path != "照片" {
+		t.Fatalf("rename %q %+v", h.a.br.path, h.a.renaming)
 	}
-	h.a.br.renameTo = "相册"
+	h.a.renaming.to = "相册"
 	h.tt.Frame()
 	h.tt.Key(0, ui.KeyEnter) // in the name, which has the focus
 	h.settle()

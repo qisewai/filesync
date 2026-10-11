@@ -12,7 +12,6 @@ import (
 	"time"
 
 	"filesync/fileindex"
-	"filesync/localindex"
 
 	"github.com/egoist/mygo/ui"
 )
@@ -23,22 +22,12 @@ const localPlace = "local"
 // localBrowser shows a directory of this computer, to back up what is
 // chosen in it.
 type localBrowser struct {
-	dir                         string
-	items                       []fileindex.Entry // Path is the full path
-	loading, opening            bool
-	err                         string
-	gen                         int
-	hidden                      bool // shows the files whose names start with a dot
-	query                       string
-	filter                      searchFilter
-	here                        bool // searches the folder shown, not all the index
-	results, queryPending, more bool
-	awaitTop                    bool // wait for the new result's scroll request to commit
-	searching                   bool // the search has the keyboard focus
-	total                       int
-	matched                     *localindex.Results
-	searchCancel                context.CancelFunc
-	debounce                    *time.Timer
+	dir     string
+	items   []fileindex.Entry // Path is the full path
+	loading bool
+	err     string
+	gen     int
+	hidden  bool // shows the files whose names start with a dot
 
 	grid        bool
 	gridSt      ui.GridState
@@ -190,9 +179,6 @@ func (a *app) openLocal(dir string, choose ...string) {
 	}
 	b.thumbCtx, b.thumbCancel = context.WithCancel(context.Background())
 	a.ensureLocalIndex()
-	a.cancelLocalSearch()
-	b.results, b.query, b.matched = false, "", nil
-	b.filter = searchFilter{}
 	a.place = localPlace
 	if b.dir != dir {
 		b.items = nil
@@ -293,58 +279,41 @@ func (b *localBrowser) chosen() []fileindex.Entry {
 func (a *app) localPath(c *ui.Context) {
 	b := a.local
 	crumbs, dirs := localCrumbs(b.dir)
-	if b.results {
-		crumbs = append(crumbs, "搜索结果")
-	}
 	chosen := len(crumbs) - 1
 	if ui.Breadcrumbs(c, crumbs, &chosen).Label("本机位置").Shrink(1).MinWidth(0).Changed() && chosen < len(dirs) {
 		a.openLocal(dirs[chosen])
 	}
 }
 
-// localView is the page of a local directory, or of what the search of
-// this computer found: its commands, and its files.
+// localView is the page of a local directory: its commands, and its
+// files.
 func (a *app) localView(c *ui.Context) {
 	b := a.local
 	t := c.Theme()
-	busy := b.loading || b.queryPending
+	busy := b.loading
 	es := b.chosen()
 	if busy {
 		es = nil
 	}
 	n := len(es)
-	if n > 0 && !b.searching && c.Shortcut(0, ui.KeyEscape) {
+	if n > 0 && !a.searchTyping && c.Shortcut(0, ui.KeyEscape) {
 		b.sel.Clear()
 	}
 	if c.Shortcut(0, ui.KeyF5) {
-		a.refreshLocal()
+		a.openLocal(b.dir)
 	}
 	// Backing up and showing in the file manager are in the menu of the
 	// files.
-	commandBar(c, n, filesSize(es), func() { b.sel.Clear() }, func() {
-		if b.results {
-			filterBar(c, "local", &b.filter, func(wait bool) {
-				if wait {
-					a.queueLocalSearch(150 * time.Millisecond)
-				} else {
-					a.queueLocalSearch(0)
-				}
-			})
-		}
-	}, nil, func() {
+	commandBar(c, n, filesSize(es), func() { b.sel.Clear() }, func() {}, nil, func() {
 		viewToggle(c, "local-view-toggle", &b.grid)
 		moreMenu(c, "local-more", func(m *ui.Menu) {
 			if m.Item("显示隐藏文件").Checked(b.hidden).Chosen() {
 				b.hidden = !b.hidden
-				if b.results {
-					a.queueLocalSearch(0)
-				} else {
-					a.invalidateLocalTree()
-					a.openLocal(b.dir)
-				}
+				a.invalidateLocalTree()
+				a.openLocal(b.dir)
 			}
 			if m.Item("刷新").Shortcut(0, ui.KeyF5).Chosen() {
-				a.refreshLocal()
+				a.openLocal(b.dir)
 			}
 			if idx := a.localIdx; idx != nil {
 				m.Separator()
@@ -364,43 +333,20 @@ func (a *app) localView(c *ui.Context) {
 		closableNotice(c, t.Danger, m.err, func() { m.err = "" })
 	}
 	open := func(e fileindex.Entry) {
-		switch {
-		case busy:
-		case b.results:
-			a.openIndexedLocal(e, false, false)
-		default:
+		if !busy {
 			a.openLocalEntry(e)
 		}
 	}
 	zone := a.fileList(c, &fileView{
 		key: "local-files", label: "本机文件", items: b.items, sel: &b.sel, cursor: &b.cursor,
 		list: &b.list, gridSt: &b.gridSt, grid: b.grid, sort: &b.sort,
-		loading: b.loading, results: b.results,
-		where: func(e fileindex.Entry) string { return homeTilde(e.Parent) },
-		thumb: a.localThumb,
-		open:  open,
-		resort: func() {
-			if b.results {
-				a.queueLocalSearch(0)
-			} else {
-				sortEntries(&b.sort, b.items, &b.cursor)
-			}
-		},
-		visible: func(first, last int) {
-			if b.awaitTop && (first == 0 || last < 0) {
-				b.awaitTop = false
-			}
-			if b.results && !b.awaitTop && last >= len(b.items)-40 {
-				a.loadMoreLocal()
-			}
-		},
+		loading:  b.loading,
+		thumb:    a.localThumb,
+		open:     open,
+		resort:   func() { sortEntries(&b.sort, b.items, &b.cursor) },
 		gridLast: &b.gridLast,
 		empty: func() {
-			switch {
-			case busy || b.err != "":
-			case b.results:
-				a.localSearchEmpty(c)
-			default:
+			if !busy && b.err == "" {
 				emptyFolder(c, "")
 			}
 		},
@@ -410,61 +356,35 @@ func (a *app) localView(c *ui.Context) {
 		if busy {
 			es = nil
 		}
-		if len(es) == 1 && m.Item("打开").Chosen() {
-			open(es[0])
-		}
-		if b.results && len(es) == 1 && m.Item("打开所在目录").Chosen() {
-			a.openIndexedLocal(es[0], false, true)
-		}
 		if len(es) == 1 {
+			if m.Item("打开").Chosen() {
+				open(es[0])
+			}
 			m.Separator()
 		}
 		label := "备份当前文件夹…"
 		if len(es) > 0 {
 			label = "创建备份任务…"
 		}
-		if (!b.results || len(es) > 0) && m.Item(label).Disabled(busy || b.err != "").Chosen() {
-			a.backupLocalSelection(es)
+		if m.Item(label).Disabled(busy || b.err != "").Chosen() {
+			a.backupLocal(b.dir, es)
 		}
-		switch {
-		case b.results && len(es) == 1:
-			if m.Item("在文件管理器中显示").Chosen() {
-				a.openIndexedLocal(es[0], true, false)
-			}
-		case !b.results:
-			if m.Item("在文件管理器中显示").Disabled(busy).Chosen() {
-				a.openPath(b.dir)
-			}
+		if m.Item("在文件管理器中显示").Disabled(busy).Chosen() {
+			a.openPath(b.dir)
 		}
 	})
-}
-
-// refreshLocal reads the directory shown again, or searches again.
-func (a *app) refreshLocal() {
-	if b := a.local; b.results {
-		a.queueLocalSearch(0)
-	} else {
-		a.openLocal(b.dir)
-	}
 }
 
 // localStatus is, in the status bar, what the page shows and has chosen.
 func (a *app) localStatus(c *ui.Context) {
 	b := a.local
 	es := b.chosen()
-	if b.loading || b.queryPending {
+	if b.loading {
 		es = nil
 	}
 	n := len(es)
 	status := ""
-	switch {
-	case b.results && (b.loading || b.queryPending) && len(b.items) == 0:
-		status = "正在搜索…"
-	case b.results && b.total > len(b.items):
-		status = fmt.Sprintf("找到 %d 项 · 已显示 %d 项", b.total, len(b.items))
-	case b.results:
-		status = fmt.Sprintf("找到 %d 项", b.total)
-	case !b.loading || len(b.items) > 0:
+	if !b.loading || len(b.items) > 0 {
 		status = itemsCount(len(b.items))
 	}
 	if n > 0 {

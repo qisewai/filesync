@@ -53,6 +53,7 @@ func (a *app) view(c *ui.Context) {
 	a.syncTray()
 	a.recordHistory()
 	a.filePreviewView(c)
+	a.fileDialogs(c)
 	a.taskDialog(c)
 	a.nasView(c)
 	a.localIndexDialog(c)
@@ -450,9 +451,6 @@ func (a *app) serverChanged(id string) {
 		if sv := a.store.Server(id); sv == nil || sv.Token == "" {
 			if a.br.cancel != nil {
 				a.br.cancel()
-			}
-			if a.br.moreCancel != nil {
-				a.br.moreCancel()
 			}
 			if a.br.thumbCancel != nil {
 				a.br.thumbCancel()

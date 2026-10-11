@@ -76,7 +76,7 @@ func (a *app) fileTable(c *ui.Context, v *fileView) {
 	table := ui.Table(c.Key(v.key), v.list, cols, len(v.items), func(row, col int) {
 		e := v.items[row]
 		muted := t.TextMuted
-		if v.sel.Has(e.Path) {
+		if k, ok := v.list.Key(row).(string); ok && v.sel.Has(k) {
 			muted = t.AccentText.Alpha(0.85)
 		}
 		switch col {
@@ -285,7 +285,11 @@ func (a *app) localThumb(e fileindex.Entry) *ui.Bitmap {
 		return nil
 	}
 	key := fmt.Sprintf("local/%s/%d/%d", e.Path, e.MTime, e.Size)
-	return a.thumbCached(key, a.local.thumbCtx, func(ctx context.Context) (*ui.Bitmap, error) {
+	var parent context.Context
+	if a.local != nil {
+		parent = a.local.thumbCtx
+	}
+	return a.thumbCached(key, parent, func(ctx context.Context) (*ui.Bitmap, error) {
 		f, err := os.Open(e.Path)
 		if err != nil {
 			return nil, err

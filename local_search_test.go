@@ -9,7 +9,6 @@ import (
 	"slices"
 	"strings"
 	"testing"
-	"time"
 
 	"filesync/config"
 	"filesync/localindex"
@@ -37,13 +36,32 @@ func (h *harness) indexMenu(item string) {
 	h.settle()
 }
 
-// clearLocalSearch clears the search, with Escape, back to the directory.
-func (h *harness) clearLocalSearch() {
+// find searches q from the field of the toolbar of the page shown, on the
+// page of the search, and returns the results of the place shown.
+func (h *harness) find(q string) *searchGroup {
 	h.t.Helper()
-	h.click("本机搜索")
-	h.tt.Key(0, ui.KeyEscape)
-	h.tt.Frame()
+	label := "全局搜索"
+	switch {
+	case h.a.onLocal():
+		label = "本机搜索"
+	case h.a.onRoot():
+		label = "搜索文件"
+	}
+	if label == "全局搜索" {
+		h.replaceField(label, q)
+	} else {
+		h.typeInto(label, q)
+	}
 	h.settle()
+	s := h.a.gsearch
+	if s == nil || !h.a.onSearch() {
+		h.t.Fatalf("no search: %q", h.a.location())
+	}
+	g := s.group(s.scope)
+	if g == nil {
+		h.t.Fatalf("no results of %q in %+v", s.scope, s.groups)
+	}
+	return g
 }
 
 func localWrite(t *testing.T, root, name string, n int) string {
@@ -80,130 +98,123 @@ func TestLocalSearchManualWorkflow(t *testing.T) {
 	localWrite(t, root, "图片/项目.jpg", 4)
 	localWrite(t, root, ".cache/项目.txt", 3)
 	h := localSearchHarness(t, root)
-	b, m := h.a.local, h.a.localIdx
+	m := h.a.localIdx
 	if m.running || m.index.Status().Count != 0 {
 		t.Fatal("opening a local page started a scan")
 	}
-	h.replaceField("本机搜索", "项目")
-	if !b.results || b.total != 0 {
-		t.Fatal("unbuilt index should be empty")
+	// The search of this computer, from its page, before the index.
+	g := h.find("项目")
+	if h.a.gsearch.scope != localPlace || g.total != 0 {
+		t.Fatalf("unbuilt index: scope %q, %d", h.a.gsearch.scope, g.total)
 	}
-	h.indexMenu("更新索引")
-	h.want("本机索引已更新")
+	h.want("本机还没有建立索引，搜不到本机的文件。建立索引只读取文件名、大小和修改时间。")
+	h.click("建立索引")
+	s := h.a.gsearch
+	g = s.group(localPlace)
+	if g.total != 3 || len(s.items) != 3 || m.status.Count != 5 {
+		t.Fatalf("total %d, index %+v", g.total, m.status)
+	}
 	h.want("位置")
-	if b.total != 3 || len(b.items) != 3 || m.status.Count != 5 {
-		t.Fatalf("total %d, index %+v", b.total, m.status)
-	}
 	h.captureLocal("search")
 	h.replaceField("扩展名", "PDF")
-	if b.total != 2 || b.items[0].Name != "项目 报告2.pdf" {
-		t.Fatalf("filter %+v", b.items)
+	if g = s.group(localPlace); g.total != 2 || s.items[0].Name != "项目 报告2.pdf" {
+		t.Fatalf("filter %+v", s.items)
 	}
-	h.replaceField("本机搜索", "项目 10")
-	if b.total != 1 {
-		t.Fatalf("AND: %d", b.total)
+	h.replaceField("全局搜索", "项目 10")
+	if g = s.group(localPlace); g.total != 1 {
+		t.Fatalf("AND: %d", g.total)
 	}
+	// The index changes only as it is updated, and the search follows.
 	localWrite(t, root, "新项目10.pdf", 8)
-	h.more("刷新")
-	if b.total != 1 {
-		t.Fatal("refresh changed index without manual scan")
+	h.a.runSearch(0)
+	h.settle()
+	if g = s.group(localPlace); g.total != 1 {
+		t.Fatal("searched again without an update of the index")
 	}
-	h.indexMenu("更新索引")
-	if b.total != 2 {
-		t.Fatalf("manual scan total %d", b.total)
+	h.a.startLocalScan()
+	h.settle()
+	if g = s.group(localPlace); g.total != 2 {
+		t.Fatalf("after the update: %d", g.total)
 	}
-	h.clearLocalSearch()
-	if b.results || b.query != "" {
-		t.Fatal("return did not exit search")
+	// Back is the folder the search began in.
+	h.tt.Key(ui.Alt, ui.KeyLeft)
+	h.settle()
+	if !h.a.onLocal() {
+		t.Fatalf("back: %q", h.a.location())
 	}
 	h.want("新项目10.pdf")
 }
 
-func TestLocalSearchDebounceNavigationAndOpen(t *testing.T) {
+func TestLocalSearchOpen(t *testing.T) {
 	root := t.TempDir()
 	path := localWrite(t, root, "文档/hello.txt", 1)
 	localWrite(t, root, "另一处/other.txt", 2)
 	h := localSearchHarness(t, root)
 	h.indexMenu("更新索引")
-	b := h.a.local
-	h.typeInto("本机搜索", "hello")
-	if !b.queryPending {
-		t.Fatal("typing did not debounce search")
+	if g := h.find("hello"); g.total != 1 {
+		t.Fatalf("typing result %d", g.total)
 	}
-	h.settle()
-	if b.total != 1 {
-		t.Fatalf("typing result %d", b.total)
-	}
-	// A pending query must never replace a directory opened in the meantime.
-	h.typeInto("本机搜索", "obsolete")
-	h.a.openLocal(filepath.Join(root, "文档"))
-	h.settle()
-	time.Sleep(110 * time.Millisecond)
-	h.settle()
-	if b.results || b.dir != filepath.Join(root, "文档") || len(b.items) != 1 {
-		t.Fatal("stale search replaced directory")
-	}
-	h.replaceField("本机搜索", "hello")
+	s := h.a.gsearch
 	opened := ""
 	h.a.openPath = func(p string) { opened = p }
-	h.click("hello.txt")
-	h.localMenu("在文件管理器中显示")
-	if opened != filepath.Dir(path) {
-		t.Fatalf("location %q", opened)
-	}
-	h.a.openIndexedLocal(b.items[0], false, false)
+	h.a.openHit(s.hits[0], false)
 	h.settle()
 	if opened != path {
 		t.Fatalf("open %q", opened)
 	}
-	h.a.openIndexedLocal(b.items[0], false, true)
+	// Its folder, with it chosen; and the folder in the file manager.
+	h.a.openHit(s.hits[0], true)
 	h.settle()
-	if b.results || !b.sel.Has(path) {
+	b := h.a.local
+	if !h.a.onLocal() || b.dir != filepath.Dir(path) || !b.sel.Has(path) {
 		t.Fatal("open containing folder lost selection")
 	}
-	h.replaceField("本机搜索", "hello")
-	os.Remove(path)
-	opened = ""
-	h.a.openIndexedLocal(b.items[0], false, false)
-	h.settle()
-	if opened != "" || !strings.Contains(b.err, "已移动、删除") {
-		t.Fatalf("stale entry: %q, %q", opened, b.err)
+	h.localMenu("在文件管理器中显示")
+	if opened != filepath.Dir(path) {
+		t.Fatalf("location %q", opened)
 	}
 }
 
 func TestLocalSearchPagesAndGlobalSort(t *testing.T) {
 	root := t.TempDir()
-	const n = 1503
+	const n = 503
 	for i := range n {
 		localWrite(t, root, fmt.Sprintf("match-%04d.txt", i), n-i)
 	}
 	h := localSearchHarness(t, root)
 	h.indexMenu("更新索引")
-	h.replaceField("本机搜索", "match")
-	b := h.a.local
-	if b.total != n || len(b.items) != localPageSize || b.items[0].Name != "match-0000.txt" {
-		t.Fatalf("first %d/%d", len(b.items), b.total)
+	g := h.find("match")
+	s := h.a.gsearch
+	if g.total != n || len(s.items) != searchPageSize || s.items[0].Name != "match-0000.txt" {
+		t.Fatalf("first %d/%d", len(s.items), g.total)
 	}
-	b.list.ScrollTo(localPageSize-1, ui.End)
-	h.tt.Frame()
-	h.settle()
-	if len(b.items) != n || b.items[n-1].Name != "match-1502.txt" {
-		t.Fatal("scroll did not append next page")
+	for len(s.items) < n {
+		shown := len(s.items)
+		s.list.ScrollTo(shown-1, ui.End)
+		h.tt.Frame()
+		h.settle()
+		if len(s.items) == shown {
+			t.Fatalf("scroll did not append the next page: %d", shown)
+		}
+	}
+	if s.items[n-1].Name != "match-0502.txt" {
+		t.Fatal("pages out of order")
 	}
 	h.click(colSize)
-	if len(b.items) != localPageSize || b.items[0].Size != 1 || b.items[0].Name != "match-1502.txt" {
-		t.Fatalf("global size order: first %+v, shown %d", b.items[0], len(b.items))
+	if len(s.items) != searchPageSize || s.items[0].Size != 1 || s.items[0].Name != "match-0502.txt" {
+		t.Fatalf("global size order: first %+v, shown %d", s.items[0], len(s.items))
 	}
 	h.click(colSize)
-	if b.items[0].Size != n || b.items[0].Name != "match-0000.txt" {
+	if s.items[0].Size != n || s.items[0].Name != "match-0000.txt" {
 		t.Fatal("descending global order")
 	}
-	b.here = true
-	b.filter.kind = "文档"
-	h.a.queueLocalSearch(0)
+	// The folder the search began in, of documents.
+	s.filter.kind = "文档"
+	h.a.runSearch(0)
 	h.settle()
-	if b.total != n {
-		t.Fatalf("scoped type result %d", b.total)
+	h.click("搜索范围 此文件夹 · " + filepath.Base(root))
+	if g := s.group("folder"); s.scope != "folder" || g.total != n {
+		t.Fatalf("scoped type result %+v", g)
 	}
 }
 
@@ -260,12 +271,16 @@ func TestLocalSearchBackupsAcrossParents(t *testing.T) {
 	h := localSearchHarness(t, root)
 	h.a.store.Servers = []*config.Server{{ID: "server", Name: "NAS", Addr: "unused"}}
 	h.indexMenu("更新索引")
-	h.replaceField("本机搜索", "same.txt")
-	b := h.a.local
-	b.sel.Add(p1)
-	b.sel.Add(p2)
-	h.tt.Frame()
-	h.localMenu("创建备份任务…")
+	h.find("same.txt")
+	choose := func() {
+		s := h.a.gsearch
+		for _, hit := range s.hits {
+			s.sel.Add(hit.key())
+		}
+		h.tt.Frame()
+	}
+	choose()
+	h.searchMenu("创建备份任务…")
 	if h.a.draft.source != filepath.Dir(p1) || !slices.Equal(h.a.draft.items, []string{"same.txt"}) || len(h.a.localBackups) != 1 {
 		t.Fatalf("first %+v", h.a.draft)
 	}
@@ -283,17 +298,30 @@ func TestLocalSearchBackupsAcrossParents(t *testing.T) {
 			t.Fatalf("task %+v", task)
 		}
 	}
-	h.a.openLocal(root)
+	// Saved, the tasks show; the search is still there to go back to.
+	h.a.nav.Back()
 	h.settle()
-	h.replaceField("本机搜索", "same.txt")
-	b.sel.Add(p1)
-	b.sel.Add(p2)
-	h.tt.Frame()
-	h.localMenu("创建备份任务…")
+	choose()
+	h.searchMenu("创建备份任务…")
 	h.click("取消")
 	if len(h.a.localBackups) != 0 {
 		t.Fatal("canceled group still queued")
 	}
+}
+
+// searchMenu chooses an item of the menu of the results of the search.
+func (h *harness) searchMenu(item string) {
+	h.t.Helper()
+	h.tt.Frame()
+	r, ok := h.tt.Find("搜索结果")
+	if !ok {
+		h.t.Fatalf("no results in %q", h.tt.Texts())
+	}
+	h.tt.RightClickAt(r.X+r.W/2, r.Y+r.H-8)
+	if err := h.tt.ChooseMenuItem(item); err != nil {
+		h.t.Fatalf("%v; menu %q", err, h.tt.Menu())
+	}
+	h.settle()
 }
 
 func TestLocalIndexCanceledProgress(t *testing.T) {
@@ -328,8 +356,7 @@ func TestLocalIndexCanceledProgress(t *testing.T) {
 	}
 	// A changed scope no longer exposes results from the former index.
 	m.index = localindex.New()
-	h.replaceField("本机搜索", "file")
-	if h.a.local.total != 0 {
+	if g := h.find("file"); g.total != 0 {
 		t.Fatal("old snapshot survived scope change")
 	}
 }

@@ -108,39 +108,36 @@ func TestTrashSorts(t *testing.T) {
 	}
 }
 
-// Results beyond a page load as the list scrolls to them, or on asking;
+// The results of a server beyond a page load as the list scrolls to them;
 // a click on a header asks the server for all of them in that order.
 func TestSearchPagesAndSortsOnServer(t *testing.T) {
 	f := fitest.New(t)
-	const n = 2300
+	const n = 650
 	for i := range n {
 		os.WriteFile(filepath.Join(f.Root, fmt.Sprintf("match-%04d.txt", i)), make([]byte, i), 0o644)
 	}
 	os.WriteFile(filepath.Join(f.Root, "other.txt"), nil, 0o644)
 	h := browserHarness(t, f)
 	h.click("文件夹 nas")
-	b := h.a.br
-	b.query = "match"
-	h.a.search(b.query)
-	h.settle()
-	h.want("找到 2,300 项，已显示 1,000 项")
-	if b.items[0].Name != "match-0000.txt" {
-		t.Fatalf("first %q", b.items[0].Name)
+	g := h.find("match")
+	s := h.a.gsearch
+	h.want("找到 650 项 · 已显示 200 项")
+	if s.items[0].Name != "match-0000.txt" || g.total != n {
+		t.Fatalf("first %q of %d", s.items[0].Name, g.total)
 	}
 
-	// Scrolled to the end, the next page loads.
-	b.list.ScrollTo(len(b.items)-1, ui.End)
-	h.tt.Frame()
-	h.settle()
-	if len(b.items) != 2000 {
-		t.Fatalf("scrolled: %d results", len(b.items))
+	// Scrolled to the end, the next pages load.
+	for len(s.items) < n {
+		shown := len(s.items)
+		s.list.ScrollTo(shown-1, ui.End)
+		h.tt.Frame()
+		h.settle()
+		if len(s.items) == shown {
+			t.Fatalf("scrolled: %d results", shown)
+		}
 	}
-	h.click("加载更多（还有 300 项）")
-	if len(b.items) != n || b.items[n-1].Name != "match-2299.txt" {
-		t.Fatalf("loaded %d results", len(b.items))
-	}
-	if h.tt.HasText("加载更多") {
-		t.Error("asks for more when all are shown")
+	if s.items[n-1].Name != "match-0649.txt" {
+		t.Fatalf("last %q", s.items[n-1].Name)
 	}
 
 	// Sorted by size, the largest of them all come first.
@@ -150,7 +147,7 @@ func TestSearchPagesAndSortsOnServer(t *testing.T) {
 	if f.Searches.Load() == before {
 		t.Fatal("sorted without asking the server")
 	}
-	if len(b.items) != 1000 || b.items[0].Name != "match-2299.txt" || b.items[999].Name != "match-1300.txt" {
-		t.Fatalf("by size, descending: %d, %q … %q", len(b.items), b.items[0].Name, b.items[len(b.items)-1].Name)
+	if len(s.items) != searchPageSize || s.items[0].Name != "match-0649.txt" || s.items[199].Name != "match-0450.txt" {
+		t.Fatalf("by size, descending: %d, %q … %q", len(s.items), s.items[0].Name, s.items[len(s.items)-1].Name)
 	}
 }

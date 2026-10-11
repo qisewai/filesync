@@ -62,17 +62,11 @@ func TestNativeBrowserTreeSearchAndFileOperations(t *testing.T) {
 	h.tt.Key(0, ui.KeyEnter)
 	h.settle()
 	h.want("计划.txt")
-	h.typeInto("搜索文件", "计划")
-	h.tt.Key(0, ui.KeyEnter)
-	h.settle()
-	if !h.a.br.results || len(h.a.br.items) != 1 {
-		t.Fatalf("search %+v", h.a.br.items)
+	if g := h.find("计划"); g.total != 1 || h.a.gsearch.scope != h.a.store.Servers[0].ID {
+		t.Fatalf("search %+v", g)
 	}
-	h.a.reloadKeeping()
+	h.tt.Key(ui.Alt, ui.KeyLeft)
 	h.settle()
-	if !h.a.br.results || len(h.a.br.items) != 1 {
-		t.Fatal("refresh replaced search with directory contents")
-	}
 	h.click("网格视图")
 	if !h.a.br.grid {
 		t.Fatal("grid did not stay selected")

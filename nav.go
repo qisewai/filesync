@@ -38,7 +38,7 @@ func (a *app) location() string {
 	case a.place == "backup":
 		return "/backup"
 	case a.place == "search" && a.gsearch != nil:
-		return "/search?q=" + url.QueryEscape(a.gsearch.query)
+		return "/search?q=" + url.QueryEscape(a.gsearch.query) + "&in=" + url.QueryEscape(a.gsearch.scope)
 	case a.place == localPlace && a.local != nil:
 		return "/local?dir=" + url.QueryEscape(a.local.dir)
 	case a.admin != nil && a.place == adminPlace(a.admin.server, a.admin.tab):
@@ -69,6 +69,9 @@ func (a *app) goLocation(loc string) {
 		a.taskShown = q.Get("task")
 	case parts[0] == "search":
 		a.openSearch(q.Get("q"))
+		if in := q.Get("in"); in != "" {
+			a.setScope(in)
+		}
 	case parts[0] == "settings":
 		a.place = "settings"
 	case parts[0] == "local":
@@ -177,9 +180,9 @@ func (a *app) topBar(c *ui.Context) {
 		}).Width(3*36 + 8).Shrink(0).Label("导航")
 		switch {
 		case a.onLocal():
-			a.localSearchField(c)
+			a.fileSearch(c, localPlace)
 		case a.onRoot():
-			a.browserSearch(c)
+			a.fileSearch(c, a.br.server)
 		case a.onSearch():
 			a.searchHeader(c)
 		default:
@@ -229,9 +232,6 @@ func (a *app) upward() func() {
 		}
 	case a.onRoot():
 		b := a.br
-		if b.results {
-			return func() { a.browse(b.path) }
-		}
 		if b.path != "" {
 			return func() { a.browse(parentDir(b.path), pathBase(b.path)) }
 		}
