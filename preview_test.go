@@ -7,6 +7,7 @@ import (
 	"image/color"
 	"image/png"
 	"io"
+	"math"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -31,9 +32,11 @@ func TestNativePreviewTextImageNavigationAndSystemOpen(t *testing.T) {
 			img.Set(x, y, color.RGBA{uint8(x), uint8(y), 100, 255})
 		}
 	}
-	file, _ := os.Create(filepath.Join(f.Root, "图片.png"))
-	png.Encode(file, img)
-	file.Close()
+	for _, name := range []string{"图片.png", "图片2.png"} {
+		file, _ := os.Create(filepath.Join(f.Root, name))
+		png.Encode(file, img)
+		file.Close()
+	}
 	h := browserHarness(t, f)
 	opened := ""
 	h.a.openPath = func(p string) { opened = p }
@@ -49,16 +52,49 @@ func TestNativePreviewTextImageNavigationAndSystemOpen(t *testing.T) {
 	if h.a.preview.text != "你好，原生预览\n第二行" {
 		t.Fatal("preview editable")
 	}
-	// Navigation retains the file snapshot and never depends on the live list.
+	// The arrows step among files of a kind: texts here.
 	h.a.previewStep(-1)
+	h.settle()
+	if h.a.preview.entry.Name != "笔记.txt" {
+		t.Fatalf("stepped from a text to %q", h.a.preview.entry.Name)
+	}
+	h.click("关闭预览")
+
+	// A picture shows over the window, the others of its folder below.
+	h.clickPage("图片.png")
+	h.tt.Key(0, ui.KeyEnter)
 	h.settle()
 	if h.a.preview == nil || h.a.preview.bitmap == nil {
 		t.Fatalf("image %+v", h.a.preview)
 	}
+	h.want("1 / 2 · 160 × 100")
+	h.tt.Key(0, ui.KeyRight)
+	if p := h.a.preview; p.entry.Name != "图片2.png" || p.placeholder == nil {
+		t.Fatalf("stepped to %q, placeholder %v", p.entry.Name, p.placeholder != nil)
+	}
+	h.settle()
+	h.want("2 / 2 · 160 × 100")
+	// Navigation retains the file snapshot and never depends on the live list.
+	h.click("缩略图 图片.png")
+	h.settle()
+	if h.a.preview.entry.Name != "图片.png" {
+		t.Fatalf("strip chose %q", h.a.preview.entry.Name)
+	}
 	h.click("原始大小")
 	h.click("放大")
+	if p := h.a.preview; !p.actual || p.zoom != 1.25 {
+		t.Fatalf("zoomed in: %v %v", p.actual, p.zoom)
+	}
+	// Zoomed out to fitting, it fits again.
 	h.click("缩小")
+	if h.a.preview.actual {
+		t.Fatal("zoomed out below fitting, but not fitting")
+	}
+	h.click("放大")
 	h.click("适合窗口")
+	if h.a.preview.actual {
+		t.Fatal("not fitting")
+	}
 	for i := 0; i < 3; i++ {
 		h.tt.Frame()
 	}
@@ -83,7 +119,11 @@ func TestNativePreviewTextImageNavigationAndSystemOpen(t *testing.T) {
 		t.Fatal(err)
 	}
 	opened = ""
-	h.a.openEntry(h.a.br.items[1])
+	for _, e := range h.a.br.items {
+		if e.Name == "报告.pdf" {
+			h.a.openEntry(e)
+		}
+	}
 	h.waitTransfers()
 	if opened == "" {
 		t.Fatal("cached open failed")
@@ -359,5 +399,124 @@ func TestOpenCachePathSeparatesSourcesAndConfinesNames(t *testing.T) {
 	p, err = openCachePath(c, entry)
 	if err != nil || len(filepath.Base(p)) > 240 || !strings.HasSuffix(p, ".pdf") {
 		t.Fatalf("long filename %q %v", p, err)
+	}
+}
+
+// The wheel zooms about the pointer, the point under it staying put; a
+// drag pans within the picture's edges; a double click toggles fitting.
+func TestViewerZoomAndPan(t *testing.T) {
+	bmp := ui.NewBitmap(image.NewRGBA(image.Rect(0, 0, 2000, 1000)))
+	p := &preview{bitmap: bmp, zoom: 1, stageW: 1000, stageH: 800}
+	if f := p.fitScale(); f != 0.5 {
+		t.Fatalf("fits at %v", f)
+	}
+	// The wheel up, 100 DIPs right of the center: from fitting, zoomed.
+	p.stageInput(ui.InputEvent{Kind: ui.InputScroll, DY: -1, X: 600, Y: 400})
+	if !p.actual || math.Abs(float64(p.zoom-0.5*wheelZoom)) > 1e-6 {
+		t.Fatalf("zoom %v", p.zoom)
+	}
+	// The point that was under the pointer (200 picture pixels right of
+	// its center) still is.
+	if got := p.panX + 200*p.zoom; math.Abs(float64(got-100)) > 0.01 {
+		t.Fatalf("point moved to %v", got)
+	}
+	// Narrower than the stage when its height is, it stays centered
+	// up and down.
+	if p.panY != 0 {
+		t.Fatalf("pan y %v", p.panY)
+	}
+	// Dragged far right, it stops at its left edge.
+	p.stageInput(ui.InputEvent{Kind: ui.InputPointerDown, X: 500, Y: 400, Clicks: 1})
+	p.stageInput(ui.InputEvent{Kind: ui.InputPointerMove, X: 5000, Y: 400})
+	p.stageInput(ui.InputEvent{Kind: ui.InputPointerUp, X: 5000, Y: 400})
+	if want := (2000*p.zoom - 1000) / 2; p.panX != want || p.dragging {
+		t.Fatalf("pan %v, want %v", p.panX, want)
+	}
+	// The wheel down past fitting fits it, centered.
+	for range 10 {
+		p.stageInput(ui.InputEvent{Kind: ui.InputScroll, DY: 1, X: 500, Y: 400})
+	}
+	if p.actual || p.panX != 0 {
+		t.Fatalf("not fitting: %v %v", p.actual, p.panX)
+	}
+	// A double click shows its own size about the pointer, another fits.
+	p.stageInput(ui.InputEvent{Kind: ui.InputPointerDown, X: 500, Y: 400, Clicks: 2})
+	if !p.actual || math.Abs(float64(p.zoom-1)) > 1e-4 {
+		t.Fatalf("double click: %v %v", p.actual, p.zoom)
+	}
+	p.stageInput(ui.InputEvent{Kind: ui.InputPointerDown, X: 500, Y: 400, Clicks: 2})
+	if p.actual {
+		t.Fatal("double click again did not fit")
+	}
+}
+
+// The wheel over the strip steps through the pictures.
+func TestStripWheelSteps(t *testing.T) {
+	f := fitest.New(t)
+	img := image.NewRGBA(image.Rect(0, 0, 40, 30))
+	for _, name := range []string{"a.png", "b.png", "c.png"} {
+		file, _ := os.Create(filepath.Join(f.Root, name))
+		png.Encode(file, img)
+		file.Close()
+	}
+	h := browserHarness(t, f)
+	h.clickPage("a.png")
+	h.tt.Key(0, ui.KeyEnter)
+	h.settle()
+	r, ok := h.tt.Find("缩略图 b.png")
+	if !ok {
+		t.Fatal("no strip")
+	}
+	h.tt.Scroll(r.X+r.W/2, r.Y+r.H/2, 0, 40)
+	h.settle()
+	if h.a.preview.entry.Name != "b.png" {
+		t.Fatalf("wheel down showed %q", h.a.preview.entry.Name)
+	}
+	h.tt.Scroll(r.X+r.W/2, r.Y+r.H/2, 0, -40)
+	h.settle()
+	if h.a.preview.entry.Name != "a.png" {
+		t.Fatalf("wheel up showed %q", h.a.preview.entry.Name)
+	}
+}
+
+// A zoom moves smoothly to its scale.
+func TestViewerZoomAnimates(t *testing.T) {
+	// Slow enough to catch on its way, however slow the test runs.
+	defer func(d time.Duration) { zoomMotion = d }(zoomMotion)
+	zoomMotion = time.Hour
+	f := fitest.New(t)
+	img := image.NewRGBA(image.Rect(0, 0, 300, 200))
+	file, _ := os.Create(filepath.Join(f.Root, "a.png"))
+	png.Encode(file, img)
+	file.Close()
+	h := browserHarness(t, f)
+	h.clickPage("a.png")
+	h.tt.Key(0, ui.KeyEnter)
+	h.settle()
+	h.tt.Frame() // the stage has its size
+	width := func() float32 {
+		r, ok := h.tt.Find("图片 a.png")
+		if !ok {
+			t.Fatal("no picture")
+		}
+		return r.W
+	}
+	if w := width(); w != 300 {
+		t.Fatalf("fits at %v", w)
+	}
+	h.a.preview.zoomBy(2)
+	h.tt.Frame()
+	if w := width(); w <= 300 || w >= 400 {
+		t.Fatalf("not on its way: %v", w)
+	}
+	// Quick, it ends at the scale asked.
+	zoomMotion = 10 * time.Millisecond
+	h.a.preview.zoomBy(1.25) // 750, within the stage
+	for deadline := time.Now().Add(2 * time.Second); width() != 750; {
+		if time.Now().After(deadline) {
+			t.Fatalf("zoomed to %v", width())
+		}
+		time.Sleep(20 * time.Millisecond)
+		h.tt.Frame()
 	}
 }

@@ -7,10 +7,12 @@ import (
 	"encoding/binary"
 	"fmt"
 	"image"
+	"math"
 	"os"
 	"path"
 	"path/filepath"
 	"strings"
+	"time"
 	"unicode/utf16"
 	"unicode/utf8"
 
@@ -31,6 +33,16 @@ type preview struct {
 	bitmap                *ui.Bitmap
 	cancel                context.CancelFunc
 	zoom                  float32
+	// placeholder is the picture shown before, faded until this loads.
+	placeholder *ui.Bitmap
+	// Zoomed (actual), the picture's center is panX, panY from the
+	// stage's, whose size the last frame gave.
+	panX, panY     float32
+	stageW, stageH float32
+	dragging       bool
+	dragX, dragY   float32 // where the drag started, and the pan then
+	dragPX, dragPY float32
+	stripScroll    float32 // the wheel turned over the strip, to a step
 }
 
 func previewKind(e fileindex.Entry) string {
@@ -164,72 +176,513 @@ func decodePreviewText(data []byte, truncated bool) (string, error) {
 	}
 	return string(data), nil
 }
-func (a *app) previewStep(delta int) {
-	p := a.preview
-	for i, e := range p.group {
-		if e.Path == p.entry.Path && e.Root == p.entry.Root {
-			j := i + delta
-			if j >= 0 && j < len(p.group) {
-				a.showPreview(p.server, p.client, p.group[j], p.group)
-			}
-			return
+
+// siblings are the entries of the group the arrows step through: those
+// shown as the entry is, pictures among pictures.
+func (p *preview) siblings() (list []fileindex.Entry, at int) {
+	kind := previewKind(p.entry)
+	at = -1
+	for _, e := range p.group {
+		if previewKind(e) != kind {
+			continue
 		}
+		if e.Path == p.entry.Path && e.Root == p.entry.Root {
+			at = len(list)
+		}
+		list = append(list, e)
 	}
+	return list, at
 }
+
+// previewStep shows the sibling delta away, keeping the picture shown
+// until the next has loaded.
+func (a *app) previewStep(delta int) {
+	a.previewGo(func(list []fileindex.Entry, at int) int { return at + delta })
+}
+
+// previewGo shows the sibling to returns, if any.
+func (a *app) previewGo(to func(list []fileindex.Entry, at int) int) {
+	p := a.preview
+	if p == nil {
+		return
+	}
+	list, at := p.siblings()
+	j := to(list, at)
+	if at < 0 || j < 0 || j >= len(list) || j == at {
+		return
+	}
+	old := p.bitmap
+	if old == nil {
+		old = p.placeholder
+	}
+	a.showPreview(p.server, p.client, list[j], p.group)
+	a.preview.placeholder = old // the next fits the window, as pictures differ
+}
+
 func (a *app) filePreviewView(c *ui.Context) {
 	p := a.preview
 	if p == nil {
 		return
 	}
-	t := c.Theme()
-	ui.DialogBase(c.Key("native-preview"), &p.open, func(backdrop, panel ui.Element) {
-		backdrop.Background(ui.RGBA(0, 0, 0, 0.45))
-		w, h := c.Size()
-		panel.Width(min(820, w-32)).Height(min(540, h-32)).Padding(18).Gap(10).Radius(t.Radius*3).Background(t.Background).Border(1, t.Border)
-		ui.Row(c).Gap(8).AlignItems(ui.Center).Children(func() {
-			ui.Text(c, p.entry.Name).Bold().FontSize(18).Grow(1).Shrink(1).SingleLine()
-			idx := -1
-			for i, e := range p.group {
-				if e.Path == p.entry.Path && e.Root == p.entry.Root {
-					idx = i
-					break
-				}
-			}
-			ui.Button(c, "上一项").Disabled(idx <= 0).OnClick(func() { a.previewStep(-1) })
-			ui.Button(c, "下一项").Disabled(idx < 0 || idx >= len(p.group)-1).OnClick(func() { a.previewStep(1) })
-			ui.Button(c, "系统程序打开").OnClick(func() { a.closePreview(); a.systemOpenSource(p.server, p.client, p.entry, false) })
-			ui.Button(c, "关闭预览").OnClick(a.closePreview)
-		})
-		ui.Text(c, p.entry.Path).FontSize(12).TextColor(t.TextMuted).SingleLine()
-		if p.loading {
-			ui.Column(c).Grow(1).Center().Children(func() { ui.Spinner(c).Label("正在加载预览") })
-		} else if p.err != "" {
-			notice(c, t.Danger, p.err)
-			ui.Spacer(c)
-		} else if p.bitmap != nil {
-			ui.Row(c).Gap(8).Children(func() {
-				ui.Button(c, "适合窗口").OnClick(func() { p.actual = false })
-				ui.Button(c, "原始大小").OnClick(func() { p.actual = true; p.zoom = 1 })
-				ui.Button(c, "缩小").OnClick(func() { p.actual = true; p.zoom = max(0.125, p.zoom/1.25) })
-				ui.Button(c, "放大").OnClick(func() { p.actual = true; p.zoom = min(4, p.zoom*1.25) })
-				if p.actual {
-					ui.Text(c, fmt.Sprintf("%.0f%%", p.zoom*100))
-				}
-			})
-			if p.actual {
-				w, h := p.bitmap.Size()
-				ui.ScrollBoth(c.Key("image-scroll")).Grow(1).MinHeight(0).Children(func() { ui.Image(c, p.bitmap).Width(float32(w) * p.zoom).Height(float32(h) * p.zoom) })
-			} else {
-				ui.Image(c, p.bitmap).Grow(1).MinHeight(0).Fit(ui.Contain)
-			}
-		} else {
-			ui.TextArea(c.Key("preview-text"), &p.text).ReadOnly(true).Grow(1).MinHeight(0).Label("文本预览")
-		}
-		ui.Text(c, p.note).FontSize(12).TextColor(t.TextMuted).SingleLine()
-	})
+	if previewKind(p.entry) == "image" {
+		a.imageViewer(c, p)
+	} else {
+		a.textViewer(c, p)
+	}
 	if !p.open && a.preview == p {
 		a.closePreview()
 	}
+}
+
+// The look of the picture viewer, dark whatever the theme.
+var (
+	viewerText  = ui.RGBA(250, 250, 250, 1)
+	viewerMuted = ui.RGBA(161, 161, 170, 1)
+	viewerHover = ui.RGBA(255, 255, 255, 0.12)
+)
+
+// imageViewer shows a picture over the whole window, with the others of
+// its folder below it.
+func (a *app) imageViewer(c *ui.Context, p *preview) {
+	list, at := p.siblings()
+	ui.DialogBase(c.Key("native-preview"), &p.open, func(backdrop, panel ui.Element) {
+		backdrop.Background(ui.RGBA(9, 9, 11, 1))
+		w, h := c.Size()
+		panel.Width(w).Height(h)
+		a.viewerKeys(c, p)
+
+		// The bar: what, then what can be done.
+		ui.Row(c).Padding(10, 12, 10, 20).Gap(4).AlignItems(ui.Center).Children(func() {
+			ui.Column(c).Grow(1).Shrink(1).MinWidth(0).Gap(2).Children(func() {
+				ui.Text(c, p.entry.Name).FontSize(15).Bold().TextColor(viewerText).SingleLine().Selectable()
+				meta := []string{}
+				if len(list) > 1 && at >= 0 {
+					meta = append(meta, fmt.Sprintf("%d / %d", at+1, len(list)))
+				}
+				if p.bitmap != nil {
+					bw, bh := p.bitmap.Size()
+					meta = append(meta, fmt.Sprintf("%d × %d", bw, bh))
+				}
+				meta = append(meta, formatBytes(p.entry.Size), p.entry.ModTime().Format("2006-01-02 15:04"))
+				if strings.EqualFold(path.Ext(p.entry.Name), ".gif") {
+					meta = append(meta, "GIF 显示首帧")
+				}
+				ui.Text(c, strings.Join(meta, " · ")).FontSize(12).TextColor(viewerMuted).SingleLine()
+			})
+			ready := p.bitmap != nil
+			viewerButton(c, "zoom-out", iconZoomOut, "缩小", !ready || !p.actual, true, func() { p.zoomBy(1 / 1.25) })
+			zoom := "适合"
+			if p.actual {
+				zoom = fmt.Sprintf("%.0f%%", p.zoom*100)
+			}
+			ui.Text(c, zoom).FontSize(12).TextColor(viewerMuted).Width(44).TextAlign(ui.Center).FontFeatures("tnum")
+			viewerButton(c, "zoom-in", iconZoomIn, "放大", !ready, true, func() { p.zoomBy(1.25) })
+			if p.actual {
+				viewerButton(c, "fit", iconFit, "适合窗口", !ready, true, p.fit)
+			} else {
+				viewerButton(c, "actual", iconActual, "原始大小", !ready, true, p.actualSize)
+			}
+			ui.Column(c).Width(1).Height(20).Background(ui.RGBA(255, 255, 255, 0.16)).Margin(0, 6)
+			viewerButton(c, "open-out", iconOpenOut, "系统程序打开", false, true, func() {
+				a.closePreview()
+				a.systemOpenSource(p.server, p.client, p.entry, false)
+			})
+			viewerButton(c, "close", iconClose, "关闭预览", false, true, a.closePreview)
+		})
+
+		// The picture, between the arrows.
+		ui.Row(c).Grow(1).MinHeight(0).AlignItems(ui.Stretch).Children(func() {
+			ui.Column(c).Width(76).Center().Children(func() {
+				if len(list) > 1 {
+					viewerArrow(c, "prev", iconPrev, "上一张", at <= 0, func() { a.previewStep(-1) })
+				}
+			})
+			ui.Column(c).Grow(1).Shrink(1).MinWidth(0).MinHeight(0).Center().Children(func() {
+				switch bmp := p.bitmap; {
+				case p.err != "":
+					ui.Column(c).Gap(12).Padding(24).MaxWidth(460).AlignItems(ui.Center).Children(func() {
+						ui.Icon(c, iconImage).FontSize(44).TextColor(viewerMuted)
+						ui.Text(c, p.err).TextColor(viewerText).TextAlign(ui.Center).MaxLines(4)
+						ui.Button(c.Key("viewer-open"), "用系统程序打开").OnClick(func() {
+							a.closePreview()
+							a.systemOpenSource(p.server, p.client, p.entry, false)
+						})
+					})
+				case bmp == nil && p.placeholder != nil:
+					// The last picture, faded, until this one loads.
+					ui.Image(c, p.placeholder).Grow(1).Fill().MinHeight(0).Fit(ui.ScaleDown).Opacity(0.35)
+				case bmp == nil:
+					ui.Spinner(c).FontSize(26).TextColor(viewerMuted).Label("正在加载预览")
+				default:
+					a.imageStage(c, p, bmp)
+				}
+			})
+			ui.Column(c).Width(76).Center().Children(func() {
+				if len(list) > 1 {
+					viewerArrow(c, "next", iconNext, "下一张", at < 0 || at >= len(list)-1, func() { a.previewStep(1) })
+				}
+			})
+		})
+
+		// The others of the folder, around the one shown.
+		if len(list) > 1 {
+			from := max(0, min(at-6, len(list)-13))
+			to := min(len(list), from+13)
+			strip := ui.Row(c.Key("film-strip")).Padding(8, 16, 16, 16).Gap(8).Justify(ui.Center)
+			// The wheel over the strip steps through the pictures.
+			strip.HandleInput(func(ev ui.InputEvent) bool {
+				if ev.Kind != ui.InputScroll {
+					return false
+				}
+				d := ev.DY
+				if d == 0 {
+					d = ev.DX
+				}
+				step := 0
+				if !ev.Precise {
+					step = int(math.Copysign(1, float64(d)))
+				} else if p.stripScroll += d; math.Abs(float64(p.stripScroll)) >= 40 {
+					step = int(math.Copysign(1, float64(p.stripScroll)))
+					p.stripScroll = 0
+				}
+				if d != 0 && step != 0 {
+					a.previewStep(step)
+				}
+				return true
+			})
+			strip.Children(func() {
+				for i := from; i < to; i++ {
+					e := list[i]
+					a.filmFrame(c, p, e, i == at, func() { a.previewGo(func([]fileindex.Entry, int) int { return i }) })
+				}
+			})
+		}
+	})
+}
+
+// A notch of the wheel zooms by wheelZoom, about 7 doubling the size; a
+// touchpad by touchpadZoom an e-fold a DIP it scrolls.
+const (
+	wheelZoom    = 1.1
+	touchpadZoom = 0.005
+)
+
+// zoomMotion is how long a zoom takes to show.
+var zoomMotion = 180 * time.Millisecond
+
+// imageStage shows the picture, fitting the stage and centered, or zoomed
+// where the wheel and drags put it: zooms move there smoothly.
+func (a *app) imageStage(c *ui.Context, p *preview, bmp *ui.Bitmap) {
+	stage := ui.Column(c.Key("image-stage")).Grow(1).Fill().MinHeight(0).Clip().HandleInput(p.stageInput)
+	resized := false
+	if r := stage.Bounds(); r.W > 0 && (r.W != p.stageW || r.H != p.stageH) {
+		resized = p.stageW != 0
+		p.stageW, p.stageH = r.W, r.H
+		p.clampPan() // the window resized
+	}
+	switch {
+	case p.dragging:
+		stage.Cursor(ui.CursorGrabbing)
+	case p.actual:
+		stage.Cursor(ui.CursorGrab)
+	}
+	stage.Children(func() {
+		if p.stageW <= 0 {
+			// Before the stage has a size, as the picture first shows.
+			ui.Image(c, bmp).Grow(1).Fill().MinHeight(0).Fit(ui.ScaleDown).Label("图片 " + p.entry.Name)
+			return
+		}
+		// A picture of its own each, which starts where it is meant to be.
+		img := ui.Image(c.Key("viewer-image/"+p.entry.Path), bmp).Absolute().Label("图片 " + p.entry.Name)
+		scale, x, y := p.scale(), p.panX, p.panY
+		// A drag follows the pointer, and a resized window the window, at
+		// once; the animations keep up with them for what moves next.
+		instant := p.dragging || resized
+		d := zoomMotion
+		if instant {
+			d = 0
+		}
+		// Scale and pan move along one easing: the point zoomed about
+		// stays under the pointer all the way.
+		if s := img.Animate("scale", scale, d); !instant {
+			scale = s
+		}
+		if v := img.Animate("x", x, d); !instant {
+			x = v
+		}
+		if v := img.Animate("y", y, d); !instant {
+			y = v
+		}
+		bw, bh := bmp.Size()
+		w, h := float32(bw)*scale, float32(bh)*scale
+		img.Left(p.stageW/2-w/2+x).Top(p.stageH/2-h/2+y).Size(w, h)
+	})
+}
+
+// filmFrame is a picture of the strip under the viewer.
+func (a *app) filmFrame(c *ui.Context, p *preview, e fileindex.Entry, current bool, choose func()) {
+	t := c.Theme()
+	frame := ui.ButtonBase(c.Key("film/"+e.Path)).Size(64, 48).Radius(6).Clip().Label("缩略图 " + e.Name).Tooltip(e.Name).Background(ui.RGBA(255, 255, 255, 0.06))
+	var bmp *ui.Bitmap
+	if a.br != nil && a.br.server == p.server {
+		bmp = a.thumb(e)
+	}
+	frame.Children(func() {
+		if bmp != nil {
+			ui.Image(c, bmp).Size(64, 48).Fit(ui.Cover)
+		} else {
+			ui.Column(c).Size(64, 48).Center().Children(func() { ui.Icon(c, iconImage).FontSize(18).TextColor(viewerMuted) })
+		}
+	})
+	switch {
+	case current:
+		frame.Border(2, t.Accent)
+	case frame.Hovered():
+		frame.Border(2, ui.RGBA(255, 255, 255, 0.5))
+	default:
+		frame.Opacity(0.55)
+	}
+	frame.OnClick(choose)
+}
+
+// viewerKeys are the keys of a preview: the arrows step, + and - zoom, 0
+// fits the window.
+func (a *app) viewerKeys(c *ui.Context, p *preview) {
+	if c.Shortcut(0, ui.KeyLeft) {
+		a.previewStep(-1)
+	}
+	if c.Shortcut(0, ui.KeyRight) {
+		a.previewStep(1)
+	}
+	if p.bitmap == nil {
+		return
+	}
+	if c.Shortcut(0, ui.KeyEqual) || c.Shortcut(ui.Shift, ui.KeyEqual) {
+		p.zoomBy(1.25)
+	}
+	if c.Shortcut(0, ui.KeyMinus) {
+		p.zoomBy(1 / 1.25)
+	}
+	if c.Shortcut(0, ui.Key0) {
+		p.fit()
+	}
+}
+
+// fitScale is the scale the picture fits the stage at, at most its own
+// size.
+func (p *preview) fitScale() float32 {
+	if p.bitmap == nil {
+		return 1
+	}
+	w, h := p.bitmap.Size()
+	if w <= 0 || h <= 0 || p.stageW <= 0 || p.stageH <= 0 {
+		return 1
+	}
+	return min(1, p.stageW/float32(w), p.stageH/float32(h))
+}
+
+// scale is the picture's scale as shown.
+func (p *preview) scale() float32 {
+	if p.actual {
+		return p.zoom
+	}
+	return p.fitScale()
+}
+
+// zoomBy zooms by a factor about the stage's center.
+func (p *preview) zoomBy(f float32) { p.zoomAt(f, 0, 0) }
+
+// zoomAt zooms by a factor about the point x, y from the stage's center,
+// which stays where it is. Zoomed out below fitting, the picture fits.
+func (p *preview) zoomAt(f, x, y float32) {
+	if p.bitmap == nil {
+		return
+	}
+	fit, from := p.fitScale(), p.scale()
+	to := min(8, max(0.02, from*f))
+	if f < 1 && to <= fit*1.001 {
+		p.fit()
+		return
+	}
+	if !p.actual {
+		p.panX, p.panY = 0, 0
+	}
+	// The point of the picture under x, y, from its center.
+	u, v := (x-p.panX)/from, (y-p.panY)/from
+	p.actual, p.zoom = true, to
+	p.panX, p.panY = x-u*to, y-v*to
+	p.clampPan()
+}
+
+// fit shows the picture fitting the stage.
+func (p *preview) fit() { p.actual, p.panX, p.panY = false, 0, 0 }
+
+// actualSize shows the picture at its own size, centered.
+func (p *preview) actualSize() {
+	p.actual, p.zoom, p.panX, p.panY = true, 1, 0, 0
+	p.clampPan()
+}
+
+// clampPan keeps the picture over the stage: centered across a side it
+// does not fill, and not past its edges along one it does.
+func (p *preview) clampPan() {
+	if p.bitmap == nil {
+		return
+	}
+	w, h := p.bitmap.Size()
+	clamp := func(pan, size, room float32) float32 {
+		if size <= room {
+			return 0
+		}
+		edge := (size - room) / 2
+		return min(edge, max(-edge, pan))
+	}
+	p.panX = clamp(p.panX, float32(w)*p.zoom, p.stageW)
+	p.panY = clamp(p.panY, float32(h)*p.zoom, p.stageH)
+}
+
+// stageInput zooms with the wheel about the pointer, toggles fitting and
+// the picture's own size with a double click, and pans with a drag.
+func (p *preview) stageInput(ev ui.InputEvent) bool {
+	if p.bitmap == nil {
+		return false
+	}
+	x, y := ev.X-p.stageW/2, ev.Y-p.stageH/2
+	switch ev.Kind {
+	case ui.InputScroll:
+		dy := ev.DY
+		if dy == 0 {
+			dy = ev.DX
+		}
+		if dy == 0 {
+			return true
+		}
+		f := float32(wheelZoom)
+		if ev.Precise {
+			f = float32(math.Exp(float64(-dy) * touchpadZoom)) // smoothly
+		} else if dy > 0 {
+			f = 1 / f
+		}
+		p.zoomAt(f, x, y)
+		return true
+	case ui.InputPointerDown:
+		if ev.Button != 0 {
+			return false
+		}
+		if ev.Clicks == 2 {
+			if p.actual {
+				p.fit()
+			} else if fit := p.fitScale(); fit < 1 {
+				p.zoomAt(1/fit, x, y) // its own size, about the point
+			} else {
+				p.zoomAt(2, x, y)
+			}
+			return true
+		}
+		if p.actual {
+			p.dragging = true
+			p.dragX, p.dragY, p.dragPX, p.dragPY = ev.X, ev.Y, p.panX, p.panY
+		}
+		return true
+	case ui.InputPointerMove:
+		if p.dragging && ev.Button == 0 {
+			p.panX, p.panY = p.dragPX+ev.X-p.dragX, p.dragPY+ev.Y-p.dragY
+			p.clampPan()
+			return true
+		}
+	case ui.InputPointerUp:
+		if p.dragging {
+			p.dragging = false
+			return true
+		}
+	}
+	return false
+}
+
+// viewerButton is a round button of an icon, labeled for the tooltip and
+// for assistive technology; dark is for the picture viewer.
+func viewerButton(c *ui.Context, key string, svg *ui.SVG, label string, disabled, dark bool, click func()) {
+	t := c.Theme()
+	color, hover := t.Text, t.SurfaceHover
+	if dark {
+		color, hover = viewerText, viewerHover
+	}
+	b := ui.ButtonBase(c.Key("viewer/"+key)).Size(34, 34).Radius(17).Label(label).Tooltip(label).Disabled(disabled)
+	hovered := b.Hovered() && !disabled
+	b.Children(func() {
+		ic := ui.Icon(c, svg).FontSize(18).TextColor(color)
+		if disabled {
+			ic.Opacity(0.35)
+		}
+	})
+	if hovered {
+		b.Background(hover)
+	}
+	b.OnClick(click)
+}
+
+// viewerArrow is a large round button beside the picture.
+func viewerArrow(c *ui.Context, key string, svg *ui.SVG, label string, disabled bool, click func()) {
+	b := ui.ButtonBase(c.Key("viewer/"+key)).Size(48, 48).Radius(24).Label(label).Tooltip(label).Disabled(disabled).Background(ui.RGBA(255, 255, 255, 0.08))
+	hovered := b.Hovered() && !disabled
+	b.Children(func() {
+		ic := ui.Icon(c, svg).FontSize(24).TextColor(viewerText)
+		if disabled {
+			ic.Opacity(0.25)
+		}
+	})
+	if hovered {
+		b.Background(ui.RGBA(255, 255, 255, 0.18))
+	}
+	b.OnClick(click)
+}
+
+// textViewer shows a text file in a card over the window.
+func (a *app) textViewer(c *ui.Context, p *preview) {
+	t := c.Theme()
+	list, at := p.siblings()
+	ui.DialogBase(c.Key("native-preview"), &p.open, func(backdrop, panel ui.Element) {
+		backdrop.Background(ui.RGBA(0, 0, 0, 0.45))
+		w, h := c.Size()
+		panel.Width(min(920, w-48)).Height(min(680, h-48)).Radius(t.Radius*3).Background(t.Background).Border(1, t.Border).Clip().
+			Shadow(0, 12, 40, 0, ui.RGBA(0, 0, 0, 0.25))
+		a.viewerKeys(c, p)
+		ui.Row(c).Padding(12, 12, 12, 18).Gap(10).AlignItems(ui.Center).BorderWidth(0, 0, 1, 0).BorderColor(t.Border).Children(func() {
+			fileIcon(c, p.entry, 22)
+			ui.Column(c).Grow(1).Shrink(1).MinWidth(0).Gap(2).Children(func() {
+				ui.Text(c, p.entry.Name).Bold().SingleLine().Selectable()
+				meta := []string{}
+				if len(list) > 1 && at >= 0 {
+					meta = append(meta, fmt.Sprintf("%d / %d", at+1, len(list)))
+				}
+				meta = append(meta, formatBytes(p.entry.Size), p.entry.ModTime().Format("2006-01-02 15:04"), path.Join(p.entry.RootName, p.entry.Parent))
+				ui.Text(c, strings.Join(meta, " · ")).FontSize(12).TextColor(t.TextMuted).SingleLine()
+			})
+			if len(list) > 1 {
+				viewerButton(c, "prev", iconPrev, "上一项", at <= 0, false, func() { a.previewStep(-1) })
+				viewerButton(c, "next", iconNext, "下一项", at < 0 || at >= len(list)-1, false, func() { a.previewStep(1) })
+			}
+			viewerButton(c, "open-out", iconOpenOut, "系统程序打开", false, false, func() {
+				a.closePreview()
+				a.systemOpenSource(p.server, p.client, p.entry, false)
+			})
+			viewerButton(c, "close", iconClose, "关闭预览", false, false, a.closePreview)
+		})
+		ui.Column(c).Grow(1).MinHeight(0).Padding(12).Children(func() {
+			switch {
+			case p.loading:
+				ui.Column(c).Grow(1).Center().Children(func() { ui.Spinner(c).FontSize(22).Label("正在加载预览") })
+			case p.err != "":
+				notice(c, t.Danger, p.err)
+				ui.Spacer(c)
+			default:
+				ui.TextArea(c.Key("preview-text"), &p.text).ReadOnly(true).Font("monospace").Grow(1).MinHeight(0).Label("文本预览")
+			}
+		})
+		if p.note != "" {
+			ui.Text(c, p.note).FontSize(11).TextColor(t.TextMuted).SingleLine().Padding(0, 18, 10, 18)
+		}
+	})
 }
 
 // Cache identities include the server address and remote version; filenames
