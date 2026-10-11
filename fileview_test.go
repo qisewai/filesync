@@ -64,13 +64,14 @@ func TestSelectionBar(t *testing.T) {
 	h := newHarness(t, &config.Store{Dir: t.TempDir()})
 	h.a.openLocal(dir)
 	h.settle()
-	h.want("创建备份任务…")
-	if h.tt.HasText("取消选择") {
-		t.Fatal("selection bar without a selection")
+	if h.tt.HasText("取消选择") || h.tt.HasText("创建备份任务…") {
+		t.Fatal("the commands of the files show over them")
 	}
 	h.clickPage("a.txt")
 	h.want("已选 1 项 · 3 B")
-	h.want("在文件管理器中显示")
+	if h.tt.HasText("创建备份任务…") {
+		t.Fatal("backing up shows in the bar, not in the menu")
+	}
 	h.tt.Key(0, ui.KeyEscape)
 	h.settle()
 	if h.a.local.sel.Len() != 0 || h.tt.HasText("取消选择") {

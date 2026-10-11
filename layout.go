@@ -25,9 +25,10 @@ func (a *app) view(c *ui.Context) {
 	split := ui.Split(c.Key("main-split"), &a.sidebarW, func() { a.sidebar(c) }, func() {
 		ui.Column(c).Grow(1).Shrink(1).MinWidth(0).Fill().Children(func() {
 			a.topBar(c)
+			a.locationBar(c)
 			a.nav.View(c, func(r *ui.Route) {
 				r.Title(a.pageTitle())
-				ui.Column(c).Grow(1).MinHeight(0).Padding(16, 24).Gap(12).Children(func() {
+				ui.Column(c).Grow(1).MinHeight(0).Padding(10, 24, 16, 24).Gap(12).Children(func() {
 					if a.errorMsg != "" && a.place != "" && a.place != "backup" {
 						closableNotice(c, c.Theme().Danger, a.errorMsg, func() { a.errorMsg = "" })
 					}
@@ -72,6 +73,8 @@ func (a *app) page(c *ui.Context) {
 		a.adminView(c)
 	case a.place == "backup":
 		a.backupPage(c)
+	case a.place == "settings":
+		a.settingsPage(c)
 	case a.onSearch():
 		a.searchPage(c)
 	case a.onLocal():
@@ -147,7 +150,10 @@ func (a *app) sidebar(c *ui.Context) {
 			}).Label("位置")
 		})
 		ui.Row(c).Padding(8).Gap(6).AlignItems(ui.Center).BorderWidth(1, 0, 0, 0).BorderColor(t.Border).Children(func() {
-			ui.MenuButton(c.Key("settings"), "设置", a.settingsMenu).Label("设置").Tooltip("服务器、本机索引与其他设置")
+			settings := toolButton(c, "settings", iconGear, "设置", "服务器、本机索引与其他设置", false, func() { a.place = "settings" })
+			if a.place == "settings" {
+				settings.Background(c.Theme().SurfaceHover)
+			}
 			ui.Spacer(c)
 			iconButton(c, "add-server", iconPlus, "添加服务器", "添加 fileindex 服务器", false, func() {
 				a.openServers()
@@ -202,8 +208,8 @@ func (a *app) navItem(c *ui.Context, place string, svg *ui.SVG, label string, ac
 	return item.Selected(a.place == place).OnClick(action)
 }
 
-// serverItems are the roots of a server, then its trash; its management
-// is in its menu.
+// serverItems are the roots of a server, then its trash and its
+// management.
 func (a *app) serverItems(c *ui.Context, sv *config.Server) {
 	t := c.Theme()
 	if sv.Token == "" {
@@ -232,6 +238,12 @@ func (a *app) serverItems(c *ui.Context, sv *config.Server) {
 		a.directoryView(c, sv, r, "", r.Name)
 	}
 	a.navItem(c, trashPlace(sv.ID), iconTrash, "回收站", func() { a.openTrash(sv.ID) })
+	// The management, in the tab shown last.
+	tab := "roots"
+	if a.admin != nil && a.admin.server == sv.ID {
+		tab = a.admin.tab
+	}
+	a.navItem(c, adminPlace(sv.ID, tab), iconGear, "管理", func() { a.openAdmin(sv.ID, tab) }).Label("管理 " + sv.Title())
 }
 
 // serverMark shows, beside a server in the sidebar, whether it is

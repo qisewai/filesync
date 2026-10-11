@@ -376,19 +376,37 @@ func (a *app) adminRoot(m *adminPage) *fileindex.Root {
 	r := roots[m.rootCursor]
 	return &r
 }
+
+// adminHeader is, under the toolbar, the server managed, and the tabs of
+// its management.
+func (a *app) adminHeader(c *ui.Context) {
+	m := a.admin
+	t := c.Theme()
+	name := m.server
+	if sv := a.store.Server(m.server); sv != nil {
+		name = sv.Title()
+	}
+	ui.Row(c).Gap(6).AlignItems(ui.Center).Padding(0, 6, 0, 0).Children(func() {
+		ui.Icon(c, iconServer).FontSize(16).TextColor(t.TextMuted)
+		ui.Text(c, name).FontSize(16).Bold().SingleLine()
+	})
+	tabs := []string{"roots", "dupes", "stats"}
+	at := max(0, slices.Index(tabs, m.tab))
+	seg := ui.Segmented(c.Key("admin-tabs"), &at, "目录管理", "查重", "空间统计").Label("管理页面").Disabled(m.busy)
+	if seg.Changed() && tabs[at] != m.tab {
+		a.openAdmin(m.server, tabs[at])
+	}
+	ui.Spacer(c)
+	iconButton(c, "admin-refresh", iconRetry, "刷新", "重新读取管理数据（F5）", m.busy, a.reloadAdmin)
+}
+
+// adminView is the management of a server, in the tab chosen.
 func (a *app) adminView(c *ui.Context) {
 	m := a.admin
 	t := c.Theme()
-	ui.Row(c).Gap(12).AlignItems(ui.Center).Children(func() {
-		tabs := []string{"roots", "dupes", "stats"}
-		at := max(0, slices.Index(tabs, m.tab))
-		seg := ui.Segmented(c.Key("admin-tabs"), &at, "目录管理", "查重", "空间统计").Label("管理页面").Disabled(m.busy)
-		if seg.Changed() && tabs[at] != m.tab {
-			a.openAdmin(m.server, tabs[at])
-		}
-		ui.Spacer(c)
-		ui.Button(c, "刷新").Tooltip("重新读取管理数据").Disabled(m.busy).OnClick(a.reloadAdmin)
-	})
+	if !m.busy && c.Shortcut(0, ui.KeyF5) {
+		a.reloadAdmin()
+	}
 	if m.err != "" {
 		notice(c, t.Danger, m.err)
 	}
@@ -414,24 +432,37 @@ func (a *app) rootsView(c *ui.Context, m *adminPage) {
 	busy := m.loading || m.busy
 	scanning := r != nil && r.Active != nil && r.Active.Job != nil && !r.Active.Job.Finished()
 	pendingScan := r != nil && a.hasScanTransfer(m.server, r.ID)
-	ui.Row(c).Gap(6).Wrap().Children(func() {
-		ui.Button(c, "添加索引目录…").Disabled(busy).OnClick(func() { m.draft = newRootDraft(nil) })
-		ui.Button(c, "编辑目录…").Disabled(busy || r == nil).OnClick(func() { m.draft = newRootDraft(r) })
-		ui.Button(c, "打开目录").Disabled(r == nil || busy).OnClick(func() { a.goPlace(rootPlace(m.server, r.ID)) })
-		ui.Button(c, "更新索引").Disabled(r == nil || busy || scanning || pendingScan).OnClick(func() { a.startScan(m, *r, false) })
-		ui.Button(c, "完整校验…").Disabled(r == nil || busy || scanning || pendingScan || r != nil && r.LastScanAt == 0).OnClick(func() { m.rebuilding = r; m.confirmRebuild = true })
-		ui.Button(c, "取消扫描").Disabled(!scanning || busy).OnClick(func() { a.cancelRootScan(m, *r) })
-		ui.Button(c, "扫描记录").Disabled(r == nil || busy).OnClick(func() { a.loadScanHistory(m, *r) })
-		ui.Button(c, "移除索引…").Disabled(r == nil || busy || scanning || a.serverHasTransfers(m.server)).OnClick(func() { m.removing = r; m.confirmRemove = true })
-	})
+	n := 0
+	if r != nil {
+		n = 1
+	}
+	commandBar(c, n, 0, func() { m.rootCursor = -1 }, func() {
+		toolButton(c, "add-root", iconPlus, "添加索引目录…", "", busy, func() { m.draft = newRootDraft(nil) })
+	}, func() {
+		if scanning {
+			toolButton(c, "cancel-scan", iconStop, "取消扫描", "", busy, func() { a.cancelRootScan(m, *r) })
+		} else {
+			toolButton(c, "scan-root", iconRetry, "更新索引", "扫描有变化的文件", busy || pendingScan, func() { a.startScan(m, *r, false) })
+		}
+		toolButton(c, "open-root", iconFolder, "打开目录", "", busy, func() { a.goPlace(rootPlace(m.server, r.ID)) })
+		toolButton(c, "edit-root", iconRename, "编辑目录…", "", busy, func() { m.draft = newRootDraft(r) })
+		toolButton(c, "remove-root", iconTrash, "移除索引…", "只移除索引，不删除文件", busy || scanning || a.serverHasTransfers(m.server), func() { m.removing = r; m.confirmRemove = true })
+		// Seldom used: icons, with their names in their tips.
+		iconButton(c, "scan-history", iconList, "扫描记录", "扫描记录", busy, func() { a.loadScanHistory(m, *r) })
+		iconButton(c, "verify-root", iconCheck, "完整校验…", "完整校验：重新读取全部文件，较慢", busy || scanning || pendingScan || r.LastScanAt == 0, func() { m.rebuilding = r; m.confirmRebuild = true })
+	}, func() {})
 	cols := []ui.TableColumn{{Title: "名称 / 路径"}, {Title: "索引内容", Width: 175}, {Title: "状态 / 自动更新", Width: 265}}
 	ui.Table(c.Key("managed-roots"), &m.rootList, cols, len(roots), func(row, col int) {
 		root := roots[row]
+		muted := c.Theme().TextMuted
+		if row == m.rootCursor {
+			muted = c.Theme().AccentText.Alpha(0.85)
+		}
 		ui.Column(c).Gap(4).Padding(4, 0).Children(func() {
 			switch col {
 			case 0:
 				ui.Text(c, root.Name).Bold().SingleLine()
-				ui.Text(c, root.Path).SingleLine().FontSize(12).TextColor(c.Theme().TextMuted)
+				ui.Text(c, root.Path).SingleLine().FontSize(12).TextColor(muted)
 				if root.ReadOnly {
 					ui.Badge(c, "只读")
 				}
@@ -455,7 +486,7 @@ func (a *app) rootsView(c *ui.Context, m *adminPage) {
 					ui.Text(c, scanStateText(j.Status)+" · "+formatWhen(j.FinishedAt)).SingleLine().FontSize(12)
 					ui.Text(c, fmt.Sprintf("新增 %d · 更新 %d · 删除 %d · 错误 %d", j.Added, j.Updated, j.Deleted, j.Errors)).SingleLine().FontSize(12)
 				}
-				ui.Text(c, scheduleLabel(root.Schedule)).FontSize(12).SingleLine().TextColor(c.Theme().TextMuted)
+				ui.Text(c, scheduleLabel(root.Schedule)).FontSize(12).SingleLine().TextColor(muted)
 				if root.NextScanAt > 0 {
 					ui.Text(c, "下次 "+formatWhen(root.NextScanAt)).FontSize(12).SingleLine()
 				}

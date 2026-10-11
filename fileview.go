@@ -181,7 +181,8 @@ func emptyFolder(c *ui.Context, hint string) {
 }
 
 // commandBar is the bar over the files: the page's commands, or, with
-// files chosen, how many, their size, and what to do with them; then, at its end, the
+// files chosen, how many, their size, and what to do with them, nil for
+// nothing but the menu of the files; then, at its end, the
 // view's switch and menu. It keeps its height as it changes, so that the
 // files stay in place.
 func commandBar(c *ui.Context, n int, size int64, clear func(), commands, actions, end func()) {
@@ -196,9 +197,13 @@ func commandBar(c *ui.Context, n int, size int64, clear func(), commands, action
 					text += " · " + formatBytes(size)
 				}
 				ui.Text(c, text).FontSize(13).SingleLine().FontFeatures("tnum").Padding(0, 6, 0, 2)
-				ui.Divider(c).Height(18).Width(1)
-				// What does not fit goes into the toolbar's menu.
-				ui.Toolbar(c, actions).Grow(1).Shrink(1).MinWidth(0).Label("选中项的操作")
+				if actions != nil {
+					ui.Divider(c).Height(18).Width(1)
+					// What does not fit goes into the toolbar's menu.
+					ui.Toolbar(c, actions).Grow(1).Shrink(1).MinWidth(0).Label("选中项的操作")
+				} else {
+					ui.Spacer(c)
+				}
 			})
 		} else {
 			commands()

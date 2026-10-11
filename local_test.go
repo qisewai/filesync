@@ -51,7 +51,7 @@ func TestLocalFiles(t *testing.T) {
 	// Without a choice, the directory shown is backed up, as itself.
 	h.a.local.sel.Clear()
 	h.tt.Frame()
-	h.click("创建备份任务…")
+	h.localMenu("备份当前文件夹…")
 	if d := h.a.draft; d.source != home || d.items != nil || !d.withDir {
 		t.Fatalf("draft %+v", d)
 	}

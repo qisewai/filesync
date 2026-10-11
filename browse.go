@@ -386,8 +386,8 @@ func (a *app) researchNAS() {
 	}
 }
 
-// browserHeader is, in the toolbar, where the page is, and the search.
-func (a *app) browserHeader(c *ui.Context) {
+// browserPath is, under the toolbar, where the page is.
+func (a *app) browserPath(c *ui.Context) {
 	b := a.br
 	crumbs := []string{b.root.Name}
 	if b.path != "" {
@@ -398,7 +398,7 @@ func (a *app) browserHeader(c *ui.Context) {
 		crumbs = append(crumbs, "搜索“"+b.query+"”")
 		chosen = len(crumbs) - 1
 	}
-	if ui.Breadcrumbs(c, crumbs, &chosen).Label("位置").Grow(1).Shrink(1).Changed() {
+	if ui.Breadcrumbs(c, crumbs, &chosen).Label("位置").Shrink(1).MinWidth(0).Changed() {
 		if chosen == 0 {
 			a.browse("")
 		} else if chosen <= strings.Count(b.path, "/")+1 && b.path != "" {
@@ -407,6 +407,14 @@ func (a *app) browserHeader(c *ui.Context) {
 			a.browse(b.path)
 		}
 	}
+	if b.root.ReadOnly {
+		ui.Badge(c, "只读")
+	}
+}
+
+// browserSearch is, in the toolbar, the search of the server.
+func (a *app) browserSearch(c *ui.Context) {
+	b := a.br
 	server := "服务器"
 	if sv := a.store.Server(b.server); sv != nil {
 		server = sv.Title()
@@ -527,9 +535,6 @@ func (a *app) browserView(c *ui.Context) {
 				a.pickUpload(true)
 			}
 		})
-		if b.root.ReadOnly {
-			ui.Badge(c, "只读")
-		}
 	}, func() {
 		tip := func(s string) string {
 			if !oneRoot {

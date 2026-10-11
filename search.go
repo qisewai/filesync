@@ -131,7 +131,8 @@ func filterBar(c *ui.Context, key string, f *searchFilter, changed func(wait boo
 func (a *app) searchBox(c *ui.Context, key, label string, query *string, scope, placeholder string, menu func(m *ui.Menu)) (changed, submitted, cleared bool) {
 	t := c.Theme()
 	var in ui.Element
-	box := ui.Row(c.Key(key+"-box")).Width(340).Shrink(1).MinWidth(200).AlignItems(ui.Center).Gap(6).
+	// The rest of the toolbar, as wide as it is.
+	box := ui.Row(c.Key(key+"-box")).Grow(1).Shrink(1).MinWidth(260).AlignItems(ui.Center).Gap(6).
 		Padding(3, 6, 3, 3).Radius(t.Radius).Background(t.Surface).Border(1, t.Border).Cursor(ui.CursorText)
 	box.Children(func() {
 		chip := ui.ButtonBase(c.Key(key+"-scope")).Padding(2, 6).Gap(4).AlignItems(ui.Center).Radius(t.Radius * 0.75).
@@ -488,8 +489,6 @@ func (a *app) narrowSearch(source string) {
 // searchHeader is, in the toolbar of the page of the search, its field.
 func (a *app) searchHeader(c *ui.Context) {
 	s := a.gsearch
-	ui.Text(c, "搜索").FontSize(15).Bold().Padding(0, 6)
-	ui.Spacer(c)
 	changed, submitted, cleared := a.searchBox(c, "global-search", "全局搜索", &s.query, "全部位置", "搜索本机和所有服务器", func(m *ui.Menu) {
 		m.Item("全部位置").Checked(true)
 		m.Separator()

@@ -31,6 +31,8 @@ import (
 // location is the location of the place shown.
 func (a *app) location() string {
 	switch {
+	case a.place == "settings":
+		return "/settings"
 	case a.place == "backup" && a.taskShown != "":
 		return "/backup?task=" + url.QueryEscape(a.taskShown)
 	case a.place == "backup":
@@ -67,6 +69,8 @@ func (a *app) goLocation(loc string) {
 		a.taskShown = q.Get("task")
 	case parts[0] == "search":
 		a.openSearch(q.Get("q"))
+	case parts[0] == "settings":
+		a.place = "settings"
 	case parts[0] == "local":
 		dir := q.Get("dir")
 		if dir == "" || !filepath.IsAbs(dir) {
@@ -128,6 +132,8 @@ func (a *app) pageTitle() string {
 		return "备份任务"
 	case a.place == "search":
 		return "搜索"
+	case a.place == "settings":
+		return "设置"
 	case a.place == localPlace && a.local != nil:
 		return "本机 · " + filepath.Base(a.local.dir)
 	case a.admin != nil && a.place == adminPlace(a.admin.server, a.admin.tab):
@@ -142,14 +148,17 @@ func (a *app) pageTitle() string {
 
 // onLocal and onRoot report whether the page shown is a directory of this
 // computer, or of a server.
-func (a *app) onLocal() bool  { return a.place == localPlace && a.local != nil }
+func (a *app) onLocal() bool { return a.place == localPlace && a.local != nil }
+func (a *app) onAdmin() bool {
+	return a.admin != nil && a.place == adminPlace(a.admin.server, a.admin.tab)
+}
 func (a *app) onSearch() bool { return a.place == "search" && a.gsearch != nil }
 func (a *app) onRoot() bool {
 	return a.br != nil && a.place == rootPlace(a.br.server, a.br.root.ID)
 }
 
-// topBar is the toolbar over the pages: back and forward, up, then where
-// the page is and its search, or the page's title.
+// topBar is the toolbar over the pages: back and forward, up, then the
+// search, all along.
 func (a *app) topBar(c *ui.Context) {
 	t := c.Theme()
 	ui.Row(c).Padding(8, 16, 8, 10).Gap(8).AlignItems(ui.Center).MinHeight(52).BorderWidth(0, 0, 1, 0).BorderColor(t.Border).Children(func() {
@@ -168,14 +177,30 @@ func (a *app) topBar(c *ui.Context) {
 		}).Width(3*36 + 8).Shrink(0).Label("导航")
 		switch {
 		case a.onLocal():
-			a.localHeader(c)
+			a.localSearchField(c)
 		case a.onRoot():
-			a.browserHeader(c)
+			a.browserSearch(c)
 		case a.onSearch():
 			a.searchHeader(c)
 		default:
-			ui.Text(c, a.pageTitle()).FontSize(15).Bold().SingleLine().Grow(1).Shrink(1).Padding(0, 6)
 			a.anywhereSearch(c)
+		}
+	})
+}
+
+// locationBar is the row under the toolbar: where the page is, or its
+// title; the management's tabs.
+func (a *app) locationBar(c *ui.Context) {
+	ui.Row(c).Padding(10, 24, 0, 24).Gap(8).AlignItems(ui.Center).MinHeight(40).Children(func() {
+		switch {
+		case a.onLocal():
+			a.localPath(c)
+		case a.onRoot():
+			a.browserPath(c)
+		case a.onAdmin():
+			a.adminHeader(c)
+		default:
+			ui.Text(c, a.pageTitle()).FontSize(16).Bold().SingleLine().Shrink(1)
 		}
 	})
 }
@@ -316,30 +341,4 @@ func (a *app) transferIndicator(c *ui.Context) {
 			}
 		})
 	})
-}
-
-// settingsMenu is the menu of the button at the foot of the sidebar: the
-// servers, the index of this computer, the web pages of the servers.
-func (a *app) settingsMenu(m *ui.Menu) {
-	if m.Item("服务器…").Chosen() {
-		a.openServers()
-	}
-	if m.Item("本机索引范围…").Disabled(a.localIdx == nil || a.localIdx.running || a.localIdx.loading).Chosen() {
-		a.editLocalIndex()
-	}
-	if len(a.store.Servers) > 0 {
-		m.Submenu("网页管理", func(m *ui.Menu) {
-			for _, sv := range a.store.Servers {
-				if m.Item(sv.Title()).Chosen() {
-					a.openURL("http://" + sv.Addr + "/settings")
-				}
-			}
-		})
-	}
-	if a.tray != nil {
-		m.Separator()
-		if m.Item("关闭窗口时最小化到托盘").Checked(!a.store.QuitOnClose).Chosen() {
-			a.setQuitOnClose(!a.store.QuitOnClose)
-		}
-	}
 }

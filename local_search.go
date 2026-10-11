@@ -513,7 +513,7 @@ func (a *app) localIndexDialog(c *ui.Context) {
 		panel.Width(min(600, w-32)).MaxHeight(h-32).Padding(24).Gap(16).Radius(t.Radius*3).Background(t.Background).Border(1, t.Border)
 		ui.Column(c).Gap(4).Children(func() {
 			ui.Text(c, "本机索引范围").FontSize(18).Bold()
-			ui.Text(c, "保存后在状态栏的“索引”菜单中更新索引。扫描只读取文件名和元数据。").FontSize(12).TextColor(t.TextMuted)
+			ui.Text(c, "保存后点“更新索引”（本机页状态栏的“索引”菜单或设置页）。扫描只读取文件名和元数据。").FontSize(12).TextColor(t.TextMuted)
 		})
 		if d.err != "" {
 			notice(c, t.Danger, d.err)
@@ -538,9 +538,17 @@ func (a *app) localIndexDialog(c *ui.Context) {
 					}
 				})
 				ui.Row(c).Gap(8).Children(func() {
+					// The folder shown, if this computer's files were.
+					here := ""
+					if a.local != nil {
+						here = a.local.dir
+					}
 					ui.Button(c, "添加文件夹…").Disabled(d.picking).OnClick(func() {
 						d.picking = true
-						start := a.local.dir
+						start := here
+						if start == "" {
+							start = a.startLocal()
+						}
 						go func() {
 							dir, err := a.pickDir("选择本机索引目录", start)
 							a.post(func() {
@@ -556,7 +564,9 @@ func (a *app) localIndexDialog(c *ui.Context) {
 							})
 						}()
 					})
-					ui.Button(c, "添加当前目录").Disabled(slices.Contains(d.roots, a.local.dir)).Tooltip(a.local.dir).OnClick(func() { addRoot(a.local.dir) })
+					if here != "" {
+						ui.Button(c, "添加当前目录").Disabled(slices.Contains(d.roots, here)).Tooltip(here).OnClick(func() { addRoot(here) })
+					}
 				})
 			})
 			ui.Column(c).Gap(8).Children(func() {

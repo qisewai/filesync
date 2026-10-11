@@ -19,7 +19,7 @@ import (
 func (a *app) backupPage(c *ui.Context) {
 	t := c.Theme()
 	if len(a.store.Tasks) == 0 {
-		emptyState(c, iconBackup, "还没有备份任务", "在左侧“本机”中找到要备份的文件夹或文件，选中后点“创建备份任务…”。", func() {
+		emptyState(c, iconBackup, "还没有备份任务", "在左侧“本机”中找到要备份的文件夹或文件，右键选择“创建备份任务…”。", func() {
 			if ui.PrimaryButton(c, "浏览本机文件").Clicked() {
 				a.openLocal(a.startLocal())
 			}

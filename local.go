@@ -289,18 +289,17 @@ func (b *localBrowser) chosen() []fileindex.Entry {
 	return out
 }
 
-// localHeader is, in the toolbar, where the page is, and the search.
-func (a *app) localHeader(c *ui.Context) {
+// localPath is, under the toolbar, where the page is.
+func (a *app) localPath(c *ui.Context) {
 	b := a.local
 	crumbs, dirs := localCrumbs(b.dir)
 	if b.results {
 		crumbs = append(crumbs, "搜索结果")
 	}
 	chosen := len(crumbs) - 1
-	if ui.Breadcrumbs(c, crumbs, &chosen).Label("本机位置").Grow(1).Shrink(1).Changed() && chosen < len(dirs) {
+	if ui.Breadcrumbs(c, crumbs, &chosen).Label("本机位置").Shrink(1).MinWidth(0).Changed() && chosen < len(dirs) {
 		a.openLocal(dirs[chosen])
 	}
-	a.localSearchField(c)
 }
 
 // localView is the page of a local directory, or of what the search of
@@ -320,6 +319,8 @@ func (a *app) localView(c *ui.Context) {
 	if c.Shortcut(0, ui.KeyF5) {
 		a.refreshLocal()
 	}
+	// Backing up and showing in the file manager are in the menu of the
+	// files.
 	commandBar(c, n, filesSize(es), func() { b.sel.Clear() }, func() {
 		if b.results {
 			filterBar(c, "local", &b.filter, func(wait bool) {
@@ -329,28 +330,8 @@ func (a *app) localView(c *ui.Context) {
 					a.queueLocalSearch(0)
 				}
 			})
-			return
 		}
-		backup := ui.PrimaryButton(c, "创建备份任务…").Disabled(busy || b.err != "").Tooltip("备份当前文件夹；也可以先选中要备份的文件夹或文件")
-		if backup.Clicked() {
-			a.backupLocalSelection(nil)
-		}
-		iconButton(c, "reveal-local", iconOpenOut, "在文件管理器中显示", "在系统文件管理器中打开这个文件夹", busy, func() { a.openPath(b.dir) })
-	}, func() {
-		toolButton(c, "backup-chosen", iconBackup, "创建备份任务…", "把选中的项备份到 NAS", false, func() { a.backupLocalSelection(es) })
-		if n == 1 {
-			if b.results {
-				toolButton(c, "open-folder", iconFolder, "打开所在目录", "", false, func() { a.openIndexedLocal(es[0], false, true) })
-			}
-			toolButton(c, "reveal-chosen", iconOpenOut, "在文件管理器中显示", "在系统文件管理器中打开所在的文件夹", false, func() {
-				if b.results {
-					a.openIndexedLocal(es[0], true, false)
-				} else {
-					a.openPath(b.dir)
-				}
-			})
-		}
-	}, func() {
+	}, nil, func() {
 		viewToggle(c, "local-view-toggle", &b.grid)
 		moreMenu(c, "local-more", func(m *ui.Menu) {
 			if m.Item("显示隐藏文件").Checked(b.hidden).Chosen() {
@@ -435,12 +416,25 @@ func (a *app) localView(c *ui.Context) {
 		if b.results && len(es) == 1 && m.Item("打开所在目录").Chosen() {
 			a.openIndexedLocal(es[0], false, true)
 		}
+		if len(es) == 1 {
+			m.Separator()
+		}
 		label := "备份当前文件夹…"
 		if len(es) > 0 {
 			label = "创建备份任务…"
 		}
-		if (!b.results || len(es) > 0) && m.Item(label).Chosen() {
+		if (!b.results || len(es) > 0) && m.Item(label).Disabled(busy || b.err != "").Chosen() {
 			a.backupLocalSelection(es)
+		}
+		switch {
+		case b.results && len(es) == 1:
+			if m.Item("在文件管理器中显示").Chosen() {
+				a.openIndexedLocal(es[0], true, false)
+			}
+		case !b.results:
+			if m.Item("在文件管理器中显示").Disabled(busy).Chosen() {
+				a.openPath(b.dir)
+			}
 		}
 	})
 }

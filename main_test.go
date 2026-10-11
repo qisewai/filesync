@@ -134,19 +134,6 @@ func (h *harness) more(item ...string) {
 	h.settle()
 }
 
-// settings chooses an item of the settings menu, at the foot of the
-// sidebar.
-func (h *harness) settings(item ...string) {
-	h.t.Helper()
-	if err := h.tt.Click("设置"); err != nil {
-		h.t.Fatal(err)
-	}
-	if err := h.tt.ChooseMenuItem(item...); err != nil {
-		h.t.Fatalf("%v; menu %q", err, h.tt.Menu())
-	}
-	h.settle()
-}
-
 func (h *harness) want(text string) {
 	h.t.Helper()
 	if !h.tt.HasText(text) {
@@ -178,8 +165,28 @@ func (h *harness) newTask(dir string, names ...string) {
 		}
 		h.settle()
 	}
-	h.click("创建备份任务…")
+	if len(names) == 0 {
+		h.localMenu("备份当前文件夹…")
+	} else {
+		h.localMenu("创建备份任务…")
+	}
 	h.want("新建备份任务")
+}
+
+// localMenu chooses an item of the menu of the files of this computer,
+// opened under them, which keeps those chosen.
+func (h *harness) localMenu(item string) {
+	h.t.Helper()
+	h.tt.Frame()
+	r, ok := h.tt.Find("本机文件")
+	if !ok {
+		h.t.Fatalf("no files in %q", h.tt.Texts())
+	}
+	h.tt.RightClickAt(r.X+r.W/2, r.Y+r.H-8)
+	if err := h.tt.ChooseMenuItem(item); err != nil {
+		h.t.Fatalf("%v; menu %q", err, h.tt.Menu())
+	}
+	h.settle()
 }
 
 // signedIn is a store with the server, signed in.
@@ -573,7 +580,8 @@ func TestServersInUseStay(t *testing.T) {
 	store.AddServer(&config.Server{Addr: "10.0.0.9:8090"})
 	store.Add(&config.Task{Name: "t", Source: t.TempDir(), Server: store.Servers[0].ID, Root: 1, RootName: "nas"})
 	h := newHarness(t, store)
-	h.settings("服务器…")
+	h.click("设置")
+	h.click("服务器列表…")
 	h.want("1 个任务")
 	h.want("已登录")
 

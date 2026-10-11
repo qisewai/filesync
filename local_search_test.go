@@ -147,7 +147,7 @@ func TestLocalSearchDebounceNavigationAndOpen(t *testing.T) {
 	opened := ""
 	h.a.openPath = func(p string) { opened = p }
 	h.click("hello.txt")
-	h.click("在文件管理器中显示")
+	h.localMenu("在文件管理器中显示")
 	if opened != filepath.Dir(path) {
 		t.Fatalf("location %q", opened)
 	}
@@ -265,7 +265,7 @@ func TestLocalSearchBackupsAcrossParents(t *testing.T) {
 	b.sel.Add(p1)
 	b.sel.Add(p2)
 	h.tt.Frame()
-	h.click("创建备份任务…")
+	h.localMenu("创建备份任务…")
 	if h.a.draft.source != filepath.Dir(p1) || !slices.Equal(h.a.draft.items, []string{"same.txt"}) || len(h.a.localBackups) != 1 {
 		t.Fatalf("first %+v", h.a.draft)
 	}
@@ -289,7 +289,7 @@ func TestLocalSearchBackupsAcrossParents(t *testing.T) {
 	b.sel.Add(p1)
 	b.sel.Add(p2)
 	h.tt.Frame()
-	h.click("创建备份任务…")
+	h.localMenu("创建备份任务…")
 	h.click("取消")
 	if len(h.a.localBackups) != 0 {
 		t.Fatal("canceled group still queued")
