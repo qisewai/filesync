@@ -7,6 +7,7 @@ package main
 import (
 	"log"
 	"os"
+	"runtime"
 	"strings"
 
 	"filesync/config"
@@ -14,6 +15,17 @@ import (
 	"github.com/egoist/mygo"
 	"github.com/egoist/mygo/ui"
 )
+
+// x11TextScale reports whether the desktop's text scale is to be left out.
+// KDE on X11, scaled by a fraction, as 125%, tells GTK apps, which scale
+// only by whole numbers there, to draw text that much larger instead; mygo
+// then enlarges the usual text alone, not the sizes set nor the rest, which
+// shows out of proportion. Left out, all shows as at 100%.
+// FILESYNC_TEXT_SCALE=1 keeps it.
+func x11TextScale() bool {
+	x11 := os.Getenv("GDK_BACKEND") == "x11" || os.Getenv("WAYLAND_DISPLAY") == "" && os.Getenv("DISPLAY") != ""
+	return runtime.GOOS == "linux" && x11 && strings.Contains(os.Getenv("XDG_CURRENT_DESKTOP"), "KDE") && os.Getenv("FILESYNC_TEXT_SCALE") == ""
+}
 
 func main() {
 	// On KDE, GTK's own file dialog knows nothing of the Places of Dolphin,
@@ -41,6 +53,7 @@ func main() {
 		log.Fatalf("无法读取设置 %s: %v", dir, err)
 	}
 	a := newApp(store)
+	a.plainText = x11TextScale()
 
 	mygo.App.WhenReady(func() {
 		var win *mygo.Window

@@ -64,8 +64,10 @@ type app struct {
 	// since the settings were saved.
 	sidebarW     float32
 	sidebarMoved bool
-	open         map[string]*bool // the sidebar's sections shown open, by server
-	roots        map[string][]fileindex.Root
+	// plainText leaves the desktop's text scale out (see x11TextScale).
+	plainText bool
+	open      map[string]*bool // the sidebar's sections shown open, by server
+	roots     map[string][]fileindex.Root
 	// rootsLoading are the servers whose roots are being read.
 	rootsLoading map[string]*fileindex.Client
 	// serverErr is why a server could not be reached, by server.

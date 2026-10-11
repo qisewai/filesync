@@ -13,6 +13,11 @@ import (
 )
 
 func (a *app) view(c *ui.Context) {
+	if s := c.Preferences().TextScale; a.plainText && s > 0 && s != 1 {
+		t := *c.Theme()
+		t.FontSize /= s
+		c.SetTheme(&t)
+	}
 	// The sidebar, then the page: the divider between them drags.
 	split := ui.Split(c.Key("main-split"), &a.sidebarW, func() { a.sidebar(c) }, func() {
 		ui.Column(c).Grow(1).Shrink(1).MinWidth(0).Fill().Padding(20, 24).Gap(12).Children(func() {
