@@ -23,6 +23,15 @@ func main() {
 		os.Setenv("GTK_USE_PORTAL", "1")
 	}
 
+	// On a Wayland desktop scaled by a fraction, as 125%, GTK on X11 (through
+	// XWayland) draws at a whole scale of 1, and everything shows small;
+	// on Wayland itself it draws at 2 and the compositor scales that to
+	// 1.25. GDK_BACKEND=x11 is often inherited from the program FileSync
+	// was started from: FILESYNC_X11=1 keeps it.
+	if os.Getenv("WAYLAND_DISPLAY") != "" && os.Getenv("GDK_BACKEND") == "x11" && os.Getenv("FILESYNC_X11") == "" {
+		os.Unsetenv("GDK_BACKEND")
+	}
+
 	dir, err := config.DefaultDir()
 	if err != nil {
 		log.Fatal(err)

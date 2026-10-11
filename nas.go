@@ -4,7 +4,9 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io"
 	"net"
+	"net/url"
 	"path"
 	"strings"
 	"time"
@@ -172,6 +174,12 @@ func connectError(err error) string {
 		return "网络不通，请检查是否和 NAS 在同一网络"
 	case strings.Contains(err.Error(), "no such host"):
 		return "找不到这个主机名"
+	case errors.Is(err, io.EOF) || errors.Is(err, io.ErrUnexpectedEOF) || strings.Contains(err.Error(), "connection reset"):
+		return "连接被对方断开：这个地址上可能不是 fileindex，或服务正在重启"
+	}
+	// Without the request, which says nothing new.
+	if ue := (*url.Error)(nil); errors.As(err, &ue) {
+		return ue.Err.Error()
 	}
 	return err.Error()
 }

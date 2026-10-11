@@ -58,7 +58,9 @@ type app struct {
 	roots map[string][]fileindex.Root
 	// rootsLoading are the servers whose roots are being read.
 	rootsLoading map[string]*fileindex.Client
-	tree         map[string]*directoryNode
+	// serverErr is why a server could not be reached, by server.
+	serverErr map[string]error
+	tree      map[string]*directoryNode
 
 	br         *browser // the root shown
 	local      *localBrowser
@@ -113,6 +115,7 @@ func newApp(store *config.Store) *app {
 		open:         map[string]*bool{},
 		roots:        map[string][]fileindex.Root{},
 		rootsLoading: map[string]*fileindex.Client{},
+		serverErr:    map[string]error{},
 		tree:         map[string]*directoryNode{},
 		watching:     map[string]func(){},
 		thumbs:       map[string]*thumbOf{},
@@ -576,6 +579,16 @@ func card(c *ui.Context, fn func()) {
 func notice(c *ui.Context, color ui.Color, msg string) {
 	ui.Row(c).Padding(10, 12).Radius(c.Theme().Radius*2).Background(color.Alpha(0.1)).Border(1, color.Alpha(0.4)).Children(func() {
 		ui.Text(c, msg).Grow(1).Shrink(1).Selectable()
+	})
+}
+
+// closableNotice is a colored message with a button closing it.
+func closableNotice(c *ui.Context, color ui.Color, msg string, close func()) {
+	ui.Row(c).Padding(6, 6, 6, 12).Gap(8).AlignItems(ui.Center).Radius(c.Theme().Radius*2).Background(color.Alpha(0.1)).Border(1, color.Alpha(0.4)).Children(func() {
+		ui.Text(c, msg).Grow(1).Shrink(1).Selectable()
+		ui.ButtonBase(c.Key("close-notice")).Size(26, 26).Radius(c.Theme().Radius).Label("关闭提示").Tooltip("关闭").OnClick(close).Children(func() {
+			ui.Icon(c, iconClose).FontSize(14).TextColor(c.Theme().TextMuted)
+		})
 	})
 }
 

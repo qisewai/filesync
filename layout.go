@@ -18,7 +18,7 @@ func (a *app) view(c *ui.Context) {
 	ui.Row(c).Fill().AlignItems(ui.Stretch).Reverse().Children(func() {
 		ui.Column(c).Grow(1).Shrink(1).MinWidth(0).Padding(20, 24).Gap(12).Children(func() {
 			if a.errorMsg != "" && a.place != "" && a.place != "backup" {
-				notice(c, c.Theme().Danger, a.errorMsg)
+				closableNotice(c, c.Theme().Danger, a.errorMsg, func() { a.errorMsg = "" })
 			}
 			switch {
 			case a.admin != nil && a.place == adminPlace(a.admin.server, a.admin.tab):
@@ -129,7 +129,7 @@ func (a *app) welcome(c *ui.Context) {
 			return
 		}
 		if a.errorMsg != "" {
-			notice(c, t.Danger, a.errorMsg)
+			closableNotice(c, t.Danger, a.errorMsg, func() { a.errorMsg = "" })
 		}
 		ui.Text(c, "从左侧选择 NAS 上的目录，或在“本机”中选择要备份的文件。").TextColor(t.TextMuted)
 		if ui.Button(c, "浏览本机文件").Clicked() {
@@ -149,10 +149,9 @@ func (a *app) sidebar(c *ui.Context) {
 					})
 					node.Children(func() {
 						labeled(c, iconServer, sv.Title(), t.Text)
-						if sv.Token == "" {
-							ui.Text(c, "未登录").FontSize(11).TextColor(t.TextMuted)
-						}
+						a.serverMark(c, sv)
 					}).Label(sv.Title()).Tooltip(sv.Addr)
+					node.ContextMenu(func(m *ui.Menu) { a.serverMenu(m, sv) })
 				}
 				local := ui.TreeItem(c.Key("local"), "", a.sectionOpen("local"), func() { a.localItems(c) })
 				local.Children(func() { labeled(c, iconLaptop, "本机", t.Text) }).Label("本机")
@@ -222,17 +221,20 @@ func (a *app) serverItems(c *ui.Context, sv *config.Server) {
 	roots, ok := a.roots[sv.ID]
 	if !ok {
 		a.loadRoots(sv)
-		ui.Text(c, "正在读取…").FontSize(12).TextColor(t.TextMuted).Padding(4, 28)
+	}
+	if !ok || a.rootsLoading[sv.ID] != nil {
+		ui.Text(c, "正在连接…").FontSize(12).TextColor(t.TextMuted).Padding(4, 28)
+		return
+	}
+	if err := a.serverErr[sv.ID]; err != nil {
+		ui.Column(c).Padding(2, 8, 4, 28).Gap(2).Children(func() {
+			ui.Text(c, "无法连接").FontSize(12).TextColor(t.Danger)
+			ui.Text(c, connectError(err)).FontSize(11).MaxLines(3).TextColor(t.TextMuted).Tooltip(err.Error())
+		})
 		return
 	}
 	if len(roots) == 0 {
-		ui.Column(c).Padding(4, 12, 4, 28).Gap(6).Children(func() {
-			if a.errorMsg != "" {
-				ui.Text(c, a.errorMsg).FontSize(12).MaxLines(3).TextColor(t.Danger)
-			}
-			ui.Text(c, "还没有索引目录").FontSize(12).TextColor(t.TextMuted)
-			ui.Button(c.Key("retry-roots/"+sv.ID), "重新读取目录").OnClick(func() { delete(a.roots, sv.ID) })
-		})
+		ui.Text(c, "还没有索引目录，可在“管理 → 目录管理”中添加").FontSize(11).MaxLines(2).TextColor(t.TextMuted).Padding(2, 8, 4, 28)
 	}
 	for _, r := range roots {
 		a.directoryView(c, sv, r, "", r.Name)
@@ -244,6 +246,73 @@ func (a *app) serverItems(c *ui.Context, sv *config.Server) {
 		a.navItem(c, trashPlace(sv.ID), iconTrash, "回收站", func() { a.openTrash(sv.ID) })
 	})
 	manage.Children(func() { labeled(c, iconManage, "管理", t.TextMuted) }).Label("管理")
+}
+
+// serverMark shows, beside a server in the sidebar, whether it is
+// connecting, signed out or unreachable; a click on the last reconnects.
+func (a *app) serverMark(c *ui.Context, sv *config.Server) {
+	t := c.Theme()
+	switch {
+	case sv.Token == "":
+		ui.Text(c, "未登录").FontSize(11).TextColor(t.TextMuted)
+	case a.rootsLoading[sv.ID] != nil:
+		ui.Spinner(c).FontSize(12).Label("正在连接 " + sv.Title())
+	case a.serverErr[sv.ID] != nil:
+		mark := ui.ButtonBase(c.Key("reconnect/"+sv.ID)).Size(22, 22).Radius(t.Radius).Label("重新连接 " + sv.Title()).
+			Tooltip("无法连接：" + connectError(a.serverErr[sv.ID]) + "\n点击重新连接")
+		hover := mark.Hovered()
+		mark.Children(func() {
+			svg := iconAlert
+			if hover {
+				svg = iconRetry
+			}
+			ui.Icon(c, svg).FontSize(15).TextColor(t.Danger)
+		})
+		if hover {
+			mark.Background(t.Danger.Alpha(0.12))
+		}
+		mark.OnClick(func() { a.reconnect(sv) })
+	}
+}
+
+// serverMenu is the menu of a server in the sidebar.
+func (a *app) serverMenu(m *ui.Menu, sv *config.Server) {
+	if sv.Token == "" {
+		if m.Item("登录…").Chosen() {
+			a.openLogin(sv.ID, func() {})
+		}
+	} else if m.Item("重新连接").Disabled(a.rootsLoading[sv.ID] != nil).Chosen() {
+		a.reconnect(sv)
+	}
+	if m.Item("编辑服务器…").Chosen() {
+		a.openServers()
+		a.nasStartEdit(sv)
+	}
+	if m.Item("打开网页管理").Chosen() {
+		a.openURL("http://" + sv.Addr + "/settings")
+	}
+	if sv.Token != "" {
+		m.Separator()
+		if m.Item("退出登录").Chosen() {
+			a.nasLogout(sv)
+		}
+	}
+}
+
+// reconnect forgets what was read of a server and reads its directories
+// again, which tries the connection.
+func (a *app) reconnect(sv *config.Server) {
+	delete(a.serverErr, sv.ID)
+	delete(a.roots, sv.ID)
+	delete(a.rootsLoading, sv.ID)
+	a.unwatch(sv.ID)
+	for key := range a.tree {
+		if strings.HasPrefix(key, "root/"+sv.ID+"/") {
+			delete(a.tree, key)
+		}
+	}
+	*a.sectionOpen("server/" + sv.ID) = true
+	a.loadRoots(sv)
 }
 
 // goPlace shows what the sidebar chose.
@@ -297,9 +366,10 @@ func (a *app) loadRoots(sv *config.Server) {
 			case errors.Is(err, fileindex.ErrAuth):
 				a.signedOut(sv)
 			case err != nil:
-				a.roots[sv.ID] = nil // shows none; reopening the servers retries
-				a.errorMsg = sv.Title() + ": " + err.Error()
+				a.roots[sv.ID] = nil // shows none until reconnected
+				a.serverErr[sv.ID] = err
 			default:
+				delete(a.serverErr, sv.ID)
 				a.applyRoots(sv.ID, roots)
 				a.watch(sv)
 				// Nothing chosen yet: the first root shows.
@@ -338,6 +408,7 @@ func (a *app) serverChanged(id string) {
 	}
 	delete(a.roots, id)
 	delete(a.rootsLoading, id)
+	delete(a.serverErr, id)
 	a.unwatch(id)
 	delete(a.thumbExts, id)
 	for key := range a.tree {

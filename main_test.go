@@ -618,3 +618,57 @@ func TestPickerConnectsToServers(t *testing.T) {
 	h.click("登录")
 	h.want("/data/nas")
 }
+
+// A server that cannot be reached is marked in the sidebar; the mark and
+// its menu connect again, which reads its directories.
+func TestSidebarReconnects(t *testing.T) {
+	f := fitest.New(t)
+	l, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	dead := l.Addr().String()
+	l.Close()
+	store := &config.Store{Dir: t.TempDir()}
+	store.AddServer(&config.Server{Name: "家里", Addr: dead, Token: "tok"})
+	h := newHarness(t, store)
+	h.settle()
+	h.want("无法连接")
+	h.want("连接被拒绝，fileindex 可能没有运行，或端口不对")
+	if h.a.errorMsg != "" {
+		t.Errorf("the page shows %q", h.a.errorMsg)
+	}
+	h.click("重新连接 家里")
+	h.want("无法连接")
+
+	// Back at an address that answers, the mark connects again.
+	store.Servers[0].Addr = f.Addr()
+	h.click("重新连接 家里")
+	h.want("文件夹 nas")
+	if h.tt.HasText("无法连接") || h.tt.HasText("重新连接 家里") {
+		t.Error("still marked")
+	}
+
+	// The menu of the server reconnects too.
+	if err := h.tt.RightClick("家里"); err != nil {
+		t.Fatal(err)
+	}
+	if err := h.tt.ChooseMenuItem("重新连接"); err != nil {
+		t.Fatalf("%v; menu %q", err, h.tt.Menu())
+	}
+	h.settle()
+	h.want("文件夹 nas")
+}
+
+// The error over the page can be closed.
+func TestErrorCloses(t *testing.T) {
+	h := newHarness(t, &config.Store{Dir: t.TempDir()})
+	h.a.place = "transfers"
+	h.a.errorMsg = "出了点问题"
+	h.tt.Frame()
+	h.want("出了点问题")
+	h.click("关闭提示")
+	if h.a.errorMsg != "" || h.tt.HasText("出了点问题") {
+		t.Fatal("not closed")
+	}
+}
