@@ -31,14 +31,12 @@ func TestTray(t *testing.T) {
 		t.Fatalf("shown again: %d", len(shown))
 	}
 
-	// A task chosen in the menu shows, scanned for a backup to confirm.
+	// A task chosen in the menu backs up at once, in its card.
 	h.a.trayBackup(store.Tasks[0].ID)
 	if h.a.place != "backup" || h.a.job == nil {
 		t.Fatal("not scanning")
 	}
 	h.settle()
-	h.want("预览：文档")
-	h.click("开始备份")
 	h.want("备份完成")
 	busy := false
 	for _, m := range shown {

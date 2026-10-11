@@ -94,42 +94,6 @@ const (
 
 func rootPlace(server string, root int64) string { return fmt.Sprintf("root/%s/%d", server, root) }
 
-// backupPage is the backup tasks: their list, and the one chosen. Tasks
-// are made from the page of the computer's files.
-func (a *app) backupPage(c *ui.Context) {
-	t := c.Theme()
-	if len(a.store.Tasks) == 0 {
-		ui.Column(c).Grow(1).Center().Gap(10).Children(func() {
-			ui.Icon(c, iconTasks).FontSize(36).TextColor(t.TextMuted)
-			ui.Text(c, "还没有备份任务").FontSize(18).Bold()
-			ui.Text(c, "在左侧“本机”中找到要备份的文件夹或文件，选中后点“创建备份任务…”。").TextColor(t.TextMuted)
-			if ui.PrimaryButton(c, "浏览本机文件").Clicked() {
-				a.openLocal(a.startLocal())
-			}
-		})
-		return
-	}
-	ui.Row(c).Grow(1).MinHeight(0).AlignItems(ui.Stretch).Gap(20).Children(func() {
-		ui.Column(c).Width(220).Gap(8).Children(func() {
-			ui.Text(c, "备份任务").Bold()
-			a.taskList(c)
-			ui.Text(c, "新任务在“本机”文件页中创建。").FontSize(12).TextColor(t.TextMuted)
-		})
-		ui.Column(c).Grow(1).Shrink(1).MinWidth(0).Gap(16).Children(func() {
-			switch {
-			case a.task() == nil:
-				ui.Column(c).Grow(1).Center().Children(func() {
-					ui.Text(c, "从左边选择一个任务。").TextColor(t.TextMuted)
-				})
-			case a.job != nil && a.job.taskID == a.task().ID:
-				a.jobView(c)
-			default:
-				a.detail(c)
-			}
-		})
-	})
-}
-
 // welcome is shown while nothing is chosen.
 func (a *app) welcome(c *ui.Context) {
 	t := c.Theme()
@@ -469,41 +433,6 @@ func (a *app) serverChanged(id string) {
 			if strings.HasPrefix(a.place, "root/") {
 				a.place = ""
 			}
-		}
-	}
-}
-
-// taskList is the list of the backup tasks.
-func (a *app) taskList(c *ui.Context) {
-	t := c.Theme()
-	list := ui.List(c.Key("tasks"), &a.tasks, len(a.store.Tasks)).Grow(1).Label("备份任务列表").Radius(t.Radius*2).Border(1, t.Border).Clip().Rows(func(row ui.ListRow) {
-		task := a.store.Tasks[row.Index]
-		muted := t.TextMuted
-		if row.Selected() {
-			muted = t.AccentText.Alpha(0.85)
-		}
-		ui.Column(c).Padding(8, 12).Gap(2).Children(func() {
-			ui.Text(c, task.Name).SingleLine()
-			status := task.Mode.String()
-			if len(task.History) > 0 {
-				status += " · " + runStatusShort(task.History[0])
-			}
-			ui.Text(c, status).FontSize(12).TextColor(muted).SingleLine()
-		})
-	})
-	if list.Changed() {
-		switch {
-		case a.busy():
-			// The task being scanned or backed up stays chosen.
-			for i, task := range a.store.Tasks {
-				if task.ID == a.job.taskID {
-					a.selected = i
-				}
-			}
-		default:
-			a.editing = false
-			a.errorMsg = ""
-			a.job = nil
 		}
 	}
 }

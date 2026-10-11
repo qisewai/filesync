@@ -48,6 +48,9 @@ type app struct {
 	errorMsg string // shown on the task's page, as a failed save
 
 	confirmRemove bool
+	// taskShown is the task whose details and history show in place of
+	// the tasks, "" for none.
+	taskShown string
 
 	job *job // the preview or backup of the task shown, if any
 
@@ -124,6 +127,7 @@ type draft struct {
 
 	mode                    int
 	excludes                string
+	advanced                bool // the advanced options show
 	nameErr, srcErr, dstErr string
 }
 
@@ -333,7 +337,7 @@ func (a *app) taskDialog(c *ui.Context) {
 	ui.DialogBase(c.Key("task-dialog"), &open, func(backdrop, panel ui.Element) {
 		backdrop.Background(ui.RGBA(0, 0, 0, 0.35))
 		w, h := c.Size()
-		panel.Width(min(720, w-32)).Height(min(680, h-32)).Padding(20).Gap(12).Radius(t.Radius*3).Background(t.Background).Border(1, t.Border)
+		panel.Width(min(680, w-32)).MaxHeight(min(720, h-32)).Padding(24).Gap(14).Radius(t.Radius*3).Background(t.Background).Border(1, t.Border)
 		title := "新建备份任务"
 		if d.id != "" {
 			title = "编辑备份任务"
@@ -345,7 +349,7 @@ func (a *app) taskDialog(c *ui.Context) {
 		if a.errorMsg != "" {
 			notice(c, t.Danger, a.errorMsg)
 		}
-		ui.Scroll(c).Grow(1).MinHeight(0).Children(func() {
+		ui.Scroll(c).Shrink(1).MinHeight(0).Children(func() {
 			ui.Column(c).Gap(14).Padding(0, 4, 0, 0).Children(func() {
 				a.editorFields(c, d)
 			})
@@ -416,14 +420,10 @@ func (a *app) editorFields(c *ui.Context, d *draft) {
 	}
 	ui.Text(c, a.landing(d)).FontSize(12).TextColor(t.TextMuted).Margin(-6, 0, 0, 0)
 	ui.Field(c, "模式", func() {
-		ui.RadioGroup(c, func() {
-			ui.Radio(c, &d.mode, int(engine.Incremental), "增量备份")
-			ui.Text(c, modeHelp[engine.Incremental]).FontSize(12).TextColor(t.TextMuted).Margin(0, 0, 6, 26)
-			ui.Radio(c, &d.mode, int(engine.Mirror), "完全一致")
-			ui.Text(c, modeHelp[engine.Mirror]).FontSize(12).TextColor(t.TextMuted).Margin(0, 0, 6, 26)
-			ui.Radio(c, &d.mode, int(engine.Archive), "tar 归档")
-			ui.Text(c, modeHelp[engine.Archive]).FontSize(12).TextColor(t.TextMuted).Margin(0, 0, 0, 26)
-		}).Label("模式")
+		ui.Column(c).Gap(6).Children(func() {
+			ui.Segmented(c.Key("mode"), &d.mode, "增量备份", "完全一致", "tar 归档").Label("模式").AlignSelf(ui.Start)
+			ui.Text(c, modeHelp[engine.Mode(d.mode)]).FontSize(12).TextColor(t.TextMuted)
+		})
 	})
 	if d.mode == int(engine.Archive) {
 		ui.Field(c, "压缩", func() {
@@ -434,9 +434,17 @@ func (a *app) editorFields(c *ui.Context, d *draft) {
 			}).Label("压缩")
 		}).Description("多核并行压缩，不会拖慢备份。代码、文本通常能压缩一半左右；照片、视频、压缩包几乎压不动。")
 	}
-	ui.Field(c, "排除规则", func() {
-		ui.TextArea(c.Key("excludes"), &d.excludes).Lines(3, 8).Font("monospace")
-	}).Description("每行一条。*.tmp 匹配任意位置的文件名；以 / 结尾只匹配目录，如 cache/；含 / 的规则从根目录匹配，如 /build/out。被排除的文件不会上传，NAS 上的也不会被删除。")
+	advanced := "高级选项"
+	if n := len(nonemptyLines(d.excludes)); n > 0 {
+		advanced += fmt.Sprintf("（%d 条排除规则）", n)
+	}
+	ui.Collapsible(c.Key("advanced"), advanced, &d.advanced, func() {
+		ui.Column(c).Gap(6).Padding(8, 0, 0, 0).Children(func() {
+			ui.Field(c, "排除规则", func() {
+				ui.TextArea(c.Key("excludes"), &d.excludes).Lines(3, 8).Font("monospace").Label("排除规则")
+			}).Description("每行一条。*.tmp 匹配任意位置的文件名；以 / 结尾只匹配目录，如 cache/；含 / 的规则从根目录匹配，如 /build/out。被排除的文件不会上传，NAS 上的也不会被删除。")
+		})
+	})
 }
 
 // landing says where the draft's files go.

@@ -105,6 +105,23 @@ func (h *harness) clickPage(label string) {
 	h.settle()
 }
 
+// taskMenu chooses an item of the menu of the card of a task: the one
+// chosen last, else the first.
+func (h *harness) taskMenu(item string) {
+	h.t.Helper()
+	task := h.a.task()
+	if task == nil {
+		task = h.a.store.Tasks[0]
+	}
+	if err := h.tt.Click("任务菜单 " + task.Name); err != nil {
+		h.t.Fatalf("%v; texts %q", err, h.tt.Texts())
+	}
+	if err := h.tt.ChooseMenuItem(item); err != nil {
+		h.t.Fatalf("%v; menu %q", err, h.tt.Menu())
+	}
+	h.settle()
+}
+
 // more chooses an item of the menu of the less used commands of a page.
 func (h *harness) more(item ...string) {
 	h.t.Helper()
@@ -234,7 +251,7 @@ func TestAddServerChooseDirectoryAndBackUp(t *testing.T) {
 	h.want("备份 xiaomai")
 	h.want("家里 · nas/备份/xiaomai")
 
-	h.click("预览并备份…")
+	h.taskMenu("预览并备份…")
 	h.want("预览：备份 xiaomai")
 	h.want("photo.jpg")
 	h.want("docs/report.txt")
@@ -253,7 +270,7 @@ func TestAddServerChooseDirectoryAndBackUp(t *testing.T) {
 
 	h.click("完成")
 	h.want("成功")
-	h.click("预览并备份…")
+	h.taskMenu("预览并备份…")
 	h.want("目标已是最新")
 }
 
@@ -378,7 +395,7 @@ func TestBackUpContentsOnly(t *testing.T) {
 	if store.Tasks[0].WithDir {
 		t.Fatal("still with its directory")
 	}
-	h.click("预览并备份…")
+	h.taskMenu("预览并备份…")
 	h.click("开始备份")
 	h.want("备份完成")
 	if _, err := os.Stat(filepath.Join(f.Root, "a.txt")); err != nil {
@@ -409,7 +426,7 @@ func TestArchiveMode(t *testing.T) {
 		t.Fatalf("mode %v", store.Tasks[0].Mode)
 	}
 	h.want("tar 归档")
-	h.click("预览并备份…")
+	h.taskMenu("预览并备份…")
 	h.want("docs/a.txt")
 	h.click("开始备份")
 	h.want("备份完成")
@@ -472,7 +489,7 @@ func TestBackUpChosenEntries(t *testing.T) {
 	if task.Source != src || len(task.Items) != 2 || task.Name != "备份 照片 等 2 项" {
 		t.Fatalf("task %+v", task)
 	}
-	h.click("预览并备份…")
+	h.taskMenu("预览并备份…")
 	h.want("照片/a.jpg")
 	if h.tt.HasText("不要.txt") || h.tt.HasText("原有.txt") {
 		t.Fatal("plans entries not chosen")
@@ -490,7 +507,7 @@ func TestBackUpChosenEntries(t *testing.T) {
 
 	// Edited, the task keeps what it backs up.
 	h.click("完成")
-	h.click("编辑")
+	h.taskMenu("编辑…")
 	h.want("编辑备份任务")
 	h.want(src + " 中的 照片、报告.pdf")
 	h.click("取消")
@@ -510,7 +527,7 @@ func TestMirrorAsksBeforeMassDelete(t *testing.T) {
 	h := newHarness(t, store)
 	h.click("备份任务")
 
-	h.click("预览并备份…")
+	h.taskMenu("预览并备份…")
 	h.click("开始备份")
 	h.want("确定要删除这么多文件吗？")
 	h.click("取消")
@@ -540,7 +557,7 @@ func TestExpiredSessionAsksTheLogin(t *testing.T) {
 	h := newHarness(t, store)
 	h.click("备份任务")
 
-	h.click("预览并备份…")
+	h.taskMenu("预览并备份…")
 	h.want("需要登录 NAS 上的 fileindex，登录后会自动重新扫描。")
 	h.click("登录 NAS…")
 	h.typeInto("密码", fitest.Password)
@@ -590,7 +607,7 @@ func TestRemoveTaskKeepsFiles(t *testing.T) {
 	store.Add(&config.Task{Name: "要删除的任务", Source: src, Server: store.Servers[0].ID, Root: 1})
 	h := newHarness(t, store)
 	h.click("备份任务")
-	h.click("删除任务")
+	h.taskMenu("删除任务…")
 	h.want("删除任务“要删除的任务”？")
 	h.click("删除")
 	if len(store.Tasks) != 0 {

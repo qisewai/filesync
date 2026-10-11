@@ -31,6 +31,8 @@ import (
 // location is the location of the place shown.
 func (a *app) location() string {
 	switch {
+	case a.place == "backup" && a.taskShown != "":
+		return "/backup?task=" + url.QueryEscape(a.taskShown)
 	case a.place == "backup":
 		return "/backup"
 	case a.place == "search" && a.gsearch != nil:
@@ -62,6 +64,7 @@ func (a *app) goLocation(loc string) {
 	switch {
 	case parts[0] == "backup":
 		a.place = "backup"
+		a.taskShown = q.Get("task")
 	case parts[0] == "search":
 		a.openSearch(q.Get("q"))
 	case parts[0] == "local":

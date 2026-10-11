@@ -28,6 +28,10 @@ type job struct {
 	taskID string
 	state  jobState
 	cancel context.CancelFunc
+	// quick backs up as the comparison ends, unless it asks to confirm;
+	// detail shows the job in full, in place of the tasks, rather than in
+	// its task's card.
+	quick, detail bool
 
 	status  string // what the scan is doing
 	scanned int
@@ -78,7 +82,7 @@ func (j *job) applyFilter() {
 
 func (a *app) startPreview(task *config.Task) {
 	ctx, cancel := context.WithCancel(context.Background())
-	j := &job{taskID: task.ID, state: jobScanning, cancel: cancel}
+	j := &job{taskID: task.ID, state: jobScanning, cancel: cancel, detail: true}
 	a.job = j
 	a.errorMsg = ""
 	opts, err := a.options(task)
@@ -101,6 +105,7 @@ func (a *app) startPreview(task *config.Task) {
 			if plan != nil {
 				j.applyFilter()
 			}
+			a.previewed(j)
 		})
 	}()
 }

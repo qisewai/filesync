@@ -98,17 +98,16 @@ func (a *app) syncTray() {
 	a.tray(m)
 }
 
-// trayBackup shows a task, chosen in the tray's menu, and scans it for a
-// backup to confirm.
+// trayBackup backs up a task chosen in the tray's menu, at once, as its
+// card does.
 func (a *app) trayBackup(id string) {
 	i := slices.IndexFunc(a.store.Tasks, func(t *config.Task) bool { return t.ID == id })
 	a.place = "backup"
 	if i < 0 || a.busy() {
 		return
 	}
-	a.selected = i
 	a.editing = false
-	a.startPreview(a.store.Tasks[i])
+	a.quickBackup(a.store.Tasks[i])
 }
 
 // setQuitOnClose changes whether closing the window quits.
