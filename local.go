@@ -274,26 +274,24 @@ func (b *localBrowser) chosen() []fileindex.Entry {
 	return out
 }
 
+// localHeader is, in the toolbar, where the page is, and the search.
+func (a *app) localHeader(c *ui.Context) {
+	b := a.local
+	crumbs, dirs := localCrumbs(b.dir)
+	if b.results {
+		crumbs = append(crumbs, "搜索结果")
+	}
+	chosen := len(crumbs) - 1
+	if ui.Breadcrumbs(c, crumbs, &chosen).Label("本机位置").Grow(1).Shrink(1).Changed() && chosen < len(dirs) {
+		a.openLocal(dirs[chosen])
+	}
+	a.localSearchField(c)
+}
+
 // localView is the page of a local directory.
 func (a *app) localView(c *ui.Context) {
 	b := a.local
 	t := c.Theme()
-	ui.Row(c).Gap(10).AlignItems(ui.Center).Children(func() {
-		up := filepath.Dir(b.dir)
-		iconButton(c, "local-up", iconUp, "上级文件夹", "上级文件夹", up == b.dir, func() {
-			a.openLocal(up, filepath.Base(b.dir))
-		})
-		crumbs, dirs := localCrumbs(b.dir)
-		if b.results {
-			crumbs = append(crumbs, "搜索结果")
-		}
-		chosen := len(crumbs) - 1
-		if ui.Breadcrumbs(c, crumbs, &chosen).Label("本机位置").Grow(1).Shrink(1).Changed() && chosen < len(dirs) {
-			a.openLocal(dirs[chosen])
-		}
-		a.localSearchField(c)
-	})
-
 	es := b.chosen()
 	if b.loading || b.queryPending {
 		es = nil
@@ -432,7 +430,16 @@ func (a *app) localView(c *ui.Context) {
 			a.backupLocalSelection(es)
 		}
 	})
+}
 
+// localStatus is, in the status bar, what the page shows and has chosen.
+func (a *app) localStatus(c *ui.Context) {
+	b := a.local
+	es := b.chosen()
+	if b.loading || b.queryPending {
+		es = nil
+	}
+	n := len(es)
 	status := ""
 	switch {
 	case b.results && (b.loading || b.queryPending) && len(b.items) == 0:
@@ -456,11 +463,7 @@ func (a *app) localView(c *ui.Context) {
 			status += "，文件共 " + formatBytes(size)
 		}
 	}
-	ui.Row(c).Gap(10).AlignItems(ui.Center).Children(func() {
-		ui.Text(c, status).FontSize(12).SingleLine().Shrink(1).TextColor(t.TextMuted)
-		ui.Spacer(c)
-		a.localIndexStatus(c)
-	})
+	statusText(c, status)
 }
 
 func itemsCount(n int) string { return fmt.Sprintf("%d 项", n) }

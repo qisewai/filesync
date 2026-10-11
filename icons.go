@@ -23,13 +23,9 @@ var (
 	iconArchive = icon(`<rect x="3" y="3" width="18" height="5" rx="1"/><path d="M5 8v11a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2V8"/><path d="M10 12h4"/>`)
 	iconCode    = icon(`<path d="m8 7-5 5 5 5"/><path d="m16 7 5 5-5 5"/>`)
 	iconServer  = icon(`<rect x="3" y="4" width="18" height="7" rx="2"/><rect x="3" y="13" width="18" height="7" rx="2"/><path d="M7 7.5h.01"/><path d="M7 16.5h.01"/>`)
-	iconManage  = icon(`<path d="M4 6h9"/><path d="M17 6h3"/><path d="M4 12h3"/><path d="M11 12h9"/><path d="M4 18h11"/><circle cx="15" cy="6" r="2"/><circle cx="9" cy="12" r="2"/><circle cx="17" cy="18" r="2"/>`)
 	iconRoots   = icon(`<ellipse cx="12" cy="5" rx="8" ry="3"/><path d="M4 5v14c0 1.7 3.6 3 8 3s8-1.3 8-3V5"/><path d="M4 12c0 1.7 3.6 3 8 3s8-1.3 8-3"/>`)
-	iconDupes   = icon(`<rect x="8" y="8" width="13" height="13" rx="2"/><path d="M16 8V5a2 2 0 0 0-2-2H5a2 2 0 0 0-2 2v9a2 2 0 0 0 2 2h3"/>`)
-	iconStats   = icon(`<path d="M21 12A9 9 0 1 1 12 3v9z"/><path d="M15 3.5A9 9 0 0 1 20.5 9H15z"/>`)
 	iconTrash   = icon(`<path d="M3 6h18"/><path d="M8 6V4h8v2"/><path d="M6 6l1 14a2 2 0 0 0 2 2h6a2 2 0 0 0 2-2l1-14"/>`)
 	iconBackup  = icon(`<path d="M7 18a5 5 0 1 1 .9-9.9A6 6 0 0 1 19 10a4 4 0 0 1 0 8"/><path d="M12 12v9"/><path d="M8.5 15.5 12 12l3.5 3.5"/>`)
-	iconMoves   = icon(`<path d="M7 4v16"/><path d="m3 8 4-4 4 4"/><path d="M17 20V4"/><path d="m13 16 4 4 4-4"/>`)
 	iconLaptop  = icon(`<rect x="4" y="5" width="16" height="11" rx="2"/><path d="M2 20h20"/>`)
 	iconHome    = icon(`<path d="M3 11 12 4l9 7"/><path d="M5 10v10h14V10"/><path d="M10 20v-6h4v6"/>`)
 	iconDisk    = icon(`<rect x="3" y="13" width="18" height="7" rx="2"/><path d="M5 13 7.5 5h9L19 13"/><path d="M16 16.5h.01"/>`)
@@ -48,6 +44,19 @@ var (
 	iconSave    = icon(`<path d="M12 4v11"/><path d="m7 10 5 5 5-5"/><path d="M5 20h14"/>`)
 	iconUp      = icon(`<path d="M12 19V5"/><path d="m5 12 7-7 7 7"/>`)
 	iconSearch  = icon(`<circle cx="11" cy="11" r="7"/><path d="m20 20-4-4"/>`)
+	iconPlus    = icon(`<path d="M12 5v14"/><path d="M5 12h14"/>`)
+	iconNewDir  = icon(`<path d="M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/><path d="M12 10v6"/><path d="M9 13h6"/>`)
+	iconUpload  = icon(`<path d="M12 15V4"/><path d="m7 9 5-5 5 5"/><path d="M5 20h14"/>`)
+	iconCopy    = icon(`<rect x="8" y="8" width="12" height="12" rx="2"/><path d="M16 8V6a2 2 0 0 0-2-2H6a2 2 0 0 0-2 2v8a2 2 0 0 0 2 2h2"/>`)
+	iconMove    = icon(`<path d="M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/><path d="M10 13h6"/><path d="m13 10 3 3-3 3"/>`)
+	iconRename  = icon(`<path d="M4 20h4L19 9l-4-4L4 16z"/><path d="m13 7 4 4"/>`)
+	iconList    = icon(`<path d="M8 6h12"/><path d="M8 12h12"/><path d="M8 18h12"/><path d="M4 6h.01"/><path d="M4 12h.01"/><path d="M4 18h.01"/>`)
+	iconGrid    = icon(`<rect x="4" y="4" width="7" height="7" rx="1.5"/><rect x="13" y="4" width="7" height="7" rx="1.5"/><rect x="4" y="13" width="7" height="7" rx="1.5"/><rect x="13" y="13" width="7" height="7" rx="1.5"/>`)
+	iconMore    = icon(`<circle cx="5" cy="12" r="1"/><circle cx="12" cy="12" r="1"/><circle cx="19" cy="12" r="1"/>`)
+	iconGear    = icon(`<circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.7 1.7 0 0 0 .3 1.8l.1.1a2 2 0 1 1-2.8 2.8l-.1-.1a1.7 1.7 0 0 0-1.8-.3 1.7 1.7 0 0 0-1 1.5V21a2 2 0 1 1-4 0v-.1a1.7 1.7 0 0 0-1.1-1.5 1.7 1.7 0 0 0-1.8.3l-.1.1a2 2 0 1 1-2.8-2.8l.1-.1a1.7 1.7 0 0 0 .3-1.8 1.7 1.7 0 0 0-1.5-1H3a2 2 0 1 1 0-4h.1a1.7 1.7 0 0 0 1.5-1.1 1.7 1.7 0 0 0-.3-1.8l-.1-.1a2 2 0 1 1 2.8-2.8l.1.1a1.7 1.7 0 0 0 1.8.3H9a1.7 1.7 0 0 0 1-1.5V3a2 2 0 1 1 4 0v.1a1.7 1.7 0 0 0 1 1.5 1.7 1.7 0 0 0 1.8-.3l.1-.1a2 2 0 1 1 2.8 2.8l-.1.1a1.7 1.7 0 0 0-.3 1.8V9a1.7 1.7 0 0 0 1.5 1H21a2 2 0 1 1 0 4h-.1a1.7 1.7 0 0 0-1.5 1z"/>`)
+	iconPlay    = icon(`<path d="M7 5v14l11-7z"/>`)
+	iconStop    = icon(`<rect x="6" y="6" width="12" height="12" rx="2"/>`)
+	iconCheck   = icon(`<path d="m5 12 5 5 9-10"/>`)
 	iconLink    = icon(`<path d="M9 15l6-6"/><path d="M10 6l1-1a4 4 0 0 1 6 6l-1 1"/><path d="M14 18l-1 1a4 4 0 0 1-6-6l1-1"/>`)
 )
 
@@ -99,15 +108,6 @@ func fileIcon(c *ui.Context, e fileindex.Entry, size float32) ui.Element {
 		svg, color = iconCode, ui.Hex("#1f9aa8")
 	}
 	return ui.Icon(c, svg).FontSize(size).TextColor(color)
-}
-
-// iconButton is a square button showing an icon, named label, its tip
-// tip.
-func iconButton(c *ui.Context, key string, svg *ui.SVG, label, tip string, disabled bool, click func()) {
-	t := c.Theme()
-	ui.Button(c.Key(key), "").Padding(t.Space(1.5)).Label(label).Tooltip(tip).Disabled(disabled).OnClick(click).Children(func() {
-		ui.Icon(c, svg).FontSize(16)
-	})
 }
 
 // labeled builds an icon then a label, in a row of what holds them.

@@ -379,19 +379,14 @@ func (a *app) adminRoot(m *adminPage) *fileindex.Root {
 func (a *app) adminView(c *ui.Context) {
 	m := a.admin
 	t := c.Theme()
-	sv := a.store.Server(m.server)
-	title := "管理"
-	if sv != nil {
-		title += " · " + sv.Title()
-	}
 	ui.Row(c).Gap(12).AlignItems(ui.Center).Children(func() {
-		ui.Text(c, title).FontSize(22).Bold().Grow(1)
 		tabs := []string{"roots", "dupes", "stats"}
 		at := max(0, slices.Index(tabs, m.tab))
 		seg := ui.Segmented(c.Key("admin-tabs"), &at, "目录管理", "查重", "空间统计").Label("管理页面").Disabled(m.busy)
 		if seg.Changed() && tabs[at] != m.tab {
 			a.openAdmin(m.server, tabs[at])
 		}
+		ui.Spacer(c)
 		ui.Button(c, "刷新").Tooltip("重新读取管理数据").Disabled(m.busy).OnClick(a.reloadAdmin)
 	})
 	if m.err != "" {

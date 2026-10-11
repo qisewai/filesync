@@ -45,7 +45,6 @@ func (a *app) addTransfer(kind, title string) *transfer {
 	a.transferSeq++
 	t := &transfer{id: a.transferSeq, kind: kind, title: title, state: "running", started: time.Now()}
 	a.transfers = append([]*transfer{t}, a.transfers...)
-	a.showTransfers = true
 	return t
 }
 
@@ -175,41 +174,6 @@ func (a *app) serverHasTransfers(id string) bool {
 		}
 	}
 	return false
-}
-
-// transfersPanel shows the transfers below the files.
-func (a *app) transfersPanel(c *ui.Context) {
-	t := c.Theme()
-	if len(a.transfers) == 0 {
-		return
-	}
-	ui.Column(c).BorderWidth(1, 0, 0, 0).BorderColor(t.Border).Padding(8, 0, 0, 0).Gap(6).Children(func() {
-		ui.Row(c).Gap(8).Children(func() {
-			title := "传输"
-			if n := a.activeTransfers(); n > 0 {
-				title = fmt.Sprintf("传输（%d 个进行中）", n)
-			}
-			label := "收起"
-			if !a.showTransfers {
-				label = "展开"
-			}
-			ui.Text(c, title).Bold().Grow(1)
-			if a.activeTransfers() < len(a.transfers) && ui.Button(c, "清除已完成").Clicked() {
-				a.clearTransfers()
-			}
-			if ui.Button(c, label).Clicked() {
-				a.showTransfers = !a.showTransfers
-			}
-		})
-		if !a.showTransfers {
-			return
-		}
-		ui.Scroll(c).MaxHeight(180).Gap(6).Children(func() {
-			for _, tr := range a.transfers {
-				a.transferRow(c, tr)
-			}
-		})
-	})
 }
 
 func (a *app) transferRow(c *ui.Context, tr *transfer) {

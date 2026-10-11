@@ -24,6 +24,18 @@ func (h *harness) replaceField(label, value string) {
 	h.tt.Frame()
 	h.settle()
 }
+
+// manage shows a tab of the management of the first server: from the
+// server's menu, or among the tabs of the page shown.
+func (h *harness) manage(tab string) {
+	h.t.Helper()
+	if m := h.a.admin; m != nil && h.a.place == adminPlace(m.server, m.tab) {
+		h.click(tab)
+		return
+	}
+	h.menu(h.a.store.Servers[0].Title(), tab+"…")
+}
+
 func (h *harness) captureAdmin(name string) {
 	h.t.Helper()
 	dir := os.Getenv("FILESYNC_ADMIN_SCREENSHOT_DIR")
@@ -43,7 +55,7 @@ func TestNativeRootManagementPickerEditAndRemove(t *testing.T) {
 	f := fitest.New(t)
 	os.WriteFile(filepath.Join(f.ManageData, "new", "kept.txt"), []byte("keep"), 0644)
 	h := browserHarness(t, f)
-	h.click("目录管理")
+	h.manage("目录管理")
 	h.want("索引目录管理列表")
 	h.click("添加索引目录…")
 	h.click("浏览服务器目录…")
@@ -92,7 +104,7 @@ func TestNativeRootRemovalLeavesFilesAndUpdatesBrowser(t *testing.T) {
 	f := fitest.New(t)
 	os.WriteFile(filepath.Join(f.Root, "kept.txt"), []byte("original"), 0644)
 	h := browserHarness(t, f)
-	h.click("目录管理")
+	h.manage("目录管理")
 	h.clickPage("nas")
 	h.click("编辑目录…")
 	h.click("只读目录")
@@ -121,7 +133,7 @@ func TestNativeScanEventsHistoryRebuildAndCancel(t *testing.T) {
 	h := browserHarness(t, f)
 	h.a.noEvents = false
 	h.a.watch(h.a.store.Servers[0])
-	h.click("目录管理")
+	h.manage("目录管理")
 	h.clickPage("nas")
 	h.click("更新索引")
 	h.waitTransfers()
@@ -172,7 +184,7 @@ func TestScanSnapshotRecoversMissingEventsAndKeepsProgress(t *testing.T) {
 	f := fitest.New(t)
 	f.DropTaskEvents.Store(true)
 	h := browserHarness(t, f)
-	h.click("目录管理")
+	h.manage("目录管理")
 	h.clickPage("nas")
 	h.click("更新索引")
 	h.waitTransfers()
@@ -196,7 +208,7 @@ func TestNativeDuplicatesProtectLastCopyAndReadOnly(t *testing.T) {
 	}
 	os.WriteFile(filepath.Join(f.ReadOnly, "c.txt"), []byte("identical"), 0644)
 	h := browserHarness(t, f)
-	h.click("查重")
+	h.manage("查重")
 	m := h.a.admin
 	m.minSize = "全部非空文件"
 	h.a.reloadAdmin()
@@ -242,7 +254,7 @@ func TestNativeStatisticsDrillLocateAndSourceLifecycle(t *testing.T) {
 	os.WriteFile(filepath.Join(f.Root, "目录", "子目录", "large.txt"), []byte(strings.Repeat("x", 20)), 0644)
 	os.WriteFile(filepath.Join(f.Root, "loose.txt"), []byte("loose"), 0644)
 	h := browserHarness(t, f)
-	h.click("空间统计")
+	h.manage("空间统计")
 	h.want("总大小")
 	if h.a.admin.overview.Size != 25 {
 		t.Fatal("overview size")
@@ -320,7 +332,7 @@ func TestRootEditKeepsReferencedBackupSettings(t *testing.T) {
 	st.Add(&config.Task{Name: "backup", Server: st.Servers[0].ID, Root: 1, RootName: "nas"})
 	h := newHarness(t, st)
 	h.settle()
-	h.click("目录管理")
+	h.manage("目录管理")
 	h.clickPage("nas")
 	h.click("移除索引…")
 	h.want("当前备份任务仍引用此目录")
@@ -333,7 +345,7 @@ func TestRootEditKeepsReferencedBackupSettings(t *testing.T) {
 func TestScanTerminalSnapshotsAndSourceChanges(t *testing.T) {
 	f := fitest.New(t)
 	h := browserHarness(t, f)
-	h.click("目录管理")
+	h.manage("目录管理")
 	server := h.a.admin.server
 	done := &fileindex.ScanJob{ID: 999, RootID: 1, Status: "done", Scanned: 99}
 	h.a.applyScan(server, done, "")
@@ -367,7 +379,7 @@ func TestScanTerminalSnapshotsAndSourceChanges(t *testing.T) {
 func TestPendingScanPreventsDuplicateStart(t *testing.T) {
 	f := fitest.New(t)
 	h := browserHarness(t, f)
-	h.click("目录管理")
+	h.manage("目录管理")
 	m := h.a.admin
 	r := h.a.roots[m.server][0]
 	h.a.startScan(m, r, false)
@@ -388,7 +400,7 @@ func TestPartialAdminMutationReconcilesResult(t *testing.T) {
 		os.WriteFile(filepath.Join(f.Root, name), []byte("identical"), 0644)
 	}
 	h := browserHarness(t, f)
-	h.click("查重")
+	h.manage("查重")
 	m := h.a.admin
 	m.minSize = "全部非空文件"
 	h.a.reloadAdmin()
@@ -409,7 +421,7 @@ func TestPartialAdminMutationReconcilesResult(t *testing.T) {
 func TestFilesystemEventRefreshesManagementStatistics(t *testing.T) {
 	f := fitest.New(t)
 	h := browserHarness(t, f)
-	h.click("空间统计")
+	h.manage("空间统计")
 	m := h.a.admin
 	os.WriteFile(filepath.Join(f.Root, "new.txt"), []byte("new"), 0644)
 	h.a.onEvent(m.server, fileindex.Event{Type: "fs", Root: 1})
@@ -429,7 +441,8 @@ func TestFilesystemEventRefreshesManagementStatistics(t *testing.T) {
 func TestLargeDirectoryUsageListCanNavigateLastRow(t *testing.T) {
 	f := fitest.New(t)
 	h := browserHarness(t, f)
-	h.click("空间统计")
+	h.tt.SetSize(980, 800)
+	h.manage("空间统计")
 	h.clickPage("nas")
 	m := h.a.admin
 	for i := range 1200 {

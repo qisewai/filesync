@@ -60,6 +60,10 @@ type app struct {
 	// place is what the sidebar chose: "backup", or a root as
 	// "root/<server>/<id>".
 	place string
+	// nav is the history of the places shown, and navShown the location
+	// of the place it shows (see nav.go).
+	nav      *ui.Router
+	navShown string
 	// sidebarW is the sidebar's width; sidebarMoved says it was dragged
 	// since the settings were saved.
 	sidebarW     float32
@@ -138,7 +142,9 @@ func newApp(store *config.Store) *app {
 		thumbs:       map[string]*thumbOf{},
 		thumbSlots:   make(chan struct{}, 4),
 		thumbExts:    map[string]map[string]bool{},
+		nav:          ui.NewRouter("/"),
 	}
+	a.nav.Transition = ui.TransitionFade
 	if len(store.Servers) == 0 && len(store.Tasks) > 0 {
 		a.place = "backup"
 	}
@@ -611,29 +617,6 @@ func (a *app) save() {
 	if err := a.store.Save(); err != nil {
 		a.errorMsg = "无法保存设置: " + err.Error()
 	}
-}
-
-// card is a bordered box.
-func card(c *ui.Context, fn func()) {
-	t := c.Theme()
-	ui.Column(c).Padding(16).Gap(10).Radius(t.Radius*2).Border(1, t.Border).Background(t.Background).Children(fn)
-}
-
-// notice is a colored message.
-func notice(c *ui.Context, color ui.Color, msg string) {
-	ui.Row(c).Padding(10, 12).Radius(c.Theme().Radius*2).Background(color.Alpha(0.1)).Border(1, color.Alpha(0.4)).Children(func() {
-		ui.Text(c, msg).Grow(1).Shrink(1).Selectable()
-	})
-}
-
-// closableNotice is a colored message with a button closing it.
-func closableNotice(c *ui.Context, color ui.Color, msg string, close func()) {
-	ui.Row(c).Padding(6, 6, 6, 12).Gap(8).AlignItems(ui.Center).Radius(c.Theme().Radius*2).Background(color.Alpha(0.1)).Border(1, color.Alpha(0.4)).Children(func() {
-		ui.Text(c, msg).Grow(1).Shrink(1).Selectable()
-		ui.ButtonBase(c.Key("close-notice")).Size(26, 26).Radius(c.Theme().Radius).Label("关闭提示").Tooltip("关闭").OnClick(close).Children(func() {
-			ui.Icon(c, iconClose).FontSize(14).TextColor(c.Theme().TextMuted)
-		})
-	})
 }
 
 func statusColor(t *ui.Theme, s config.Status) ui.Color {

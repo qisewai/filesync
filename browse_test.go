@@ -176,8 +176,8 @@ func TestTaskCompletionShowsServerWarnings(t *testing.T) {
 	if tr.note != note || tr.state != "done" {
 		t.Fatalf("completion %+v", tr)
 	}
-	h.a.place = "transfers"
 	h.tt.Frame()
+	h.click("传输任务")
 	found := false
 	for _, text := range h.tt.Texts() {
 		if strings.Contains(text, note) {

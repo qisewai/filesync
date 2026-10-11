@@ -105,6 +105,19 @@ func (h *harness) clickPage(label string) {
 	h.settle()
 }
 
+// settings chooses an item of the settings menu, at the foot of the
+// sidebar.
+func (h *harness) settings(item ...string) {
+	h.t.Helper()
+	if err := h.tt.Click("设置"); err != nil {
+		h.t.Fatal(err)
+	}
+	if err := h.tt.ChooseMenuItem(item...); err != nil {
+		h.t.Fatalf("%v; menu %q", err, h.tt.Menu())
+	}
+	h.settle()
+}
+
 func (h *harness) want(text string) {
 	h.t.Helper()
 	if !h.tt.HasText(text) {
@@ -531,7 +544,7 @@ func TestServersInUseStay(t *testing.T) {
 	store.AddServer(&config.Server{Addr: "10.0.0.9:8090"})
 	store.Add(&config.Task{Name: "t", Source: t.TempDir(), Server: store.Servers[0].ID, Root: 1, RootName: "nas"})
 	h := newHarness(t, store)
-	h.click("服务器…")
+	h.settings("服务器…")
 	h.want("1 个任务")
 	h.want("已登录")
 
@@ -685,7 +698,7 @@ func TestSidebarReconnects(t *testing.T) {
 // The error over the page can be closed.
 func TestErrorCloses(t *testing.T) {
 	h := newHarness(t, &config.Store{Dir: t.TempDir()})
-	h.a.place = "transfers"
+	h.a.openLocal(t.TempDir())
 	h.a.errorMsg = "出了点问题"
 	h.tt.Frame()
 	h.want("出了点问题")

@@ -18,46 +18,22 @@ func (a *app) view(c *ui.Context) {
 		t.FontSize /= s
 		c.SetTheme(&t)
 	}
-	// The sidebar, then the page: the divider between them drags.
+	a.followHistory()
+	// The sidebar, then the page under its toolbar: the divider between
+	// them drags.
 	split := ui.Split(c.Key("main-split"), &a.sidebarW, func() { a.sidebar(c) }, func() {
-		ui.Column(c).Grow(1).Shrink(1).MinWidth(0).Fill().Padding(20, 24).Gap(12).Children(func() {
-			if a.errorMsg != "" && a.place != "" && a.place != "backup" {
-				closableNotice(c, c.Theme().Danger, a.errorMsg, func() { a.errorMsg = "" })
-			}
-			switch {
-			case a.admin != nil && a.place == adminPlace(a.admin.server, a.admin.tab):
-				a.adminView(c)
-			case a.place == "backup":
-				a.backupPage(c)
-			case a.place == localPlace && a.local != nil:
-				a.localView(c)
-			case a.recycle != nil && a.place == trashPlace(a.recycle.server):
-				a.trashView(c)
-			case a.place == "transfers":
-				ui.Row(c).Gap(12).AlignItems(ui.Center).Children(func() {
-					ui.Text(c, "传输任务").FontSize(22).Bold().Grow(1)
-					ui.Button(c.Key("clear-transfers"), "清除已完成").Disabled(a.activeTransfers() == len(a.transfers)).OnClick(a.clearTransfers)
-				})
-				if len(a.transfers) == 0 {
-					ui.Column(c).Grow(1).Center().Gap(8).Children(func() {
-						ui.Icon(c, iconMoves).FontSize(36).TextColor(c.Theme().TextMuted)
-						ui.Text(c, "还没有传输任务").Bold()
-						ui.Text(c, "上传、下载、复制和移动都会显示在这里。").FontSize(12).TextColor(c.Theme().TextMuted)
-					})
-				}
-				ui.Scroll(c).Grow(1).MinHeight(0).Gap(8).Children(func() {
-					for _, tr := range a.transfers {
-						a.transferRow(c, tr)
+		ui.Column(c).Grow(1).Shrink(1).MinWidth(0).Fill().Children(func() {
+			a.topBar(c)
+			a.nav.View(c, func(r *ui.Route) {
+				r.Title(a.pageTitle())
+				ui.Column(c).Grow(1).MinHeight(0).Padding(16, 24).Gap(12).Children(func() {
+					if a.errorMsg != "" && a.place != "" && a.place != "backup" {
+						closableNotice(c, c.Theme().Danger, a.errorMsg, func() { a.errorMsg = "" })
 					}
+					a.page(c)
 				})
-			case a.br != nil && a.place == rootPlace(a.br.server, a.br.root.ID):
-				a.browserView(c)
-			default:
-				a.welcome(c)
-			}
-			if a.place != "transfers" {
-				a.transfersPanel(c)
-			}
+			})
+			a.statusBar(c)
 		})
 	}).Fill()
 	if split.Changed() {
@@ -73,6 +49,7 @@ func (a *app) view(c *ui.Context) {
 		}
 	}
 	a.syncTray()
+	a.recordHistory()
 	a.filePreviewView(c)
 	a.taskDialog(c)
 	a.nasView(c)
@@ -84,6 +61,24 @@ func (a *app) view(c *ui.Context) {
 				a.removeTask()
 			}
 		}
+	}
+}
+
+// page builds the page of the place shown.
+func (a *app) page(c *ui.Context) {
+	switch {
+	case a.admin != nil && a.place == adminPlace(a.admin.server, a.admin.tab):
+		a.adminView(c)
+	case a.place == "backup":
+		a.backupPage(c)
+	case a.onLocal():
+		a.localView(c)
+	case a.recycle != nil && a.place == trashPlace(a.recycle.server):
+		a.trashView(c)
+	case a.onRoot():
+		a.browserView(c)
+	default:
+		a.welcome(c)
 	}
 }
 
@@ -160,6 +155,8 @@ func (a *app) sidebar(c *ui.Context) {
 	ui.Column(c).Fill().Background(t.Surface).Children(func() {
 		ui.Scroll(c).Grow(1).MinHeight(0).Padding(10, 8).Children(func() {
 			ui.Tree(c.Key("servers-tree"), func() {
+				local := ui.TreeItem(c.Key("local"), "", a.sectionOpen("local"), func() { a.localItems(c) })
+				local.Children(func() { labeled(c, iconLaptop, "本机", t.Text) }).Label("本机")
 				for _, sv := range a.store.Servers {
 					node := ui.TreeItem(c.Key("server/"+sv.ID), "", a.sectionOpen("server/"+sv.ID), func() {
 						a.serverItems(c, sv)
@@ -170,38 +167,40 @@ func (a *app) sidebar(c *ui.Context) {
 					}).Label(sv.Title()).Tooltip(sv.Addr)
 					node.ContextMenu(func(m *ui.Menu) { a.serverMenu(m, sv) })
 				}
-				local := ui.TreeItem(c.Key("local"), "", a.sectionOpen("local"), func() { a.localItems(c) })
-				local.Children(func() { labeled(c, iconLaptop, "本机", t.Text) }).Label("本机")
-				tasks := ui.TreeItem(c.Key("tasks-section"), "", a.sectionOpen("tasks"), func() {
-					bk := a.navItem(c, "backup", iconBackup, "备份任务", func() { a.place = "backup" })
-					if n := len(a.store.Tasks); n > 0 {
-						color := t.TextMuted
-						if a.place == "backup" {
-							color = t.AccentText
-						}
-						bk.Children(func() { ui.Text(c, fmt.Sprint(n)).FontSize(11).TextColor(color).Padding(0, 4) })
-					}
-					tr := a.navItem(c, "transfers", iconMoves, "传输任务", func() { a.place = "transfers" })
-					if n := a.activeTransfers(); n > 0 {
-						tr.Children(func() { ui.Badge(c, fmt.Sprint(n)) })
-					}
-				})
-				tasks.Children(func() { labeled(c, iconTasks, "任务", t.Text) }).Label("任务")
+				bk := a.navItem(c, "backup", iconBackup, "备份任务", func() { a.place = "backup" })
+				a.backupMark(c, bk)
 			}).Label("位置")
 		})
-		ui.Row(c).Padding(10).Gap(6).BorderWidth(1, 0, 0, 0).BorderColor(t.Border).Children(func() {
-			if ui.Button(c, "服务器…").Grow(1).Clicked() {
+		ui.Row(c).Padding(8).Gap(6).AlignItems(ui.Center).BorderWidth(1, 0, 0, 0).BorderColor(t.Border).Children(func() {
+			ui.MenuButton(c.Key("settings"), "设置", a.settingsMenu).Label("设置").Tooltip("服务器、本机索引与其他设置")
+			ui.Spacer(c)
+			iconButton(c, "add-server", iconPlus, "添加服务器", "添加 fileindex 服务器", false, func() {
 				a.openServers()
-			}
-			ui.MenuButton(c.Key("web-management"), "网页管理", func(m *ui.Menu) {
-				for _, sv := range a.store.Servers {
-					if m.Item(sv.Title() + " · 设置").Chosen() {
-						a.openURL("http://" + sv.Addr + "/settings")
-					}
-				}
-			}).Disabled(len(a.store.Servers) == 0).Tooltip("在浏览器中打开 fileindex 网页版")
+				a.nasStartEdit(nil)
+			})
 		})
 	})
+}
+
+// backupMark shows, beside the backup tasks in the sidebar, the backup
+// under way, or how the last run of a task ended when it did not well.
+func (a *app) backupMark(c *ui.Context, item ui.Element) {
+	t := c.Theme()
+	if a.busy() {
+		item.Children(func() { ui.Spinner(c).FontSize(12).Label("正在备份") })
+		return
+	}
+	failed := 0
+	for _, task := range a.store.Tasks {
+		if len(task.History) > 0 && task.History[0].Status != config.StatusOK {
+			failed++
+		}
+	}
+	if failed > 0 {
+		item.Children(func() {
+			ui.Icon(c, iconAlert).FontSize(13).TextColor(t.Warning).Tooltip(fmt.Sprintf("%d 个任务上次没有完全成功", failed))
+		})
+	}
 }
 
 // sectionOpen is whether a branch of the sidebar shows its items, open
@@ -228,7 +227,8 @@ func (a *app) navItem(c *ui.Context, place string, svg *ui.SVG, label string, ac
 	return item.Selected(a.place == place).OnClick(action)
 }
 
-// serverItems are the roots of a server, then its management.
+// serverItems are the roots of a server, then its trash; its management
+// is in its menu.
 func (a *app) serverItems(c *ui.Context, sv *config.Server) {
 	t := c.Theme()
 	if sv.Token == "" {
@@ -251,18 +251,12 @@ func (a *app) serverItems(c *ui.Context, sv *config.Server) {
 		return
 	}
 	if len(roots) == 0 {
-		ui.Text(c, "还没有索引目录，可在“管理 → 目录管理”中添加").FontSize(11).MaxLines(2).TextColor(t.TextMuted).Padding(2, 8, 4, 28)
+		ui.Text(c, "还没有索引目录，可在服务器的右键菜单“目录管理…”中添加").FontSize(11).MaxLines(2).TextColor(t.TextMuted).Padding(2, 8, 4, 28)
 	}
 	for _, r := range roots {
 		a.directoryView(c, sv, r, "", r.Name)
 	}
-	manage := ui.TreeItem(c.Key("manage/"+sv.ID), "", a.sectionOpen("manage/"+sv.ID), func() {
-		a.navItem(c, adminPlace(sv.ID, "roots"), iconRoots, "目录管理", func() { a.openAdmin(sv.ID, "roots") })
-		a.navItem(c, adminPlace(sv.ID, "dupes"), iconDupes, "查重", func() { a.openAdmin(sv.ID, "dupes") })
-		a.navItem(c, adminPlace(sv.ID, "stats"), iconStats, "空间统计", func() { a.openAdmin(sv.ID, "stats") })
-		a.navItem(c, trashPlace(sv.ID), iconTrash, "回收站", func() { a.openTrash(sv.ID) })
-	})
-	manage.Children(func() { labeled(c, iconManage, "管理", t.TextMuted) }).Label("管理")
+	a.navItem(c, trashPlace(sv.ID), iconTrash, "回收站", func() { a.openTrash(sv.ID) })
 }
 
 // serverMark shows, beside a server in the sidebar, whether it is
@@ -301,6 +295,22 @@ func (a *app) serverMenu(m *ui.Menu, sv *config.Server) {
 	} else if m.Item("重新连接").Disabled(a.rootsLoading[sv.ID] != nil).Chosen() {
 		a.reconnect(sv)
 	}
+	if sv.Token != "" {
+		m.Separator()
+		if m.Item("目录管理…").Chosen() {
+			a.openAdmin(sv.ID, "roots")
+		}
+		if m.Item("查重…").Chosen() {
+			a.openAdmin(sv.ID, "dupes")
+		}
+		if m.Item("空间统计…").Chosen() {
+			a.openAdmin(sv.ID, "stats")
+		}
+		if m.Item("回收站").Chosen() {
+			a.openTrash(sv.ID)
+		}
+	}
+	m.Separator()
 	if m.Item("编辑服务器…").Chosen() {
 		a.openServers()
 		a.nasStartEdit(sv)

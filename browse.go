@@ -36,6 +36,7 @@ type browser struct {
 	grid bool
 
 	query   string
+	typing  bool // the search has the keyboard focus
 	results bool // items are search results
 	total   int  // of the results, which may be more than shown
 	// page is how many pages of the results are shown; more is set while
@@ -343,42 +344,44 @@ func paths(es []fileindex.Entry) []string {
 }
 
 // browserView is the page of a root.
+// browserHeader is, in the toolbar, where the page is, and the search.
+func (a *app) browserHeader(c *ui.Context) {
+	b := a.br
+	crumbs := []string{b.root.Name}
+	if b.path != "" {
+		crumbs = append(crumbs, strings.Split(b.path, "/")...)
+	}
+	chosen := len(crumbs) - 1
+	if b.results {
+		crumbs = append(crumbs, "搜索“"+b.query+"”")
+		chosen = len(crumbs) - 1
+	}
+	if ui.Breadcrumbs(c, crumbs, &chosen).Label("位置").Grow(1).Shrink(1).Changed() {
+		if chosen == 0 {
+			a.browse("")
+		} else if chosen <= strings.Count(b.path, "/")+1 && b.path != "" {
+			a.browse(strings.Join(crumbs[1:chosen+1], "/"))
+		} else {
+			a.browse(b.path)
+		}
+	}
+	if b.root.ReadOnly {
+		ui.Badge(c, "只读")
+	}
+	search := ui.TextInput(c.Key("search"), &b.query).Placeholder("在这里搜索…").Label("搜索").Width(220)
+	if search.Submitted() {
+		a.search(b.query)
+	}
+	b.typing = search.Focused()
+}
+
 func (a *app) browserView(c *ui.Context) {
 	b := a.br
 	t := c.Theme()
 	writable := !b.root.ReadOnly && !b.loading && !b.operating
 
-	// The bar: where, and the search.
-	typing := false
-	ui.Row(c).Gap(10).Children(func() {
-		crumbs := []string{b.root.Name}
-		if b.path != "" {
-			crumbs = append(crumbs, strings.Split(b.path, "/")...)
-		}
-		chosen := len(crumbs) - 1
-		if b.results {
-			crumbs = append(crumbs, "搜索“"+b.query+"”")
-			chosen = len(crumbs) - 1
-		}
-		if ui.Breadcrumbs(c, crumbs, &chosen).Label("位置").Grow(1).Shrink(1).Changed() {
-			if chosen == 0 {
-				a.browse("")
-			} else if chosen <= strings.Count(b.path, "/")+1 && b.path != "" {
-				a.browse(strings.Join(crumbs[1:chosen+1], "/"))
-			} else {
-				a.browse(b.path)
-			}
-		}
-		if b.root.ReadOnly {
-			ui.Badge(c, "只读")
-		}
-		search := ui.TextInput(c.Key("search"), &b.query).Placeholder("在这里搜索…").Label("搜索").Width(220)
-		if search.Submitted() {
-			a.search(b.query)
-		}
-		typing = search.Focused()
-	})
-
+	// Not while typing the search, in the toolbar, built before.
+	typing := b.typing
 	// The actions.
 	es := b.chosen()
 	if b.loading || b.operating {
@@ -469,6 +472,19 @@ func (a *app) browserView(c *ui.Context) {
 	}
 	zone.ContextMenu(func(m *ui.Menu) { a.entryMenu(m, b.chosen(), writable) })
 
+	a.browserDialogs(c)
+}
+
+// browserStatus is, in the status bar, what is under way, what the page
+// shows and has chosen.
+func (a *app) browserStatus(c *ui.Context) {
+	b := a.br
+	t := c.Theme()
+	es := b.chosen()
+	if b.loading || b.operating {
+		es = nil
+	}
+	n := len(es)
 	status := fmt.Sprintf("%d 项", len(b.items))
 	if b.results {
 		status = fmt.Sprintf("找到 %s 项", groupDigits(int64(b.total)))
@@ -486,31 +502,27 @@ func (a *app) browserView(c *ui.Context) {
 			status += "，" + formatBytes(size)
 		}
 	}
-	ui.Row(c).Gap(10).AlignItems(ui.Center).Children(func() {
-		// What is under way, which can take a while on a large folder.
-		busy := b.opLabel
-		switch {
-		case busy != "":
-		case b.loading && b.results:
-			busy = "正在搜索…"
-		case b.loading && len(b.items) > 0:
-			busy = "正在读取…"
+	// What is under way, which can take a while on a large folder.
+	busy := b.opLabel
+	switch {
+	case busy != "":
+	case b.loading && b.results:
+		busy = "正在搜索…"
+	case b.loading && len(b.items) > 0:
+		busy = "正在读取…"
+	}
+	if busy != "" {
+		ui.Spinner(c).FontSize(12).Label(busy)
+		ui.Text(c, busy).FontSize(12).TextColor(t.Accent)
+	}
+	statusText(c, status)
+	if b.results && !b.loading && b.total > len(b.items) {
+		label := fmt.Sprintf("加载更多（还有 %s 项）", groupDigits(int64(b.total-len(b.items))))
+		if b.more {
+			label = "正在加载…"
 		}
-		if busy != "" {
-			ui.Spinner(c).FontSize(12).Label(busy)
-			ui.Text(c, busy).FontSize(12).TextColor(t.Accent)
-		}
-		ui.Text(c, status).FontSize(12).TextColor(t.TextMuted)
-		if b.results && !b.loading && b.total > len(b.items) {
-			label := fmt.Sprintf("加载更多（还有 %s 项）", groupDigits(int64(b.total-len(b.items))))
-			if b.more {
-				label = "正在加载…"
-			}
-			ui.Button(c.Key("load-more"), label).Disabled(b.more).OnClick(a.loadMore)
-		}
-	})
-
-	a.browserDialogs(c)
+		ui.Button(c.Key("load-more"), label).Disabled(b.more).OnClick(a.loadMore)
+	}
 }
 
 func (a *app) entryMenu(m *ui.Menu, es []fileindex.Entry, writable bool) {

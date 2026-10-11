@@ -246,12 +246,6 @@ func (a *app) trashOperation(ids []int64, purge bool) {
 func (a *app) trashView(c *ui.Context) {
 	b := a.recycle
 	t := c.Theme()
-	sv := a.store.Server(b.server)
-	title := "回收站"
-	if sv != nil {
-		title += " · " + sv.Title()
-	}
-	ui.Text(c, title).FontSize(22).Bold()
 	ui.Row(c).Gap(8).AlignItems(ui.Center).Children(func() {
 		if ui.TextInput(c.Key("trash-search"), &b.query).Placeholder("筛选名称或原位置…").Label("筛选回收站").Grow(1).Changed() {
 			b.filter()
