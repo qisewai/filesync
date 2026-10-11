@@ -246,22 +246,34 @@ func (a *app) trashOperation(ids []int64, purge bool) {
 func (a *app) trashView(c *ui.Context) {
 	b := a.recycle
 	t := c.Theme()
-	ui.Row(c).Gap(8).AlignItems(ui.Center).Children(func() {
-		if ui.TextInput(c.Key("trash-search"), &b.query).Placeholder("筛选名称或原位置…").Label("筛选回收站").Grow(1).Changed() {
+	var size int64
+	for _, it := range b.shown {
+		if b.sel.Has(it.ID) {
+			size += it.Size
+		}
+	}
+	if b.sel.Len() > 0 && c.Shortcut(0, ui.KeyEscape) {
+		b.sel.Clear()
+	}
+	if c.Shortcut(0, ui.KeyF5) && !b.operating {
+		a.loadTrash()
+	}
+	commandBar(c, b.sel.Len(), size, func() { b.sel.Clear() }, func() {
+		if ui.SearchField(c.Key("trash-search"), &b.query).Label("筛选回收站").Width(320).Shrink(1).Changed() {
 			b.filter()
 		}
-		ui.Button(c, "刷新回收站").Disabled(b.operating).OnClick(a.loadTrash)
-		ui.Button(c, "恢复所选").Disabled(!a.trashWritable(b)).OnClick(func() { a.restoreTrash(b.chosen()) })
-		ui.Button(c, "彻底删除…").Disabled(!a.trashWritable(b)).OnClick(func() { b.pending = b.chosen(); b.confirm = true })
+	}, func() {
+		writable := a.trashWritable(b)
+		toolButton(c, "trash-restore", iconRetry, "恢复", "恢复到原位置", !writable, func() { a.restoreTrash(b.chosen()) })
+		toolButton(c, "trash-delete", iconTrash, "彻底删除…", "永久删除，无法恢复", !writable, func() { b.pending = b.chosen(); b.confirm = true })
+	}, func() {
+		iconButton(c, "trash-refresh", iconRetry, "刷新回收站", "刷新（F5）", b.operating, a.loadTrash)
 	})
 	if b.err != "" {
 		notice(c, t.Danger, b.err)
 	}
 	if b.note != "" {
 		notice(c, t.Success, b.note)
-	}
-	if b.loading {
-		ui.Text(c, "正在读取回收站…").TextColor(t.TextMuted)
 	}
 	if b.sort.stale() {
 		b.sortShown()
@@ -274,6 +286,10 @@ func (a *app) trashView(c *ui.Context) {
 	}
 	ui.Table(c.Key("trash-files"), &b.list, cols, len(b.shown), func(row, col int) {
 		it := b.shown[row]
+		muted := t.TextMuted
+		if b.sel.Has(it.ID) {
+			muted = t.AccentText.Alpha(0.85)
+		}
 		switch col {
 		case 0:
 			ui.Row(c).Gap(8).AlignItems(ui.Center).Children(func() {
@@ -281,18 +297,23 @@ func (a *app) trashView(c *ui.Context) {
 				ui.Text(c, it.Name).SingleLine().Grow(1).Shrink(1)
 			})
 		case 1:
-			ui.Text(c, it.RootName+"/"+it.OrigPath).SingleLine().TextColor(t.TextMuted)
+			ui.Text(c, it.RootName+"/"+it.OrigPath).SingleLine().TextColor(muted)
 		case 2:
 			ui.Text(c, formatBytes(it.Size)).SingleLine()
 		case 3:
 			ui.Text(c, time.Unix(it.DeletedAt, 0).Format("2006-01-02 15:04")).SingleLine()
 		}
-	}).Grow(1).MinHeight(0).Label("回收站文件").Children(func() {
-		if !b.loading && len(b.shown) == 0 {
-			ui.Text(c, "回收站中没有匹配的文件").Padding(16).TextColor(t.TextMuted)
+	}).Grow(1).MinHeight(0).Label("回收站文件").Radius(t.Radius*2).Border(1, t.Border).Clip().Children(func() {
+		switch {
+		case b.loading && len(b.items) == 0:
+			ui.Column(c).Fill().Center().Children(func() { ui.Spinner(c).FontSize(22).Label("正在读取回收站") })
+		case b.loading:
+		case len(b.items) == 0:
+			emptyState(c, iconTrash, "回收站是空的", "删除的文件会先移到这里，可以恢复。", nil)
+		case len(b.shown) == 0:
+			emptyState(c, iconSearch, "没有匹配的文件", "", nil)
 		}
 	})
-	ui.Text(c, fmt.Sprintf("显示 %d / %d 项 · 已选 %d 项 · 只读目录中的项不能恢复或删除", len(b.shown), len(b.items), b.sel.Len())).FontSize(12).TextColor(t.TextMuted)
 	if b.confirm {
 		if ui.AlertDialog(c, &b.confirm, fmt.Sprintf("彻底删除回收站中的 %d 项？", len(b.pending)), "这些文件和目录将永久删除，无法恢复。", "取消", "确认永久删除") == 1 {
 			ids := b.pending
@@ -301,6 +322,23 @@ func (a *app) trashView(c *ui.Context) {
 		}
 	}
 }
+
+// trashStatus is, in the status bar, what the trash shows and has chosen.
+func (a *app) trashStatus(c *ui.Context) {
+	b := a.recycle
+	text := fmt.Sprintf("%d 项", len(b.items))
+	if len(b.shown) != len(b.items) {
+		text = fmt.Sprintf("显示 %d / %d 项", len(b.shown), len(b.items))
+	}
+	if n := b.sel.Len(); n > 0 {
+		text += fmt.Sprintf(" · 已选 %d 项", n)
+	}
+	if b.loading {
+		ui.Spinner(c).FontSize(12).Label("正在读取回收站")
+	}
+	statusText(c, text).Tooltip("只读目录中的项不能恢复或删除")
+}
+
 func (a *app) trashRefreshSoon(server string) {
 	b := a.recycle
 	if b == nil || b.server != server || b.refreshPending {

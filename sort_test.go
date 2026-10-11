@@ -59,7 +59,7 @@ func TestHeadersSortFiles(t *testing.T) {
 		t.Fatalf("chose %d", b.cursor)
 	}
 	// Read again, the files keep the order.
-	h.click("刷新")
+	h.more("刷新")
 	if got := names(b.items); !slices.Equal(got, []string{"目录10", "目录2", "大.bin", "中.bin", "小.bin"}) {
 		t.Fatalf("refreshed %q", got)
 	}

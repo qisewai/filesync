@@ -73,7 +73,7 @@ func TestNativeBrowserTreeSearchAndFileOperations(t *testing.T) {
 	if !h.a.br.results || len(h.a.br.items) != 1 {
 		t.Fatal("refresh replaced search with directory contents")
 	}
-	h.click("网格")
+	h.click("网格视图")
 	if !h.a.br.grid {
 		t.Fatal("grid did not stay selected")
 	}
@@ -222,7 +222,7 @@ func TestNativeBrowserReadOnlyAndRendering(t *testing.T) {
 	os.WriteFile(filepath.Join(f.Root, "README.md"), []byte("readme"), 0644)
 	os.WriteFile(filepath.Join(f.Root, "照片.jpg"), []byte("image"), 0644)
 	h := browserHarness(t, f)
-	h.click("网格")
+	h.click("网格视图")
 	// Wait for the thumbnail request and draw additional frames.
 	deadline := time.After(3 * time.Second)
 	for {

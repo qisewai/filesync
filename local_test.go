@@ -29,7 +29,7 @@ func TestLocalFiles(t *testing.T) {
 	if h.tt.HasText(".隐藏") {
 		t.Error("a hidden file shows")
 	}
-	h.click("显示隐藏文件")
+	h.more("显示隐藏文件")
 	h.want(".隐藏")
 
 	// The tree opens a directory chosen in it.
@@ -138,7 +138,7 @@ func TestLocalTreeLeaves(t *testing.T) {
 	// Shown with hidden files, a hidden directory is one to open.
 	h.a.openLocal(home)
 	h.settle()
-	h.click("显示隐藏文件")
+	h.more("显示隐藏文件")
 	h.settle()
 	if node("隐藏的").leaf() {
 		t.Fatal("with hidden files shown, .git makes no directory")

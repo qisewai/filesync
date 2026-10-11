@@ -198,7 +198,8 @@ func pathBase(p string) string {
 // computer's files; pages of neither, without transfers, have none.
 func (a *app) statusBar(c *ui.Context) {
 	t := c.Theme()
-	if !a.onLocal() && !a.onRoot() && len(a.transfers) == 0 {
+	onTrash := a.recycle != nil && a.place == trashPlace(a.recycle.server)
+	if !a.onLocal() && !a.onRoot() && !onTrash && len(a.transfers) == 0 {
 		a.showTransfers = false
 		return
 	}
@@ -208,6 +209,8 @@ func (a *app) statusBar(c *ui.Context) {
 			a.localStatus(c)
 		case a.onRoot():
 			a.browserStatus(c)
+		case onTrash:
+			a.trashStatus(c)
 		}
 		ui.Spacer(c)
 		a.transferIndicator(c)

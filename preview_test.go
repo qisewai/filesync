@@ -272,7 +272,7 @@ func TestNativeRecycleRestoreCollisionPurgeAndFilter(t *testing.T) {
 		t.Fatal("filter failed")
 	}
 	h.click("a.txt")
-	h.click("恢复所选")
+	h.click("恢复")
 	h.waitTransfers()
 	data, _ := os.ReadFile(filepath.Join(f.Root, "a.txt"))
 	if string(data) != "replacement" {

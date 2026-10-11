@@ -105,6 +105,18 @@ func (h *harness) clickPage(label string) {
 	h.settle()
 }
 
+// more chooses an item of the menu of the less used commands of a page.
+func (h *harness) more(item ...string) {
+	h.t.Helper()
+	if err := h.tt.Click("更多"); err != nil {
+		h.t.Fatal(err)
+	}
+	if err := h.tt.ChooseMenuItem(item...); err != nil {
+		h.t.Fatalf("%v; menu %q", err, h.tt.Menu())
+	}
+	h.settle()
+}
+
 // settings chooses an item of the settings menu, at the foot of the
 // sidebar.
 func (h *harness) settings(item ...string) {

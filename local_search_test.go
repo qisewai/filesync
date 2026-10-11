@@ -104,7 +104,7 @@ func TestLocalSearchManualWorkflow(t *testing.T) {
 		t.Fatalf("AND: %d", b.total)
 	}
 	localWrite(t, root, "新项目10.pdf", 8)
-	h.click("刷新")
+	h.more("刷新")
 	if b.total != 1 {
 		t.Fatal("refresh changed index without manual scan")
 	}

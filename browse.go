@@ -50,6 +50,7 @@ type browser struct {
 	list      ui.ListState
 	sort      tableSort
 	gridState ui.GridState
+	gridLast  int // the last item the grid built
 
 	// dialogs
 	naming   bool
@@ -343,7 +344,6 @@ func paths(es []fileindex.Entry) []string {
 	return out
 }
 
-// browserView is the page of a root.
 // browserHeader is, in the toolbar, where the page is, and the search.
 func (a *app) browserHeader(c *ui.Context) {
 	b := a.br
@@ -375,6 +375,7 @@ func (a *app) browserHeader(c *ui.Context) {
 	b.typing = search.Focused()
 }
 
+// browserView is the page of a root: its commands, and its files.
 func (a *app) browserView(c *ui.Context) {
 	b := a.br
 	t := c.Theme()
@@ -382,69 +383,64 @@ func (a *app) browserView(c *ui.Context) {
 
 	// Not while typing the search, in the toolbar, built before.
 	typing := b.typing
-	// The actions.
 	es := b.chosen()
 	if b.loading || b.operating {
 		es = nil
 	}
 	n := len(es)
 	// Delete asks to move the files chosen to the trash, Shift+Delete to
-	// delete them for good; not while typing the search, where Delete
-	// deletes text. (Dialogs over the page take the keys themselves.)
-	if n > 0 && writable && !typing && b.toDelete == nil {
-		if c.Shortcut(ui.Shift, ui.KeyDelete) {
+	// delete them for good, F2 renames, Escape lets go of them; not while
+	// typing the search. (Dialogs over the page take the keys themselves.)
+	if !typing && b.toDelete == nil {
+		switch {
+		case n > 0 && writable && c.Shortcut(ui.Shift, ui.KeyDelete):
 			a.askDelete(es, true)
-		} else if c.Shortcut(0, ui.KeyDelete) {
+		case n > 0 && writable && c.Shortcut(0, ui.KeyDelete):
 			a.askDelete(es, false)
+		case n == 1 && writable && c.Shortcut(0, ui.KeyF2):
+			a.startRename(es[0])
+		case n > 0 && c.Shortcut(0, ui.KeyEscape):
+			b.sel.Clear()
 		}
 	}
-	ui.Row(c).Gap(6).Wrap().AlignItems(ui.Center).Children(func() {
-		up := ui.MenuButton(c.Key("upload"), "上传", func(m *ui.Menu) {
+	if c.Shortcut(0, ui.KeyF5) {
+		a.refresh()
+	}
+	commandBar(c, n, filesSize(es), func() { b.sel.Clear() }, func() {
+		toolButton(c, "new-folder", iconNewDir, "新建文件夹", "", !writable || b.results, func() {
+			b.naming, b.newName = true, ""
+		})
+		up := toolButton(c, "upload", iconUpload, "上传", "上传文件或文件夹；也可以把它们拖进窗口", !writable || b.results, func() {})
+		up.Menu(func(m *ui.Menu) {
 			if m.Item("上传文件…").Chosen() {
 				a.pickUpload(false)
 			}
 			if m.Item("上传文件夹…").Chosen() {
 				a.pickUpload(true)
 			}
-		}).Disabled(!writable || b.results)
-		if writable {
-			up.Tooltip("也可以把文件、文件夹拖进窗口")
+		})
+		if b.root.ReadOnly {
+			ui.Badge(c, "只读")
 		}
-		if ui.Button(c, "新建文件夹").Disabled(!writable || b.results).Clicked() {
-			b.naming, b.newName = true, ""
+	}, func() {
+		toolButton(c, "download", iconSave, "下载…", "下载到本机", false, func() { a.download(es) })
+		toolButton(c, "copy-to", iconCopy, "复制到…", "复制到这台服务器的其他位置", false, func() { a.transferTo(false, es) })
+		toolButton(c, "move-to", iconMove, "移动到…", "", !writable, func() { a.transferTo(true, es) })
+		if n == 1 {
+			toolButton(c, "rename", iconRename, "重命名", "重命名（F2）", !writable, func() { a.startRename(es[0]) })
 		}
-		ui.Divider(c).Height(20).Width(1)
-		if ui.Button(c, "下载…").Disabled(n == 0).Clicked() {
-			a.download(es)
-		}
-		if ui.Button(c, "复制到…").Disabled(n == 0).Clicked() {
-			a.transferTo(false, es)
-		}
-		if ui.Button(c, "移动到…").Disabled(n == 0 || !writable).Clicked() {
-			a.transferTo(true, es)
-		}
-		if ui.Button(c, "重命名").Disabled(n != 1 || !writable).Clicked() {
-			a.startRename(es[0])
-		}
-		if ui.Button(c, "删除").Disabled(n == 0 || !writable).Tooltip("移到回收站，或彻底删除（Shift+Delete）").Clicked() {
-			a.askDelete(es, false)
-		}
-		ui.Spacer(c)
-		live := ui.Switch(c.Key("live"), &b.live).Label("实时").Tooltip("开启后直接读取 NAS 硬盘上的当前内容；关闭时只读索引，不唤醒休眠的硬盘")
-		if live.Changed() {
-			a.refresh()
-		}
-		ui.Text(c, "实时").FontSize(12).TextColor(t.TextMuted)
-		view := 0
-		if b.grid {
-			view = 1
-		}
-		if ui.Segmented(c, &view, "列表", "网格").Label("视图").Changed() {
-			b.grid = view == 1
-		}
-		if ui.Button(c, "刷新").Clicked() {
-			a.refresh()
-		}
+		toolButton(c, "delete", iconTrash, "删除", "移到回收站（Delete），或彻底删除（Shift+Delete）", !writable, func() { a.askDelete(es, false) })
+	}, func() {
+		viewToggle(c, "view-toggle", &b.grid)
+		moreMenu(c, "more", func(m *ui.Menu) {
+			if m.Item("实时读取硬盘").Checked(b.live).Chosen() {
+				b.live = !b.live
+				a.refresh()
+			}
+			if m.Item("刷新").Shortcut(0, ui.KeyF5).Chosen() {
+				a.refresh()
+			}
+		})
 	})
 
 	if b.err != "" {
@@ -452,15 +448,37 @@ func (a *app) browserView(c *ui.Context) {
 	}
 
 	// The files, which take files dropped on them.
-	zone := ui.Column(c).Grow(1).MinHeight(0).Radius(t.Radius*2).Border(1, t.Border).Clip().Children(func() {
-		switch {
-		case b.loading && len(b.items) == 0:
-			ui.Column(c).Grow(1).Center().Children(func() { ui.Spinner(c).FontSize(22).Label("正在读取") })
-		case b.grid:
-			a.gridView(c)
-		default:
-			a.tableView(c)
-		}
+	zone := a.fileList(c, &fileView{
+		key: "files", label: "文件", items: b.items, sel: &b.sel, cursor: &b.cursor,
+		list: &b.list, gridSt: &b.gridState, grid: b.grid, sort: &b.sort,
+		loading: b.loading, results: b.results,
+		where: func(e fileindex.Entry) string { return path.Join(b.root.Name, e.Parent) },
+		thumb: a.thumb,
+		open:  a.openEntry,
+		resort: func() {
+			if b.results {
+				a.search(b.query) // sorted by the server, from the first page
+			} else {
+				sortEntries(&b.sort, b.items, &b.cursor)
+			}
+		},
+		// Scrolled near the end of the results loaded, the next page loads.
+		visible: func(_, last int) {
+			if b.results && last >= len(b.items)-40 {
+				a.loadMore()
+			}
+		},
+		gridLast: &b.gridLast,
+		empty: func() {
+			switch {
+			case b.results:
+				emptyState(c, iconSearch, "没有找到", "换个关键词，或者到上一级文件夹里搜索。", nil)
+			case b.root.ReadOnly:
+				emptyFolder(c, "")
+			default:
+				emptyFolder(c, "可以把文件拖到这里上传")
+			}
+		},
 	})
 	if writable && !b.results {
 		if files := zone.DroppedFiles(); files != nil {
@@ -568,62 +586,6 @@ func (a *app) entryMenu(m *ui.Menu, es []fileindex.Entry, writable bool) {
 	}
 }
 
-func (a *app) tableView(c *ui.Context) {
-	b := a.br
-	t := c.Theme()
-	if b.sort.stale() {
-		if b.results {
-			a.search(b.query) // sorted by the server, from the first page
-		} else {
-			sortEntries(&b.sort, b.items, &b.cursor)
-		}
-	}
-	cols := fileColumns()
-	if b.results {
-		cols = append(cols, ui.TableColumn{Title: colWhere, Width: 220, Sortable: true})
-	}
-	table := ui.Table(c.Key("files"), &b.list, cols, len(b.items), func(row, col int) {
-		e := b.items[row]
-		muted := t.TextMuted
-		if b.sel.Has(e.Path) {
-			muted = t.AccentText.Alpha(0.85)
-		}
-		switch col {
-		case 0:
-			ui.Row(c).Gap(8).AlignItems(ui.Center).Children(func() {
-				fileIcon(c, e, 16)
-				ui.Text(c, e.Name).SingleLine().Grow(1).Shrink(1)
-			})
-		case 1:
-			if !e.IsDir {
-				ui.Text(c, formatBytes(e.Size)).FontFeatures("tnum").TextColor(muted)
-			}
-		case 2:
-			ui.Text(c, e.ModTime().Format("2006-01-02 15:04")).FontFeatures("tnum").TextColor(muted)
-		case 3:
-			ui.Text(c, path.Join(b.root.Name, e.Parent)).SingleLine().TextColor(muted)
-		}
-	}).Grow(1).Label("文件")
-	table.Children(func() {
-		if !b.loading && len(b.items) == 0 {
-			msg := "空文件夹"
-			if b.results {
-				msg = "没有找到"
-			} else if !b.root.ReadOnly {
-				msg = "空文件夹，可以把文件拖到这里上传"
-			}
-			ui.Text(c, msg).TextColor(t.TextMuted).Padding(16)
-		}
-	})
-	if table.Submitted() && b.cursor >= 0 && b.cursor < len(b.items) {
-		a.openEntry(b.items[b.cursor])
-	}
-	// Scrolled near the end of the results loaded, the next page loads.
-	if _, last := b.list.Visible(); b.results && last >= len(b.items)-40 {
-		a.loadMore()
-	}
-}
-
 // fileColumns are the columns of a table of files, each sorting it.
 func fileColumns() []ui.TableColumn {
 	return []ui.TableColumn{
@@ -631,30 +593,6 @@ func fileColumns() []ui.TableColumn {
 		{Title: colSize, Width: 90, Align: ui.End, Sortable: true},
 		{Title: colTime, Width: 140, Sortable: true},
 	}
-}
-
-func (a *app) gridView(c *ui.Context) {
-	b := a.br
-	t := c.Theme()
-	grid := ui.GridView(c.Key("grid"), &b.gridState, len(b.items), 120, 132, func(i int) {
-		e := b.items[i]
-		ui.Column(c).Grow(1).Padding(6).Gap(4).AlignItems(ui.Center).Children(func() {
-			if bmp := a.thumb(e); bmp != nil {
-				ui.Image(c, bmp).Size(96, 84).Fit(ui.Contain).Radius(4)
-			} else {
-				ui.Column(c).Size(96, 84).Center().Children(func() { fileIcon(c, e, 48) })
-			}
-			ui.Text(c, e.Name).FontSize(12).MaxLines(2).TextAlign(ui.Center)
-		})
-	}).Grow(1).Padding(8).Label("文件")
-	if grid.Submitted() && b.cursor >= 0 && b.cursor < len(b.items) {
-		a.openEntry(b.items[b.cursor])
-	}
-	grid.Children(func() {
-		if !b.loading && len(b.items) == 0 {
-			ui.Text(c, "空文件夹").TextColor(t.TextMuted).Padding(16)
-		}
-	})
 }
 
 // thumbOf is a thumbnail, fetched once.
@@ -671,52 +609,18 @@ func (a *app) thumb(e fileindex.Entry) *ui.Bitmap {
 	if e.IsDir || !a.thumbExt(e.Ext) {
 		return nil
 	}
-	key := fmt.Sprintf("%s/%d/%s/%d/%d", a.br.server, e.Root, e.Path, e.MTime, e.Size)
-	a.thumbSeq++
-	if th := a.thumbs[key]; th != nil {
-		th.used = a.thumbSeq
-		return th.bmp
-	}
-	if len(a.thumbs) >= 256 {
-		oldest := ""
-		for k, v := range a.thumbs {
-			if oldest == "" || v.used < a.thumbs[oldest].used {
-				oldest = k
-			}
-		}
-		if old := a.thumbs[oldest]; old != nil && old.cancel != nil {
-			old.cancel()
-		}
-		delete(a.thumbs, oldest)
-	}
-	th := &thumbOf{loading: true, used: a.thumbSeq}
-	a.thumbs[key] = th
 	c, _ := a.brClient()
 	if c == nil {
 		return nil
 	}
-	ctx, cancel := context.WithTimeout(a.br.thumbCtx, requestTimeout)
-	th.cancel = cancel
-	go func() {
-		defer cancel()
-		select {
-		case a.thumbSlots <- struct{}{}:
-		case <-ctx.Done():
-			return
-		}
-		defer func() { <-a.thumbSlots }()
+	key := fmt.Sprintf("%s/%d/%s/%d/%d", a.br.server, e.Root, e.Path, e.MTime, e.Size)
+	return a.thumbCached(key, a.br.thumbCtx, func(ctx context.Context) (*ui.Bitmap, error) {
 		data, err := c.Thumb(ctx, e.Root, e.Path)
-		var bmp *ui.Bitmap
-		if err == nil {
-			bmp, _ = ui.DecodeBitmap(data)
+		if err != nil {
+			return nil, err
 		}
-		a.post(func() {
-			if !a.closed {
-				th.bmp, th.loading = bmp, false
-			}
-		})
-	}()
-	return nil
+		return ui.DecodeBitmap(data)
+	})
 }
 
 func (a *app) thumbExt(ext string) bool {

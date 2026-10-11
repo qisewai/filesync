@@ -386,6 +386,7 @@ func (a *app) localSearchField(c *ui.Context) {
 	}
 	// Each reports once.
 	changed, submitted, escape := in.Changed(), in.Submitted(), in.Shortcut(0, ui.KeyEscape)
+	b.searching = in.Focused()
 	empty := strings.TrimSpace(b.query) == ""
 	switch {
 	case escape && b.query != "", changed && empty:
@@ -400,7 +401,6 @@ func (a *app) localSearchField(c *ui.Context) {
 // localFilters narrow the results: where, of which type, which extensions.
 func (a *app) localFilters(c *ui.Context) {
 	b := a.local
-	ui.Divider(c).Height(20).Width(1)
 	scope := max(slices.Index(localScopes, b.scope), 0)
 	if ui.Segmented(c.Key("local-scope"), &scope, "全部索引", "当前目录").Label("本机搜索范围").Tooltip("当前目录：" + b.dir).Changed() {
 		b.scope = localScopes[scope]

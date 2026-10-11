@@ -32,10 +32,17 @@ type localBrowser struct {
 	query, scope, category, extensions string
 	results, queryPending, more        bool
 	awaitTop                           bool // wait for the new result's scroll request to commit
+	searching                          bool // the search has the keyboard focus
 	total                              int
 	matched                            *localindex.Results
 	searchCancel                       context.CancelFunc
 	debounce                           *time.Timer
+
+	grid        bool
+	gridSt      ui.GridState
+	gridLast    int // the last item the grid built
+	thumbCtx    context.Context
+	thumbCancel context.CancelFunc
 
 	sel    ui.Selection[string] // by path
 	cursor int
@@ -172,8 +179,15 @@ func (a *app) openLocal(dir string, choose ...string) {
 		b.sort.by = ui.SortOrder{Column: colName}
 		b.list.Sort = &b.sort.by
 		b.scope, b.category = "全部索引", "全部类型"
+		b.gridSt.Key = b.list.Key
+		b.gridSt.Selection = &b.sel
+		b.gridSt.Selected = &b.cursor
 	}
 	b := a.local
+	if b.thumbCancel != nil {
+		b.thumbCancel()
+	}
+	b.thumbCtx, b.thumbCancel = context.WithCancel(context.Background())
 	a.ensureLocalIndex()
 	a.cancelLocalSearch()
 	b.results, b.query, b.matched = false, "", nil
@@ -288,54 +302,70 @@ func (a *app) localHeader(c *ui.Context) {
 	a.localSearchField(c)
 }
 
-// localView is the page of a local directory.
+// localView is the page of a local directory, or of what the search of
+// this computer found: its commands, and its files.
 func (a *app) localView(c *ui.Context) {
 	b := a.local
 	t := c.Theme()
+	busy := b.loading || b.queryPending
 	es := b.chosen()
-	if b.loading || b.queryPending {
+	if busy {
 		es = nil
 	}
 	n := len(es)
-	ui.Row(c).Gap(6).Wrap().AlignItems(ui.Center).Children(func() {
-		backup := ui.PrimaryButton(c, "创建备份任务…").Disabled(b.loading || b.queryPending || b.err != "" || b.results && n == 0)
-		if n == 0 {
-			backup.Tooltip("备份当前文件夹；也可以先选中要备份的文件夹或文件")
-		}
-		if backup.Clicked() {
-			a.backupLocalSelection(es)
-		}
-		reveal := "在文件管理器中显示"
-		if b.results {
-			reveal = "在文件管理器中显示选中的项"
-		}
-		iconButton(c, "reveal-local", iconOpenOut, "在文件管理器中显示", reveal, b.results && n != 1 || b.loading || b.queryPending, func() {
-			if b.results {
-				a.openIndexedLocal(es[0], true, false)
-			} else {
-				a.openPath(b.dir)
-			}
-		})
+	if n > 0 && !b.searching && c.Shortcut(0, ui.KeyEscape) {
+		b.sel.Clear()
+	}
+	if c.Shortcut(0, ui.KeyF5) {
+		a.refreshLocal()
+	}
+	commandBar(c, n, filesSize(es), func() { b.sel.Clear() }, func() {
 		if b.results {
 			a.localFilters(c)
+			return
 		}
-		ui.Spacer(c)
-		if ui.Switch(c.Key("hidden"), &b.hidden).Label("显示隐藏文件").Tooltip("显示隐藏文件").Changed() {
+		backup := ui.PrimaryButton(c, "创建备份任务…").Disabled(busy || b.err != "").Tooltip("备份当前文件夹；也可以先选中要备份的文件夹或文件")
+		if backup.Clicked() {
+			a.backupLocalSelection(nil)
+		}
+		iconButton(c, "reveal-local", iconOpenOut, "在文件管理器中显示", "在系统文件管理器中打开这个文件夹", busy, func() { a.openPath(b.dir) })
+	}, func() {
+		toolButton(c, "backup-chosen", iconBackup, "创建备份任务…", "把选中的项备份到 NAS", false, func() { a.backupLocalSelection(es) })
+		if n == 1 {
 			if b.results {
-				a.queueLocalSearch(0)
-			} else {
-				a.invalidateLocalTree()
-				a.openLocal(b.dir)
+				toolButton(c, "open-folder", iconFolder, "打开所在目录", "", false, func() { a.openIndexedLocal(es[0], false, true) })
 			}
+			toolButton(c, "reveal-chosen", iconOpenOut, "在文件管理器中显示", "在系统文件管理器中打开所在的文件夹", false, func() {
+				if b.results {
+					a.openIndexedLocal(es[0], true, false)
+				} else {
+					a.openPath(b.dir)
+				}
+			})
 		}
-		if !b.results { // the filters take its room
-			ui.Text(c, "隐藏文件").FontSize(12).TextColor(t.TextMuted)
-		}
-		iconButton(c, "refresh-local", iconRetry, "刷新", "刷新", false, func() {
-			if b.results {
-				a.queueLocalSearch(0)
-			} else {
-				a.openLocal(b.dir)
+	}, func() {
+		viewToggle(c, "local-view-toggle", &b.grid)
+		moreMenu(c, "local-more", func(m *ui.Menu) {
+			if m.Item("显示隐藏文件").Checked(b.hidden).Chosen() {
+				b.hidden = !b.hidden
+				if b.results {
+					a.queueLocalSearch(0)
+				} else {
+					a.invalidateLocalTree()
+					a.openLocal(b.dir)
+				}
+			}
+			if m.Item("刷新").Shortcut(0, ui.KeyF5).Chosen() {
+				a.refreshLocal()
+			}
+			if idx := a.localIdx; idx != nil {
+				m.Separator()
+				if m.Item("更新本机索引").Disabled(idx.running || idx.loading).Chosen() {
+					a.startLocalScan()
+				}
+				if m.Item("本机索引范围…").Disabled(idx.running || idx.loading).Chosen() {
+					a.editLocalIndex()
+				}
 			}
 		})
 	})
@@ -345,79 +375,55 @@ func (a *app) localView(c *ui.Context) {
 	if m := a.localIdx; m != nil && m.err != "" {
 		closableNotice(c, t.Danger, m.err, func() { m.err = "" })
 	}
-	zone := ui.Column(c).Grow(1).MinHeight(0).Radius(t.Radius*2).Border(1, t.Border).Clip().Children(func() {
-		if b.loading && len(b.items) == 0 {
-			ui.Column(c).Grow(1).Center().Children(func() { ui.Spinner(c).FontSize(22).Label("正在读取") })
-			return
+	open := func(e fileindex.Entry) {
+		switch {
+		case busy:
+		case b.results:
+			a.openIndexedLocal(e, false, false)
+		default:
+			a.openLocalEntry(e)
 		}
-		if b.sort.stale() {
+	}
+	zone := a.fileList(c, &fileView{
+		key: "local-files", label: "本机文件", items: b.items, sel: &b.sel, cursor: &b.cursor,
+		list: &b.list, gridSt: &b.gridSt, grid: b.grid, sort: &b.sort,
+		loading: b.loading, results: b.results,
+		where: func(e fileindex.Entry) string { return homeTilde(e.Parent) },
+		thumb: a.localThumb,
+		open:  open,
+		resort: func() {
 			if b.results {
 				a.queueLocalSearch(0)
 			} else {
 				sortEntries(&b.sort, b.items, &b.cursor)
 			}
-		}
-		cols := fileColumns()
-		if b.results {
-			cols = append(cols, ui.TableColumn{Title: colWhere, Width: 220, Sortable: true})
-		}
-		table := ui.Table(c.Key("local-files"), &b.list, cols, len(b.items), func(row, col int) {
-			e := b.items[row]
-			muted := t.TextMuted
-			if b.sel.Has(e.Path) {
-				muted = t.AccentText.Alpha(0.85)
+		},
+		visible: func(first, last int) {
+			if b.awaitTop && (first == 0 || last < 0) {
+				b.awaitTop = false
 			}
-			switch col {
-			case 0:
-				ui.Row(c).Gap(8).AlignItems(ui.Center).Children(func() {
-					fileIcon(c, e, 16)
-					ui.Text(c, e.Name).SingleLine().Grow(1).Shrink(1)
-				})
-			case 1:
-				if !e.IsDir {
-					ui.Text(c, formatBytes(e.Size)).FontFeatures("tnum").TextColor(muted)
-				}
-			case 2:
-				ui.Text(c, e.ModTime().Format("2006-01-02 15:04")).FontFeatures("tnum").TextColor(muted)
-			case 3:
-				ui.Text(c, homeTilde(e.Parent)).SingleLine().Tooltip(e.Parent).TextColor(muted)
+			if b.results && !b.awaitTop && last >= len(b.items)-40 {
+				a.loadMoreLocal()
 			}
-		}).Grow(1).Label("本机文件")
-		table.Children(func() {
+		},
+		gridLast: &b.gridLast,
+		empty: func() {
 			switch {
-			case b.loading || b.queryPending || b.err != "" || len(b.items) > 0:
+			case busy || b.err != "":
 			case b.results:
 				a.localSearchEmpty(c)
 			default:
-				ui.Text(c, "空文件夹").TextColor(t.TextMuted).Padding(16)
+				emptyFolder(c, "")
 			}
-		})
-		if table.Submitted() && !b.loading && !b.queryPending && b.cursor >= 0 && b.cursor < len(b.items) {
-			if b.results {
-				a.openIndexedLocal(b.items[b.cursor], false, false)
-			} else {
-				a.openLocalEntry(b.items[b.cursor])
-			}
-		}
-		first, last := b.list.Visible()
-		if b.awaitTop && (first == 0 || last < 0) {
-			b.awaitTop = false
-		}
-		if b.results && !b.awaitTop && last >= len(b.items)-40 {
-			a.loadMoreLocal()
-		}
+		},
 	})
 	zone.ContextMenu(func(m *ui.Menu) {
 		es := b.chosen()
-		if b.loading || b.queryPending {
+		if busy {
 			es = nil
 		}
 		if len(es) == 1 && m.Item("打开").Chosen() {
-			if b.results {
-				a.openIndexedLocal(es[0], false, false)
-			} else {
-				a.openLocalEntry(es[0])
-			}
+			open(es[0])
 		}
 		if b.results && len(es) == 1 && m.Item("打开所在目录").Chosen() {
 			a.openIndexedLocal(es[0], false, true)
@@ -430,6 +436,15 @@ func (a *app) localView(c *ui.Context) {
 			a.backupLocalSelection(es)
 		}
 	})
+}
+
+// refreshLocal reads the directory shown again, or searches again.
+func (a *app) refreshLocal() {
+	if b := a.local; b.results {
+		a.queueLocalSearch(0)
+	} else {
+		a.openLocal(b.dir)
+	}
 }
 
 // localStatus is, in the status bar, what the page shows and has chosen.
