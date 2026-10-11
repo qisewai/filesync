@@ -3,9 +3,31 @@ package config
 import (
 	"os"
 	"path/filepath"
+	"reflect"
 	"testing"
 	"time"
 )
+
+func TestLocalIndexSettingsRoundTrip(t *testing.T) {
+	dir := t.TempDir()
+	s := &Store{Dir: dir, LocalIndex: &LocalIndexSettings{Roots: []string{dir, "/home/example/文档"}, Excludes: []string{".cache/", "*.tmp"}}}
+	if err := s.Save(); err != nil {
+		t.Fatal(err)
+	}
+	again, err := Load(dir)
+	if err != nil || !reflect.DeepEqual(again.LocalIndex, s.LocalIndex) {
+		t.Fatalf("settings %+v, %v", again, err)
+	}
+	// An explicitly empty scope is different from missing settings (defaults).
+	s.LocalIndex = &LocalIndexSettings{}
+	if err := s.Save(); err != nil {
+		t.Fatal(err)
+	}
+	again, err = Load(dir)
+	if err != nil || again.LocalIndex == nil || len(again.LocalIndex.Roots) != 0 {
+		t.Fatalf("empty %+v, %v", again, err)
+	}
+}
 
 // The logins of version 0.1 become servers, and its tasks to local
 // directories go.

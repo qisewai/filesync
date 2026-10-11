@@ -46,6 +46,8 @@ var (
 	iconActual  = icon(`<rect x="3" y="5" width="18" height="14" rx="2"/><path d="M8 10v4"/><path d="M16 10v4"/><path d="M12 10.5h.01"/><path d="M12 13.5h.01"/>`)
 	iconOpenOut = icon(`<path d="M14 4h6v6"/><path d="m20 4-9 9"/><path d="M18 14v4a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h4"/>`)
 	iconSave    = icon(`<path d="M12 4v11"/><path d="m7 10 5 5 5-5"/><path d="M5 20h14"/>`)
+	iconUp      = icon(`<path d="M12 19V5"/><path d="m5 12 7-7 7 7"/>`)
+	iconSearch  = icon(`<circle cx="11" cy="11" r="7"/><path d="m20 20-4-4"/>`)
 	iconLink    = icon(`<path d="M9 15l6-6"/><path d="M10 6l1-1a4 4 0 0 1 6 6l-1 1"/><path d="M14 18l-1 1a4 4 0 0 1-6-6l1-1"/>`)
 )
 
@@ -97,6 +99,15 @@ func fileIcon(c *ui.Context, e fileindex.Entry, size float32) ui.Element {
 		svg, color = iconCode, ui.Hex("#1f9aa8")
 	}
 	return ui.Icon(c, svg).FontSize(size).TextColor(color)
+}
+
+// iconButton is a square button showing an icon, named label, its tip
+// tip.
+func iconButton(c *ui.Context, key string, svg *ui.SVG, label, tip string, disabled bool, click func()) {
+	t := c.Theme()
+	ui.Button(c.Key(key), "").Padding(t.Space(1.5)).Label(label).Tooltip(tip).Disabled(disabled).OnClick(click).Children(func() {
+		ui.Icon(c, svg).FontSize(16)
+	})
 }
 
 // labeled builds an icon then a label, in a row of what holds them.

@@ -74,14 +74,17 @@ type app struct {
 	serverErr map[string]error
 	tree      map[string]*directoryNode
 
-	br         *browser // the root shown
-	local      *localBrowser
-	localRoots []localRoot
-	netMounts  []string // where network shares are mounted
-	preview    *preview
-	proxy      *fileindex.LocalProxy
-	recycle    *recycleBrowser
-	admin      *adminPage
+	br             *browser // the root shown
+	local          *localBrowser
+	localIdx       *localIndexState
+	localCachePath string // supplied by main; tests use a private temporary cache
+	localBackups   [][]fileindex.Entry
+	localRoots     []localRoot
+	netMounts      []string // where network shares are mounted
+	preview        *preview
+	proxy          *fileindex.LocalProxy
+	recycle        *recycleBrowser
+	admin          *adminPage
 
 	transfers     []*transfer
 	transferSeq   int
@@ -252,6 +255,7 @@ var modeHelp = map[engine.Mode]string{
 // newTaskFrom starts a task backing up the entries es of the local
 // directory dir, or dir itself without any.
 func (a *app) newTaskFrom(dir string, es []fileindex.Entry) {
+	a.localBackups = nil
 	source, withDir := dir, true
 	var items []string
 	switch {
@@ -293,6 +297,7 @@ func (a *app) newTaskFrom(dir string, es []fileindex.Entry) {
 }
 
 func (a *app) startEditing(task *config.Task) {
+	a.localBackups = nil
 	a.editing = true
 	a.errorMsg = ""
 	a.draft = draft{
@@ -320,6 +325,9 @@ func (a *app) taskDialog(c *ui.Context) {
 		if d.id != "" {
 			title = "编辑备份任务"
 		}
+		if len(a.localBackups) > 0 {
+			title += fmt.Sprintf("（另有 %d 个目录待设置）", len(a.localBackups))
+		}
 		ui.Text(c, title).FontSize(18).Bold()
 		if a.errorMsg != "" {
 			notice(c, t.Danger, a.errorMsg)
@@ -333,6 +341,7 @@ func (a *app) taskDialog(c *ui.Context) {
 			ui.Spacer(c)
 			if ui.Button(c, "取消").Clicked() {
 				a.editing = false
+				a.localBackups = nil
 				a.errorMsg = ""
 			}
 			if ui.PrimaryButton(c, "保存").Clicked() {
@@ -343,6 +352,7 @@ func (a *app) taskDialog(c *ui.Context) {
 	// Escape or a click beside the dialog cancels it.
 	if !open {
 		a.editing = false
+		a.localBackups = nil
 		a.errorMsg = ""
 	}
 }
@@ -350,7 +360,7 @@ func (a *app) taskDialog(c *ui.Context) {
 func (a *app) editorFields(c *ui.Context, d *draft) {
 	t := c.Theme()
 	ui.Field(c, "名称", func() {
-		ui.TextInput(c.Key("name"), &d.name).AutoFocus()
+		ui.TextInput(c.Key("name"), &d.name).Label("备份任务名称").AutoFocus()
 	}).Error(d.nameErr)
 	ui.Field(c, "备份内容", func() {
 		ui.Row(c).Gap(8).AlignItems(ui.Center).Children(func() {
@@ -504,6 +514,9 @@ func (a *app) saveDraft() {
 	a.editing = false
 	a.errorMsg = ""
 	a.save()
+	if a.errorMsg == "" {
+		a.nextLocalBackup()
+	}
 }
 
 func (a *app) removeTask() {
@@ -559,6 +572,12 @@ func (a *app) stopBackground() {
 		a.save()
 	}
 	a.closed = true
+	if a.localIdx != nil && a.localIdx.cancel != nil {
+		a.localIdx.cancel()
+	}
+	if a.local != nil {
+		a.cancelLocalSearch()
+	}
 	if a.admin != nil {
 		a.admin.stop()
 	}

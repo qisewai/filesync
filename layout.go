@@ -76,6 +76,7 @@ func (a *app) view(c *ui.Context) {
 	a.filePreviewView(c)
 	a.taskDialog(c)
 	a.nasView(c)
+	a.localIndexDialog(c)
 	if a.confirmRemove {
 		if task := a.task(); task != nil {
 			if ui.AlertDialog(c, &a.confirmRemove, fmt.Sprintf("删除任务“%s”？", task.Name),

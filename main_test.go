@@ -48,7 +48,7 @@ func (h *harness) settle() {
 		case <-deadline:
 			h.t.Fatal("the work did not finish")
 		default:
-			if !h.a.busy() && (h.a.local == nil || !h.a.local.loading) && h.a.nas.busy == "" && !h.probing() && len(h.a.rootsLoading) == 0 && !h.treeLoading() && (h.a.br == nil || !h.a.br.loading && !h.a.br.operating && !h.a.br.more) && (h.a.preview == nil || !h.a.preview.loading) && (h.a.recycle == nil || !h.a.recycle.loading && !h.a.recycle.operating) && (h.a.admin == nil || !h.a.admin.loading && !h.a.admin.busy && !h.a.admin.historyLoading && (h.a.admin.draft == nil || h.a.admin.draft.picker == nil || !h.a.admin.draft.picker.loading)) && len(h.queue) == 0 {
+			if !h.a.busy() && (h.a.local == nil || !h.a.local.loading && !h.a.local.queryPending && !h.a.local.more && !h.a.local.opening) && (h.a.localIdx == nil || !h.a.localIdx.running && !h.a.localIdx.loading && !h.a.localIdx.saving && (h.a.localIdx.draft == nil || !h.a.localIdx.draft.picking)) && h.a.nas.busy == "" && !h.probing() && len(h.a.rootsLoading) == 0 && !h.treeLoading() && (h.a.br == nil || !h.a.br.loading && !h.a.br.operating && !h.a.br.more) && (h.a.preview == nil || !h.a.preview.loading) && (h.a.recycle == nil || !h.a.recycle.loading && !h.a.recycle.operating) && (h.a.admin == nil || !h.a.admin.loading && !h.a.admin.busy && !h.a.admin.historyLoading && (h.a.admin.draft == nil || h.a.admin.draft.picker == nil || !h.a.admin.draft.picker.loading)) && len(h.queue) == 0 {
 				h.tt.Frame()
 				return
 			}
@@ -399,7 +399,7 @@ func TestArchiveMode(t *testing.T) {
 func TestEditorValidates(t *testing.T) {
 	h := newHarness(t, &config.Store{Dir: t.TempDir()})
 	h.newTask(t.TempDir())
-	h.click("名称")
+	h.click("备份任务名称")
 	h.tt.Key(ui.Ctrl, ui.KeyA)
 	h.tt.Key(0, ui.KeyBackspace)
 	h.click("保存")

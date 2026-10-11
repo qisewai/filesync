@@ -186,6 +186,13 @@ type Store struct {
 	// QuitOnClose quits as the window closes, rather than keeping the app
 	// in the tray.
 	QuitOnClose bool
+	LocalIndex  *LocalIndexSettings
+}
+
+// LocalIndexSettings persists scan scopes, not search data. Scans are manual.
+type LocalIndexSettings struct {
+	Roots    []string `json:"roots"`
+	Excludes []string `json:"excludes"`
 }
 
 // DefaultDir is where the app keeps its settings: ~/.config/filesync on
@@ -208,9 +215,10 @@ type fileData struct {
 	Tasks   []*Task   `json:"tasks"`
 	// Sessions are the logins of version 0.1, by address, which become
 	// servers.
-	Sessions     map[string]string `json:"sessions,omitempty"`
-	SidebarWidth float32           `json:"sidebarWidth,omitempty"`
-	QuitOnClose  bool              `json:"quitOnClose,omitempty"`
+	Sessions     map[string]string   `json:"sessions,omitempty"`
+	SidebarWidth float32             `json:"sidebarWidth,omitempty"`
+	QuitOnClose  bool                `json:"quitOnClose,omitempty"`
+	LocalIndex   *LocalIndexSettings `json:"localIndex,omitempty"`
 }
 
 // Load reads the store in dir; a directory without it has nothing.
@@ -229,6 +237,7 @@ func Load(dir string) (*Store, error) {
 	}
 	s.Servers = data.Servers
 	s.SidebarWidth, s.QuitOnClose = data.SidebarWidth, data.QuitOnClose
+	s.LocalIndex = data.LocalIndex
 	addrs := make([]string, 0, len(data.Sessions))
 	for addr := range data.Sessions {
 		addrs = append(addrs, addr)
@@ -255,7 +264,7 @@ func (s *Store) Save() error {
 	if err := os.MkdirAll(s.Dir, 0o755); err != nil {
 		return err
 	}
-	data := fileData{Servers: s.Servers, Tasks: s.Tasks, SidebarWidth: s.SidebarWidth, QuitOnClose: s.QuitOnClose}
+	data := fileData{Servers: s.Servers, Tasks: s.Tasks, SidebarWidth: s.SidebarWidth, QuitOnClose: s.QuitOnClose, LocalIndex: s.LocalIndex}
 	if data.Servers == nil {
 		data.Servers = []*Server{}
 	}

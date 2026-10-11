@@ -11,6 +11,7 @@ import (
 	"strings"
 
 	"filesync/config"
+	"filesync/localindex"
 
 	"github.com/egoist/mygo"
 	"github.com/egoist/mygo/ui"
@@ -53,6 +54,10 @@ func main() {
 		log.Fatalf("无法读取设置 %s: %v", dir, err)
 	}
 	a := newApp(store)
+	a.localCachePath, err = localindex.DefaultSnapshotPath()
+	if err != nil {
+		a.errorMsg = "无法确定本机索引快照位置：" + err.Error()
+	}
 	a.plainText = x11TextScale()
 
 	mygo.App.WhenReady(func() {
@@ -74,6 +79,7 @@ func main() {
 				a.syncTray()
 			})
 		}
+		a.ensureLocalIndex() // load only the persisted snapshot, never scan at startup
 		a.pickDir = func(title, start string) (string, error) {
 			paths, err := mygo.Dialog.Open(mygo.OpenDialogOptions{
 				Parent:      win,
