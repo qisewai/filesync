@@ -24,9 +24,14 @@ func (a *app) statsView(c *ui.Context, m *adminPage) {
 	ui.Scroll(c).Grow(1).MinHeight(0).Children(func() {
 		ui.Column(c).Gap(14).Padding(0, 8, 4, 0).Children(func() {
 			a.statsSummary(c, ov)
-			ui.Row(c).Gap(14).Wrap().AlignItems(ui.Start).Children(func() {
+			// Rows of cards as high as the higher: the chart grows to the
+			// folders beside it.
+			ui.Row(c).Gap(14).Wrap().AlignItems(ui.Stretch).Children(func() {
 				statsCard(c, "文件夹占用", 3, func() { a.statsFolders(c, m, ov) })
-				statsCard(c, "文件类型", 2, func() {
+				statsCard(c, "按修改年份", 2, func() { yearChart(c, ov.Years) })
+			})
+			ui.Row(c).Gap(14).Wrap().AlignItems(ui.Stretch).Children(func() {
+				statsCard(c, "文件类型", 3, func() {
 					for _, b := range ov.Categories {
 						usageRow(c, "", nil, categoryColor(b.Key), categoryLabel(b.Key), b.Size, ov.Size, b.Count, nil)
 					}
@@ -34,9 +39,7 @@ func (a *app) statsView(c *ui.Context, m *adminPage) {
 						statsEmpty(c)
 					}
 				})
-			})
-			ui.Row(c).Gap(14).Wrap().AlignItems(ui.Start).Children(func() {
-				statsCard(c, "扩展名 Top 15", 3, func() {
+				statsCard(c, "扩展名 Top 15", 2, func() {
 					exts := append([]fileindex.Bucket(nil), ov.Exts...)
 					sort.SliceStable(exts, func(i, j int) bool { return exts[i].Size > exts[j].Size })
 					for _, b := range exts {
@@ -50,7 +53,6 @@ func (a *app) statsView(c *ui.Context, m *adminPage) {
 						statsEmpty(c)
 					}
 				})
-				statsCard(c, "按修改年份", 2, func() { yearChart(c, ov.Years) })
 			})
 			a.largestCard(c, m)
 		})
@@ -268,25 +270,28 @@ func yearChart(c *ui.Context, years []fileindex.Bucket) {
 	for _, y := range ys {
 		top = max(top, y.Size)
 	}
-	const plot = 150
 	// Narrow columns show some of the years, and their sizes on hover.
 	every := (len(ys) + 6) / 7
 	sizes := len(ys) <= 6
-	ui.Row(c).Gap(6).AlignItems(ui.End).Height(plot+44).Padding(8, 0, 0, 0).Children(func() {
+	// The columns grow with the card, as high as the cards beside it.
+	ui.Row(c).Gap(6).AlignItems(ui.Stretch).MinHeight(170).Grow(1).Padding(8, 0, 0, 0).Children(func() {
 		for i, y := range ys {
-			h := float32(0)
+			frac := float32(0)
 			if top > 0 {
-				h = max(float32(float64(y.Size)/float64(top))*plot, 2)
+				frac = float32(float64(y.Size) / float64(top))
 			}
 			label := y.Key
 			if (len(ys)-1-i)%every != 0 {
 				label = " "
 			}
 			ui.Column(c).Grow(1).Basis(0).MinWidth(0).MaxWidth(56).Gap(4).AlignItems(ui.Center).Tooltip(fmt.Sprintf("%s 年：%s，%s 个文件", y.Key, formatBytes(y.Size), groupDigits(y.Count))).Children(func() {
-				if sizes {
-					ui.Text(c, formatBytes(y.Size)).FontSize(10).TextColor(t.TextMuted).SingleLine().FontFeatures("tnum")
-				}
-				ui.Column(c).Height(h).WidthPercent(100).MaxWidth(36).Radius(4).Background(t.Accent.Alpha(0.85))
+				// The plot: the column at its foot, its size over it.
+				ui.Column(c).Grow(1).MinHeight(0).WidthPercent(100).Justify(ui.End).AlignItems(ui.Center).Gap(3).Children(func() {
+					if sizes {
+						ui.Text(c, formatBytes(y.Size)).FontSize(10).TextColor(t.TextMuted).SingleLine().FontFeatures("tnum")
+					}
+					ui.Column(c).HeightPercent(max(frac*86, 1)).MinHeight(2).WidthPercent(100).MaxWidth(36).Radius(4).Background(t.Accent.Alpha(0.85))
+				})
 				ui.Text(c, label).FontSize(11).FontFeatures("tnum")
 			})
 		}
@@ -327,6 +332,8 @@ func categoryColor(key string) ui.Color {
 		return ui.Hex("#3b7ddd")
 	case "archive":
 		return ui.Hex("#a8743a")
+	case "disk":
+		return ui.Hex("#475569")
 	case "code":
 		return ui.Hex("#1f9aa8")
 	}
@@ -354,6 +361,8 @@ func categoryLabel(key string) string {
 		return "文档"
 	case "archive":
 		return "压缩文件"
+	case "disk":
+		return "磁盘镜像"
 	case "code":
 		return "代码"
 	case "other":

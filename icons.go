@@ -49,15 +49,19 @@ func fileKind(e fileindex.Entry) string {
 	switch e.Ext {
 	case "jpg", "jpeg", "png", "gif", "bmp", "webp", "heic", "heif", "tif", "tiff", "svg", "raw", "cr2", "nef", "arw", "dng", "psd":
 		return "image"
-	case "mp4", "mkv", "avi", "mov", "wmv", "flv", "webm", "m4v", "ts", "m2ts", "rmvb", "rm", "3gp", "mpg", "mpeg", "vob", "iso":
+	case "mp4", "mkv", "avi", "mov", "wmv", "flv", "webm", "m4v", "m2ts", "rmvb", "rm", "3gp", "mpg", "mpeg", "vob":
 		return "video"
 	case "mp3", "flac", "wav", "aac", "m4a", "ogg", "wma", "ape", "opus":
 		return "audio"
 	case "zip", "rar", "7z", "tar", "gz", "tgz", "bz2", "xz", "zst":
 		return "archive"
+	// disk images: of virtual machines, Ghost and other backups, discs
+	case "vmdk", "vdi", "vhd", "vhdx", "avhd", "avhdx", "qcow", "qcow2", "qed", "hdd", "ova", "xva",
+		"gho", "ghs", "v2i", "tib", "tibx", "wim", "esd", "swm", "iso", "img", "dmg", "nrg", "mdf":
+		return "disk"
 	case "pdf", "doc", "docx", "xls", "xlsx", "ppt", "pptx", "txt", "md", "rtf", "odt", "ods", "odp", "csv", "epub", "wps", "et", "dps":
 		return "doc"
-	case "go", "py", "js", "java", "c", "cpp", "h", "hpp", "cs", "rs", "php", "rb", "sh", "sql", "json", "xml", "yaml", "yml", "html", "css", "vue", "kt", "swift":
+	case "go", "py", "js", "ts", "java", "c", "cpp", "h", "hpp", "cs", "rs", "php", "rb", "sh", "sql", "json", "xml", "yaml", "yml", "html", "css", "vue", "kt", "swift":
 		return "code"
 	}
 	return "file"
@@ -77,6 +81,8 @@ func fileIcon(c *ui.Context, e fileindex.Entry, size float32) ui.Element {
 		svg, color = iconAudio, ui.Hex("#d6588f")
 	case "archive":
 		svg, color = iconArchive, ui.Hex("#a8743a")
+	case "disk":
+		svg, color = iconDisk, ui.Hex("#475569")
 	case "doc":
 		svg, color = iconDoc, ui.Hex("#3b7ddd")
 	case "code":

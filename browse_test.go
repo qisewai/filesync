@@ -106,7 +106,7 @@ func TestNativeBrowserUploadDownloadAndTasks(t *testing.T) {
 	h.waitTransfers()
 	h.want("照片")
 	h.want("笔记.txt")
-	h.click("照片")
+	h.clickPage("照片")
 	dest := t.TempDir()
 	h.a.pickDir = func(string, string) (string, error) { return dest, nil }
 	h.click("下载…")

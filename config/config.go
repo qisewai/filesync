@@ -180,6 +180,9 @@ type Store struct {
 	Dir     string
 	Servers []*Server
 	Tasks   []*Task
+	// SidebarWidth is the width the user dragged the sidebar to, 0 for
+	// the default.
+	SidebarWidth float32
 }
 
 // DefaultDir is where the app keeps its settings: ~/.config/filesync on
@@ -202,7 +205,8 @@ type fileData struct {
 	Tasks   []*Task   `json:"tasks"`
 	// Sessions are the logins of version 0.1, by address, which become
 	// servers.
-	Sessions map[string]string `json:"sessions,omitempty"`
+	Sessions     map[string]string `json:"sessions,omitempty"`
+	SidebarWidth float32           `json:"sidebarWidth,omitempty"`
 }
 
 // Load reads the store in dir; a directory without it has nothing.
@@ -220,6 +224,7 @@ func Load(dir string) (*Store, error) {
 		return nil, err
 	}
 	s.Servers = data.Servers
+	s.SidebarWidth = data.SidebarWidth
 	addrs := make([]string, 0, len(data.Sessions))
 	for addr := range data.Sessions {
 		addrs = append(addrs, addr)
@@ -246,7 +251,7 @@ func (s *Store) Save() error {
 	if err := os.MkdirAll(s.Dir, 0o755); err != nil {
 		return err
 	}
-	data := fileData{Servers: s.Servers, Tasks: s.Tasks}
+	data := fileData{Servers: s.Servers, Tasks: s.Tasks, SidebarWidth: s.SidebarWidth}
 	if data.Servers == nil {
 		data.Servers = []*Server{}
 	}

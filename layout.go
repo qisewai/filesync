@@ -13,10 +13,9 @@ import (
 )
 
 func (a *app) view(c *ui.Context) {
-	// The page builds before the sidebar, which shows at its left: the
-	// keyboard goes to the page first.
-	ui.Row(c).Fill().AlignItems(ui.Stretch).Reverse().Children(func() {
-		ui.Column(c).Grow(1).Shrink(1).MinWidth(0).Padding(20, 24).Gap(12).Children(func() {
+	// The sidebar, then the page: the divider between them drags.
+	split := ui.Split(c.Key("main-split"), &a.sidebarW, func() { a.sidebar(c) }, func() {
+		ui.Column(c).Grow(1).Shrink(1).MinWidth(0).Fill().Padding(20, 24).Gap(12).Children(func() {
 			if a.errorMsg != "" && a.place != "" && a.place != "backup" {
 				closableNotice(c, c.Theme().Danger, a.errorMsg, func() { a.errorMsg = "" })
 			}
@@ -55,8 +54,12 @@ func (a *app) view(c *ui.Context) {
 				a.transfersPanel(c)
 			}
 		})
-		a.sidebar(c)
-	})
+	}).Fill()
+	if split.Changed() {
+		a.sidebarW = min(max(a.sidebarW, minSidebar), maxSidebar)
+		a.store.SidebarWidth = a.sidebarW
+		a.sidebarMoved = true
+	}
 	if a.askQuit {
 		switch ui.AlertDialog(c, &a.askQuit, "任务正在进行，要停止并退出吗？",
 			"已完成的文件会保留，本机传输会停止，下次备份可继续。复制、移动、查重和索引扫描会向服务器请求取消；服务器无法连接时，这些任务可能继续运行。", "继续任务", "停止并退出") {
@@ -76,6 +79,13 @@ func (a *app) view(c *ui.Context) {
 		}
 	}
 }
+
+// The sidebar's width, which the user drags between these.
+const (
+	defaultSidebar = 232
+	minSidebar     = 180
+	maxSidebar     = 480
+)
 
 func rootPlace(server string, root int64) string { return fmt.Sprintf("root/%s/%d", server, root) }
 
@@ -140,7 +150,7 @@ func (a *app) welcome(c *ui.Context) {
 
 func (a *app) sidebar(c *ui.Context) {
 	t := c.Theme()
-	ui.Column(c).Width(232).Background(t.Surface).BorderWidth(0, 1, 0, 0).BorderColor(t.Border).Children(func() {
+	ui.Column(c).Fill().Background(t.Surface).Children(func() {
 		ui.Scroll(c).Grow(1).MinHeight(0).Padding(10, 8).Children(func() {
 			ui.Tree(c.Key("servers-tree"), func() {
 				for _, sv := range a.store.Servers {

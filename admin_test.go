@@ -75,13 +75,13 @@ func TestNativeRootManagementPickerEditAndRemove(t *testing.T) {
 	if created.ID == 0 || created.Schedule != "daily:03:15" || len(created.Excludes) != 2 {
 		t.Fatalf("created %+v", created)
 	}
-	h.click("测试目录")
+	h.clickPage("测试目录")
 	h.click("编辑目录…")
 	h.replaceField("目录名称", "改名目录")
 	h.click("只读目录")
 	h.click("保存目录设置")
 	h.want("改名目录")
-	h.click("改名目录")
+	h.clickPage("改名目录")
 	h.click("打开目录")
 	h.settle()
 	if h.a.br == nil || !h.a.br.root.ReadOnly {
@@ -93,14 +93,14 @@ func TestNativeRootRemovalLeavesFilesAndUpdatesBrowser(t *testing.T) {
 	os.WriteFile(filepath.Join(f.Root, "kept.txt"), []byte("original"), 0644)
 	h := browserHarness(t, f)
 	h.click("目录管理")
-	h.click("nas")
+	h.clickPage("nas")
 	h.click("编辑目录…")
 	h.click("只读目录")
 	h.click("保存目录设置")
 	if !h.a.br.root.ReadOnly {
 		t.Fatal("browser kept stale write permission")
 	}
-	h.click("nas")
+	h.clickPage("nas")
 	h.click("移除索引…")
 	h.click("取消")
 	if len(h.a.roots[h.a.admin.server]) != 2 {
@@ -122,7 +122,7 @@ func TestNativeScanEventsHistoryRebuildAndCancel(t *testing.T) {
 	h.a.noEvents = false
 	h.a.watch(h.a.store.Servers[0])
 	h.click("目录管理")
-	h.click("nas")
+	h.clickPage("nas")
 	h.click("更新索引")
 	h.waitTransfers()
 	if h.a.transfers[0].files != 7 || h.a.transfers[0].scanJob == 0 {
@@ -173,7 +173,7 @@ func TestScanSnapshotRecoversMissingEventsAndKeepsProgress(t *testing.T) {
 	f.DropTaskEvents.Store(true)
 	h := browserHarness(t, f)
 	h.click("目录管理")
-	h.click("nas")
+	h.clickPage("nas")
 	h.click("更新索引")
 	h.waitTransfers()
 	tr := h.a.transfers[0]
@@ -255,22 +255,21 @@ func TestNativeStatisticsDrillLocateAndSourceLifecycle(t *testing.T) {
 		png.Encode(file, h.tt.Image())
 		file.Close()
 	}
-	// This nas button is in the stats card, while the sidebar uses 📁 nas.
-	h.click("nas")
-	h.click("目录")
+	h.clickPage("nas")
+	h.clickPage("目录")
 	if h.a.admin.statsDir != "目录" {
 		t.Fatal("root usage drill")
 	}
-	h.click("子目录")
+	h.clickPage("子目录")
 	if h.a.admin.statsDir != "目录/子目录" {
 		t.Fatal("nested usage drill")
 	}
 	// The breadcrumbs go back up.
-	h.click("目录")
+	h.clickPage("目录")
 	if h.a.admin.statsDir != "目录" {
 		t.Fatal("directory up")
 	}
-	h.click("nas")
+	h.clickPage("nas")
 	if h.a.admin.statsDir != "" {
 		t.Fatal("directory top")
 	}
@@ -322,7 +321,7 @@ func TestRootEditKeepsReferencedBackupSettings(t *testing.T) {
 	h := newHarness(t, st)
 	h.settle()
 	h.click("目录管理")
-	h.click("nas")
+	h.clickPage("nas")
 	h.click("移除索引…")
 	h.want("当前备份任务仍引用此目录")
 	h.click("取消")
@@ -431,7 +430,7 @@ func TestLargeDirectoryUsageListCanNavigateLastRow(t *testing.T) {
 	f := fitest.New(t)
 	h := browserHarness(t, f)
 	h.click("空间统计")
-	h.click("nas")
+	h.clickPage("nas")
 	m := h.a.admin
 	for i := range 1200 {
 		name := fmt.Sprintf("usage-folder-%04d", i)

@@ -54,8 +54,12 @@ type app struct {
 	// place is what the sidebar chose: "backup", or a root as
 	// "root/<server>/<id>".
 	place string
-	open  map[string]*bool // the sidebar's sections shown open, by server
-	roots map[string][]fileindex.Root
+	// sidebarW is the sidebar's width; sidebarMoved says it was dragged
+	// since the settings were saved.
+	sidebarW     float32
+	sidebarMoved bool
+	open         map[string]*bool // the sidebar's sections shown open, by server
+	roots        map[string][]fileindex.Root
 	// rootsLoading are the servers whose roots are being read.
 	rootsLoading map[string]*fileindex.Client
 	// serverErr is why a server could not be reached, by server.
@@ -127,6 +131,10 @@ func newApp(store *config.Store) *app {
 	}
 	if len(store.Tasks) > 0 {
 		a.selected = 0
+	}
+	a.sidebarW = defaultSidebar
+	if w := store.SidebarWidth; w > 0 {
+		a.sidebarW = min(max(w, minSidebar), maxSidebar)
 	}
 	a.tasks.Selected = &a.selected
 	a.tasks.Key = func(i int) any { return a.store.Tasks[i].ID }
@@ -536,6 +544,10 @@ func (a *app) maybeClose() {
 }
 
 func (a *app) stopBackground() {
+	if a.sidebarMoved && !a.closed {
+		a.sidebarMoved = false
+		a.save()
+	}
 	a.closed = true
 	if a.admin != nil {
 		a.admin.stop()

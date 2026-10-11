@@ -83,6 +83,28 @@ func (h *harness) click(label string) {
 	h.settle()
 }
 
+// clickPage clicks the element of the page showing label, rather than a
+// directory or an item of the sidebar named so, which builds first: the
+// servers in the sidebar fold while it clicks.
+func (h *harness) clickPage(label string) {
+	h.t.Helper()
+	was := map[string]bool{}
+	for _, sv := range h.a.store.Servers {
+		open := h.a.sectionOpen("server/" + sv.ID)
+		was[sv.ID] = *open
+		*open = false
+	}
+	h.tt.Frame()
+	err := h.tt.Click(label)
+	for id, open := range was {
+		*h.a.sectionOpen("server/" + id) = open
+	}
+	if err != nil {
+		h.t.Fatalf("%v; texts %q", err, h.tt.Texts())
+	}
+	h.settle()
+}
+
 func (h *harness) want(text string) {
 	h.t.Helper()
 	if !h.tt.HasText(text) {
@@ -670,5 +692,44 @@ func TestErrorCloses(t *testing.T) {
 	h.click("关闭提示")
 	if h.a.errorMsg != "" || h.tt.HasText("出了点问题") {
 		t.Fatal("not closed")
+	}
+}
+
+// The sidebar drags wider and narrower, within bounds, and keeps its
+// width.
+func TestSidebarDrags(t *testing.T) {
+	store := &config.Store{Dir: t.TempDir()}
+	h := newHarness(t, store)
+	drag := func(to float32) {
+		r, ok := h.tt.Find("Divider")
+		if !ok {
+			t.Fatalf("no divider in %q", h.tt.Texts())
+		}
+		x, y := r.X+r.W/2, r.Y+r.H/2
+		h.tt.Press(x, y)
+		h.tt.Move(to, y)
+		h.tt.Release(to, y)
+		h.tt.Frame()
+	}
+	drag(330)
+	if w := h.a.sidebarW; w < 320 || w > 340 {
+		t.Fatalf("dragged to %v", w)
+	}
+	drag(900)
+	if h.a.sidebarW != maxSidebar {
+		t.Fatalf("wider than allowed: %v", h.a.sidebarW)
+	}
+	drag(20)
+	if h.a.sidebarW != minSidebar {
+		t.Fatalf("narrower than allowed: %v", h.a.sidebarW)
+	}
+	drag(300)
+	h.a.stopBackground()
+	again, err := config.Load(store.Dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if again.SidebarWidth != h.a.sidebarW || newApp(again).sidebarW != h.a.sidebarW {
+		t.Fatalf("saved %v, dragged to %v", again.SidebarWidth, h.a.sidebarW)
 	}
 }

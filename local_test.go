@@ -1,6 +1,7 @@
 package main
 
 import (
+	"filesync/fileindex"
 	"os"
 	"path/filepath"
 	"testing"
@@ -54,4 +55,15 @@ func TestLocalFiles(t *testing.T) {
 		t.Fatalf("draft %+v", d)
 	}
 	h.click("取消")
+}
+
+func TestDiskImageKind(t *testing.T) {
+	for _, name := range []string{"win10.vmdk", "系统.GHO", "ubuntu.iso", "vm.qcow2", "backup.tib"} {
+		if k := fileKind(fileindex.Entry{Ext: extOf(name)}); k != "disk" {
+			t.Errorf("%s is %q", name, k)
+		}
+	}
+	if categoryLabel("disk") != "磁盘镜像" {
+		t.Error("no label")
+	}
 }
