@@ -38,6 +38,12 @@ func (a *app) view(c *ui.Context) {
 			a.statusBar(c)
 		})
 	}).Fill()
+	if a.viewerCovers() {
+		// Under the viewer's opaque backdrop, the page is built, keeping
+		// its state, but not drawn: drawn, its rounded clips would be
+		// masked on the CPU while the picture is scaled, a second at once.
+		split.Opacity(0)
+	}
 	if split.Changed() {
 		a.sidebarW = min(max(a.sidebarW, minSidebar), maxSidebar)
 		a.store.SidebarWidth = a.sidebarW

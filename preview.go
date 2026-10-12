@@ -35,14 +35,17 @@ type preview struct {
 	zoom                  float32
 	// placeholder is the picture shown before, faded until this loads.
 	placeholder *ui.Bitmap
-	// Zoomed (actual), the picture's center is panX, panY from the
-	// stage's, whose size the last frame gave.
-	panX, panY     float32
+	// pan is where the picture's center is from the stage's, which a drag
+	// moves and throws; the stage's size is the last frame's.
+	pan            ui.Point
 	stageW, stageH float32
-	dragging       bool
-	dragX, dragY   float32 // where the drag started, and the pan then
-	dragPX, dragPY float32
-	stripScroll    float32 // the wheel turned over the strip, to a step
+	// swipe is the step a swipe of the picture fitting asks, 0 for none.
+	swipe       int
+	stripScroll float32 // the wheel turned over the strip, to a step
+	// sibs is what siblings found, made once: the group does not change.
+	sibs   []fileindex.Entry
+	sibsAt int
+	sibsOK bool
 }
 
 func previewKind(e fileindex.Entry) string {
@@ -180,6 +183,10 @@ func decodePreviewText(data []byte, truncated bool) (string, error) {
 // siblings are the entries of the group the arrows step through: those
 // shown as the entry is, pictures among pictures.
 func (p *preview) siblings() (list []fileindex.Entry, at int) {
+	if p.sibsOK {
+		return p.sibs, p.sibsAt
+	}
+	defer func() { p.sibs, p.sibsAt, p.sibsOK = list, at, true }()
 	kind := previewKind(p.entry)
 	at = -1
 	for _, e := range p.group {
@@ -217,6 +224,12 @@ func (a *app) previewGo(to func(list []fileindex.Entry, at int) int) {
 	}
 	a.showPreview(p.server, p.client, list[j], p.group)
 	a.preview.placeholder = old // the next fits the window, as pictures differ
+}
+
+// viewerCovers tells whether the picture viewer covers the window.
+func (a *app) viewerCovers() bool {
+	p := a.preview
+	return p != nil && p.open && previewKind(p.entry) == "image"
 }
 
 func (a *app) filePreviewView(c *ui.Context) {
@@ -367,11 +380,19 @@ const (
 	touchpadZoom = 0.005
 )
 
-// zoomMotion is how long a zoom takes to show.
-var zoomMotion = 180 * time.Millisecond
+// zoomMotion is about how long a zoom takes to show, and a thrown picture
+// to come to rest.
+var zoomMotion = 280 * time.Millisecond
+
+// swipeStep is how far a swipe of the picture fitting goes, thrown, to
+// show the next or the one before.
+const swipeStep = 80
 
 // imageStage shows the picture, fitting the stage and centered, or zoomed
-// where the wheel and drags put it: zooms move there smoothly.
+// and moved where the wheel and drags put it. The picture is scaled, and
+// its holder dragged and thrown, with one spring: zooming about a point
+// keeps it under the pointer all the way. Fitting, a swipe steps through
+// the pictures.
 func (a *app) imageStage(c *ui.Context, p *preview, bmp *ui.Bitmap) {
 	stage := ui.Column(c.Key("image-stage")).Grow(1).Fill().MinHeight(0).Clip().HandleInput(p.stageInput)
 	resized := false
@@ -380,43 +401,59 @@ func (a *app) imageStage(c *ui.Context, p *preview, bmp *ui.Bitmap) {
 		p.stageW, p.stageH = r.W, r.H
 		p.clampPan() // the window resized
 	}
-	switch {
-	case p.dragging:
-		stage.Cursor(ui.CursorGrabbing)
-	case p.actual:
-		stage.Cursor(ui.CursorGrab)
-	}
 	stage.Children(func() {
 		if p.stageW <= 0 {
 			// Before the stage has a size, as the picture first shows.
 			ui.Image(c, bmp).Grow(1).Fill().MinHeight(0).Fit(ui.ScaleDown).Label("图片 " + p.entry.Name)
 			return
 		}
-		// A picture of its own each, which starts where it is meant to be.
-		img := ui.Image(c.Key("viewer-image/"+p.entry.Path), bmp).Absolute().Label("图片 " + p.entry.Name)
-		scale, x, y := p.scale(), p.panX, p.panY
-		// A drag follows the pointer, and a resized window the window, at
-		// once; the animations keep up with them for what moves next.
-		instant := p.dragging || resized
-		d := zoomMotion
-		if instant {
-			d = 0
-		}
-		// Scale and pan move along one easing: the point zoomed about
-		// stays under the pointer all the way.
-		if s := img.Animate("scale", scale, d); !instant {
-			scale = s
-		}
-		if v := img.Animate("x", x, d); !instant {
-			x = v
-		}
-		if v := img.Animate("y", y, d); !instant {
-			y = v
-		}
+		anim := ui.Animation{Spring: ui.SpringOptions{Duration: zoomMotion}}
 		bw, bh := bmp.Size()
-		w, h := float32(bw)*scale, float32(bh)*scale
-		img.Left(p.stageW/2-w/2+x).Top(p.stageH/2-h/2+y).Size(w, h)
+		scale := p.scale()
+		opts := ui.DraggableOptions{Animation: anim}
+		if p.actual {
+			// Within its edges, thrown, it glides on to rest.
+			ex := max(0, (float32(bw)*scale-p.stageW)/2)
+			ey := max(0, (float32(bh)*scale-p.stageH)/2)
+			opts.Bounds = &ui.Rect{X: -ex, Y: -ey, W: 2 * ex, H: 2 * ey}
+			opts.Snap = func(at ui.Point) ui.Point { return at }
+		} else {
+			opts.Axis = ui.Horizontal
+			opts.Snap = func(at ui.Point) ui.Point {
+				switch {
+				case at.X < -swipeStep:
+					p.swipe = 1
+				case at.X > swipeStep:
+					p.swipe = -1
+				}
+				return ui.Point{}
+			}
+		}
+		// A picture, and its holder, of its own each: one starts where it
+		// is meant to be.
+		holder := ui.Box(c.Key("viewer-pan/"+p.entry.Path)).Absolute().Left(0).Top(0).Size(p.stageW, p.stageH).Draggable(&p.pan, opts)
+		switch {
+		case holder.Dragging():
+			holder.Cursor(ui.CursorGrabbing)
+		case p.actual:
+			holder.Cursor(ui.CursorGrab)
+		}
+		holder.Children(func() {
+			img := ui.Image(c.Key("viewer-image/"+p.entry.Path), bmp).Absolute().
+				Left(p.stageW/2-float32(bw)/2).Top(p.stageH/2-float32(bh)/2).Size(float32(bw), float32(bh)).
+				Label("图片 " + p.entry.Name)
+			if resized {
+				scale = img.Jump("scale", scale) // the window: at once
+			} else {
+				scale = img.AnimateTo("scale", scale, anim)
+			}
+			img.Scale(scale, scale)
+		})
 	})
+	if step := p.swipe; step != 0 {
+		p.swipe = 0
+		a.previewStep(step)
+	}
 }
 
 // filmFrame is a picture of the strip under the viewer.
@@ -505,21 +542,21 @@ func (p *preview) zoomAt(f, x, y float32) {
 		return
 	}
 	if !p.actual {
-		p.panX, p.panY = 0, 0
+		p.pan = ui.Point{}
 	}
 	// The point of the picture under x, y, from its center.
-	u, v := (x-p.panX)/from, (y-p.panY)/from
+	u, v := (x-p.pan.X)/from, (y-p.pan.Y)/from
 	p.actual, p.zoom = true, to
-	p.panX, p.panY = x-u*to, y-v*to
+	p.pan = ui.Point{X: x - u*to, Y: y - v*to}
 	p.clampPan()
 }
 
 // fit shows the picture fitting the stage.
-func (p *preview) fit() { p.actual, p.panX, p.panY = false, 0, 0 }
+func (p *preview) fit() { p.actual, p.pan = false, ui.Point{} }
 
 // actualSize shows the picture at its own size, centered.
 func (p *preview) actualSize() {
-	p.actual, p.zoom, p.panX, p.panY = true, 1, 0, 0
+	p.actual, p.zoom, p.pan = true, 1, ui.Point{}
 	p.clampPan()
 }
 
@@ -537,12 +574,17 @@ func (p *preview) clampPan() {
 		edge := (size - room) / 2
 		return min(edge, max(-edge, pan))
 	}
-	p.panX = clamp(p.panX, float32(w)*p.zoom, p.stageW)
-	p.panY = clamp(p.panY, float32(h)*p.zoom, p.stageH)
+	if !p.actual {
+		p.pan = ui.Point{}
+		return
+	}
+	p.pan.X = clamp(p.pan.X, float32(w)*p.zoom, p.stageW)
+	p.pan.Y = clamp(p.pan.Y, float32(h)*p.zoom, p.stageH)
 }
 
-// stageInput zooms with the wheel about the pointer, toggles fitting and
-// the picture's own size with a double click, and pans with a drag.
+// stageInput zooms with the wheel about the pointer, and toggles fitting
+// and the picture's own size with a double click; drags move the
+// picture's holder.
 func (p *preview) stageInput(ev ui.InputEvent) bool {
 	if p.bitmap == nil {
 		return false
@@ -579,22 +621,7 @@ func (p *preview) stageInput(ev ui.InputEvent) bool {
 			}
 			return true
 		}
-		if p.actual {
-			p.dragging = true
-			p.dragX, p.dragY, p.dragPX, p.dragPY = ev.X, ev.Y, p.panX, p.panY
-		}
-		return true
-	case ui.InputPointerMove:
-		if p.dragging && ev.Button == 0 {
-			p.panX, p.panY = p.dragPX+ev.X-p.dragX, p.dragPY+ev.Y-p.dragY
-			p.clampPan()
-			return true
-		}
-	case ui.InputPointerUp:
-		if p.dragging {
-			p.dragging = false
-			return true
-		}
+		return false // a drag moves the picture's holder
 	}
 	return false
 }

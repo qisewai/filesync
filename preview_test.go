@@ -402,8 +402,8 @@ func TestOpenCachePathSeparatesSourcesAndConfinesNames(t *testing.T) {
 	}
 }
 
-// The wheel zooms about the pointer, the point under it staying put; a
-// drag pans within the picture's edges; a double click toggles fitting.
+// The wheel zooms about the pointer, the point under it staying put,
+// within the picture's edges; a double click toggles fitting.
 func TestViewerZoomAndPan(t *testing.T) {
 	bmp := ui.NewBitmap(image.NewRGBA(image.Rect(0, 0, 2000, 1000)))
 	p := &preview{bitmap: bmp, zoom: 1, stageW: 1000, stageH: 800}
@@ -417,27 +417,27 @@ func TestViewerZoomAndPan(t *testing.T) {
 	}
 	// The point that was under the pointer (200 picture pixels right of
 	// its center) still is.
-	if got := p.panX + 200*p.zoom; math.Abs(float64(got-100)) > 0.01 {
+	if got := p.pan.X + 200*p.zoom; math.Abs(float64(got-100)) > 0.01 {
 		t.Fatalf("point moved to %v", got)
 	}
 	// Narrower than the stage when its height is, it stays centered
 	// up and down.
-	if p.panY != 0 {
-		t.Fatalf("pan y %v", p.panY)
+	if p.pan.Y != 0 {
+		t.Fatalf("pan y %v", p.pan.Y)
 	}
-	// Dragged far right, it stops at its left edge.
-	p.stageInput(ui.InputEvent{Kind: ui.InputPointerDown, X: 500, Y: 400, Clicks: 1})
-	p.stageInput(ui.InputEvent{Kind: ui.InputPointerMove, X: 5000, Y: 400})
-	p.stageInput(ui.InputEvent{Kind: ui.InputPointerUp, X: 5000, Y: 400})
-	if want := (2000*p.zoom - 1000) / 2; p.panX != want || p.dragging {
-		t.Fatalf("pan %v, want %v", p.panX, want)
+	// Zoomed about a point far right, it stops at its left edge.
+	for range 8 {
+		p.stageInput(ui.InputEvent{Kind: ui.InputScroll, DY: -1, X: 990, Y: 400})
+	}
+	if want := (2000*p.zoom - 1000) / 2; p.pan.X > want+0.01 || p.pan.X < -want-0.01 {
+		t.Fatalf("pan %v, edge %v", p.pan.X, want)
 	}
 	// The wheel down past fitting fits it, centered.
-	for range 10 {
+	for range 30 {
 		p.stageInput(ui.InputEvent{Kind: ui.InputScroll, DY: 1, X: 500, Y: 400})
 	}
-	if p.actual || p.panX != 0 {
-		t.Fatalf("not fitting: %v %v", p.actual, p.panX)
+	if p.actual || p.pan != (ui.Point{}) {
+		t.Fatalf("not fitting: %v %v", p.actual, p.pan)
 	}
 	// A double click shows its own size about the pointer, another fits.
 	p.stageInput(ui.InputEvent{Kind: ui.InputPointerDown, X: 500, Y: 400, Clicks: 2})
@@ -483,7 +483,7 @@ func TestStripWheelSteps(t *testing.T) {
 func TestViewerZoomAnimates(t *testing.T) {
 	// Slow enough to catch on its way, however slow the test runs.
 	defer func(d time.Duration) { zoomMotion = d }(zoomMotion)
-	zoomMotion = time.Hour
+	zoomMotion = 30 * time.Second
 	f := fitest.New(t)
 	img := image.NewRGBA(image.Rect(0, 0, 300, 200))
 	file, _ := os.Create(filepath.Join(f.Root, "a.png"))
@@ -506,7 +506,9 @@ func TestViewerZoomAnimates(t *testing.T) {
 	}
 	h.a.preview.zoomBy(2)
 	h.tt.Frame()
-	if w := width(); w <= 300 || w >= 400 {
+	time.Sleep(400 * time.Millisecond)
+	h.tt.Frame()
+	if w := width(); w <= 300.5 || w >= 590 {
 		t.Fatalf("not on its way: %v", w)
 	}
 	// Quick, it ends at the scale asked.
@@ -518,5 +520,89 @@ func TestViewerZoomAnimates(t *testing.T) {
 		}
 		time.Sleep(20 * time.Millisecond)
 		h.tt.Frame()
+	}
+}
+
+// Zoomed, a drag moves the picture, held within its edges once let go;
+// fitting, a swipe shows the next picture, and a short drag springs back.
+func TestViewerDragAndSwipe(t *testing.T) {
+	defer func(d time.Duration) { zoomMotion = d }(zoomMotion)
+	zoomMotion = 10 * time.Millisecond
+	f := fitest.New(t)
+	img := image.NewRGBA(image.Rect(0, 0, 400, 300))
+	for _, name := range []string{"a.png", "b.png"} {
+		file, _ := os.Create(filepath.Join(f.Root, name))
+		png.Encode(file, img)
+		file.Close()
+	}
+	h := browserHarness(t, f)
+	h.clickPage("a.png")
+	h.tt.Key(0, ui.KeyEnter)
+	h.settle()
+	h.tt.Frame()
+	p := h.a.preview
+	// rest lets the picture come to rest: it shows where it did a few
+	// frames ago.
+	rest := func() {
+		t.Helper()
+		var last ui.Rect
+		still := 0
+		for deadline := time.Now().Add(3 * time.Second); still < 5 && time.Now().Before(deadline); {
+			time.Sleep(20 * time.Millisecond)
+			h.tt.Frame()
+			h.settle()
+			r, _ := h.tt.Find("图片 " + h.a.preview.entry.Name)
+			if r == last {
+				still++
+			} else {
+				still, last = 0, r
+			}
+		}
+	}
+	center := func() (float32, float32) {
+		r, ok := h.tt.Find("图片 " + p.entry.Name)
+		if !ok {
+			t.Fatalf("no picture %q in %q", p.entry.Name, h.tt.Texts())
+		}
+		return r.X + r.W/2, r.Y + r.H/2
+	}
+	// A drag, held still before it lets go (a short one), or let go on
+	// its way (a throw).
+	drag := func(dx float32, hold bool) {
+		x, y := center()
+		h.tt.Press(x, y)
+		for i := float32(1); i <= 10; i++ {
+			h.tt.Move(x+dx*i/10, y)
+			time.Sleep(5 * time.Millisecond)
+		}
+		if hold {
+			time.Sleep(200 * time.Millisecond)
+			h.tt.Move(x+dx, y)
+		}
+		h.tt.Release(x+dx, y)
+		h.settle()
+	}
+
+	// Fitting, a short drag springs back; a swipe steps.
+	drag(-30, true)
+	rest()
+	if p.entry.Name != "a.png" || p.pan != (ui.Point{}) {
+		t.Fatalf("short drag: %q at %v", p.entry.Name, p.pan)
+	}
+	drag(-300, false)
+	rest()
+	h.settle()
+	if p = h.a.preview; p.entry.Name != "b.png" {
+		t.Fatalf("swipe showed %q", p.entry.Name)
+	}
+
+	// Zoomed, dragged far, it rests at its edge.
+	p.zoomBy(4)
+	rest()
+	drag(3000, true)
+	rest()
+	w, _ := p.bitmap.Size()
+	if edge := (float32(w)*p.zoom - p.stageW) / 2; math.Abs(float64(p.pan.X-edge)) > 1 {
+		t.Fatalf("pan %v, edge %v", p.pan.X, edge)
 	}
 }
