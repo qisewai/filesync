@@ -197,6 +197,10 @@ func (a *app) relayIn(f *nasFiles, move bool, es []fileindex.Entry, to string, r
 	if !ok || !ok2 {
 		return
 	}
+	if src.InArchive() && !src.ArchiveSource.Local && f.server == to {
+		a.startServerExtract(f, src, es[0].Root, src.ArchiveSource.Path, src.ArchiveSource.Version, paths(es), root, dir, title)
+		return
+	}
 	go func() {
 		ctx, cancel := context.WithTimeout(context.Background(), requestTimeout)
 		defer cancel()

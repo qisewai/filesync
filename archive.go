@@ -21,6 +21,8 @@ type archiveBrowser struct {
 	file, version     string
 	local, sequential bool
 	extract           bool
+	extractLocal      bool
+	extractTarget     func([]fileindex.Entry)
 }
 
 func (a *app) onArchive() bool            { return a.place == "archive" && a.arc != nil }
@@ -122,6 +124,14 @@ func (a *app) archiveBrowse(dir string, choose ...string) {
 			if b.extract {
 				b.extract = false
 				a.archiveExtract(items)
+			}
+			if b.extractLocal {
+				b.extractLocal = false
+				a.downloadTo(a.archiveFiles(), false, items, "解压到本机")
+			}
+			if fn := b.extractTarget; fn != nil {
+				b.extractTarget = nil
+				fn(items)
 			}
 		})
 	}()
@@ -298,8 +308,57 @@ func (a *app) archiveExtract(es []fileindex.Entry) {
 	a.nas.local = func() { a.downloadTo(f, false, es, "解压到本机") }
 }
 func (a *app) extractArchive(server string, c *fileindex.Client, e fileindex.Entry) {
+	if c != nil && !c.InArchive() {
+		f := &nasFiles{server: server, root: e.Root, dir: parentDir(e.Path), fail: func(msg string) { a.errorMsg = msg }, changed: func(string) {
+			if a.onRoot() && a.br.server == server {
+				a.reloadKeeping()
+			}
+		}}
+		a.openPickerIn(server, e.Root, parentDir(e.Path), func(to string, root int64, rootName, dir string) {
+			if to == server {
+				a.startServerExtract(f, c, e.Root, e.Path, "", nil, root, dir, e.Name+" → "+a.target(to, rootName, dir))
+				return
+			}
+			// Another server still uses the archive browser's relay selection.
+			a.openArchive(server, c, e, "")
+			a.arc.extract = false
+			a.arc.extractTarget = func(items []fileindex.Entry) {
+				a.relayIn(a.archiveFiles(), false, items, to, root, dir, "解压", e.Name+" → "+a.target(to, rootName, dir))
+			}
+		})
+		a.nas.title = "解压到（同名项保留两份）"
+		a.nas.local = func() { a.openArchive(server, c, e, ""); a.arc.extractLocal = true }
+		return
+	}
 	a.openArchive(server, c, e, "")
 	a.arc.extract = true
+}
+
+func (a *app) startServerExtract(f *nasFiles, c *fileindex.Client, srcRoot int64, filename, version string, entries []string, dstRoot int64, dir, title string) {
+	if c.InArchive() {
+		base, ok := a.serverClient(f.server)
+		if !ok {
+			return
+		}
+		c = base
+	}
+	tr := a.addTransfer("解压", title)
+	tr.server = f.server
+	ctx, cancel := context.WithTimeout(context.Background(), requestTimeout)
+	tr.cancel = cancel
+	go func() {
+		defer cancel()
+		task, err := c.ExtractArchive(ctx, srcRoot, filename, version, entries, dstRoot, dir)
+		a.post(func() {
+			if err != nil {
+				a.finishTransfer(tr, err, nil)
+				return
+			}
+			tr.task = task.ID
+			tr.after = func() { f.changed("") }
+			a.trackServerTask(c, tr, task)
+		})
+	}()
 }
 func (a *app) archiveLocation() string {
 	b := a.arc

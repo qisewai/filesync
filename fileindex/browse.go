@@ -164,7 +164,7 @@ func (c *Client) Rename(ctx context.Context, root int64, p, name string) error {
 // move.
 type Task struct {
 	ID         int64  `json:"id"`
-	Kind       string `json:"kind"` // copy | move | delete | purge
+	Kind       string `json:"kind"` // copy | move | delete | purge | extract
 	Title      string `json:"title"`
 	Status     string `json:"status"` // queued | running | done | failed | canceled
 	TotalBytes int64  `json:"total_bytes"`

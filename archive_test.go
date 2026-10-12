@@ -190,6 +190,61 @@ func TestArchiveNASExtractSameAndOtherServer(t *testing.T) {
 	}
 }
 
+func TestArchiveSelectionQueuesServerExtractionWithoutBrowsing(t *testing.T) {
+	f := fitest.New(t)
+	archiveFixture(t, f.Root)
+	os.Mkdir(filepath.Join(f.Root, "目标"), 0755)
+	h := browserHarness(t, f)
+	server := h.a.br.server
+	c, _ := h.a.serverClient(server)
+	f.HoldArchiveLists.Store(true)
+	h.a.extractArchive(server, c, fileindex.Entry{Root: 1, Path: "备份.zip", Name: "备份.zip"})
+	h.settle()
+	if !h.a.nas.open || h.a.onArchive() {
+		t.Fatal("extraction unnecessarily browsed archive")
+	}
+	h.a.nas.pick(server, 1, "nas", "目标")
+	h.settle()
+	h.waitTransfers()
+	if f.ArchiveExtracts.Load() != 1 {
+		t.Fatal("server extraction endpoint not used")
+	}
+	tr := h.a.transfers[len(h.a.transfers)-1]
+	if tr.task == 0 || tr.kind != "解压" || tr.state != "done" {
+		t.Fatalf("task %+v", tr)
+	}
+	body, err := os.ReadFile(filepath.Join(f.Root, "目标", "照片", "说明.txt"))
+	if err != nil || string(body) != "压缩包内的文本" {
+		t.Fatal(string(body), err)
+	}
+	h.tt.Frame()
+	h.tt.Frame()
+}
+
+func TestArchiveMemberExtractionUsesServerTask(t *testing.T) {
+	f := fitest.New(t)
+	archiveFixture(t, f.Root)
+	os.Mkdir(filepath.Join(f.Root, "目标"), 0755)
+	h := browserHarness(t, f)
+	h.a.openEntry(fileindex.Entry{Root: 1, Path: "备份.zip", Name: "备份.zip"})
+	h.settle()
+	b := h.a.arc
+	h.a.archiveBrowse("照片")
+	h.settle()
+	h.a.archiveExtract(h.a.arc.items)
+	h.settle()
+	h.a.nas.pick(b.server, 1, "nas", "目标")
+	h.settle()
+	h.waitTransfers()
+	if f.ArchiveExtracts.Load() != 1 {
+		t.Fatal("selection relayed through client")
+	}
+	body, err := os.ReadFile(filepath.Join(f.Root, "目标", "说明.txt"))
+	if err != nil || string(body) != "压缩包内的文本" {
+		t.Fatal(string(body), err)
+	}
+}
+
 func TestArchiveCredentialsChangeCancelsAndLeavesPage(t *testing.T) {
 	f := fitest.New(t)
 	archiveFixture(t, f.Root)

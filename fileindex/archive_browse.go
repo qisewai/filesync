@@ -202,3 +202,25 @@ func archiveAPIError(err error) error {
 	}
 	return err
 }
+
+// ExtractArchive queues extraction on the NAS; file data never passes through
+// this client. Empty entries extracts the entire archive, keeping both names.
+func (c *Client) ExtractArchive(ctx context.Context, root int64, filename, version string, entries []string, dstRoot int64, dir string) (*Task, error) {
+	base := *c
+	base.ArchiveSource = nil
+	var out struct {
+		Task *Task `json:"task"`
+	}
+	err := base.post(ctx, "/api/archive/extract", map[string]any{
+		"root": root, "path": filename, "version": version, "entries": entries,
+		"dst_root": dstRoot, "dst_dir": dir, "conflict": "rename",
+	}, &out)
+	var status *StatusError
+	if errors.As(err, &status) && status.Code == http.StatusNotFound && status.Msg == "not found" {
+		return nil, errors.New("NAS 不支持服务器本地解压，请先更新 NAS 上的 fileindex")
+	}
+	if err == nil && out.Task == nil {
+		err = errors.New("NAS 没有返回解压任务")
+	}
+	return out.Task, err
+}

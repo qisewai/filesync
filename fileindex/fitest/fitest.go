@@ -45,6 +45,7 @@ type Server struct {
 	// Expired makes the server refuse sessions until the next login.
 	Expired          atomic.Bool
 	HoldArchiveLists atomic.Bool
+	ArchiveExtracts  atomic.Int64
 	// Writable makes root 2 writable, as when its read-only setting is
 	// turned off.
 	Writable atomic.Bool
@@ -146,6 +147,7 @@ func New(t testing.TB) *Server {
 	})
 	api.Handle("GET /api/archive/file", archives)
 	api.Handle("GET /api/archive/export", archives)
+	api.HandleFunc("POST /api/archive/extract", s.extractArchive)
 	api.HandleFunc("GET /api/backup/export", s.export)
 	api.HandleFunc("POST /api/fs/rename", s.rename)
 	api.HandleFunc("POST /api/fs/transfer", s.transfer)
