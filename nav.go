@@ -264,6 +264,8 @@ func (a *app) upward() func() {
 		if b.path != "" {
 			return func() { a.browse(parentDir(b.path), pathBase(b.path)) }
 		}
+	case a.onAdmin() && a.admin.tab == "stats":
+		return a.statsUp(a.admin)
 	}
 	return nil
 }

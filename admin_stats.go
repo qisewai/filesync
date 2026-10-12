@@ -203,14 +203,18 @@ func (a *app) statsFolders(c *ui.Context, m *adminPage, ov *fileindex.Overview) 
 			rootName = r.Name
 		}
 	}
-	crumbs := []string{rootName}
+	crumbs := []string{"全部目录", rootName}
 	if m.statsDir != "" {
 		crumbs = append(crumbs, strings.Split(m.statsDir, "/")...)
 	}
 	chosen := len(crumbs) - 1
 	if ui.Breadcrumbs(c.Key("stats-crumbs"), crumbs, &chosen).Label("统计位置").Changed() && !m.loading {
-		m.statsDir = strings.Join(crumbs[1:chosen+1], "/")
-		a.reloadAdmin()
+		if chosen == 0 {
+			a.statsAll(m)
+		} else {
+			m.statsDir = strings.Join(crumbs[2:chosen+1], "/")
+			a.reloadAdmin()
+		}
 	}
 	var total int64
 	for _, d := range m.dirs {
@@ -220,8 +224,10 @@ func (a *app) statsFolders(c *ui.Context, m *adminPage, ov *fileindex.Overview) 
 		statsEmpty(c)
 		return
 	}
+	// As high as its rows, up to a limit, and as the card where the card
+	// is higher, as beside a longer one: scrolling then only past it.
 	height := min(float32(len(m.dirs))*46+4, 330)
-	ui.List(c.Key("stats-dirs"), &m.dirList, len(m.dirs)).Height(height).Label("文件夹占用列表").Rows(func(row ui.ListRow) {
+	ui.List(c.Key("stats-dirs"), &m.dirList, len(m.dirs)).Basis(height).Grow(1).MinHeight(height).Label("文件夹占用列表").Rows(func(row ui.ListRow) {
 		dir := m.dirs[row.Index]
 		if !dir.IsDir {
 			usageRow(c, "", iconFile, ui.Hex("#8a94a6"), "本层文件", dir.Size, total, dir.Files, nil)
@@ -489,4 +495,28 @@ func categoryLabel(key string) string {
 		return "其他"
 	}
 	return strings.TrimSpace(key)
+}
+
+// statsAll shows the statistics of all the roots.
+func (a *app) statsAll(m *adminPage) {
+	m.scope, m.scopeID, m.statsDir, m.page = "全部目录", 0, "", 1
+	m.selected = map[int64]bool{}
+	a.reloadAdmin()
+}
+
+// statsUp goes from the folder the statistics show to the one holding
+// it, from a root to all of them; nil at the top.
+func (a *app) statsUp(m *adminPage) func() {
+	switch {
+	case m.loading:
+		return nil
+	case m.statsDir != "":
+		return func() {
+			m.statsDir = parentDir(m.statsDir)
+			a.reloadAdmin()
+		}
+	case m.scopeID != 0:
+		return func() { a.statsAll(m) }
+	}
+	return nil
 }

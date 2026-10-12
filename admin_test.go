@@ -286,6 +286,22 @@ func TestNativeStatisticsDrillLocateAndSourceLifecycle(t *testing.T) {
 	if h.a.admin.statsDir != "" {
 		t.Fatal("directory top")
 	}
+	// Up to all the roots, by the crumbs or the toolbar, and back down.
+	h.clickPage("全部目录")
+	if h.a.admin.scopeID != 0 || h.a.admin.scope != "全部目录" {
+		t.Fatalf("scope %q", h.a.admin.scope)
+	}
+	h.clickPage("nas")
+	h.clickPage("目录")
+	h.click("上级文件夹")
+	if h.a.admin.statsDir != "" || h.a.admin.scopeID == 0 {
+		t.Fatalf("up to %q in %q", h.a.admin.statsDir, h.a.admin.scope)
+	}
+	h.tt.Key(ui.Alt, ui.KeyUp)
+	h.settle()
+	if h.a.admin.scopeID != 0 {
+		t.Fatalf("up to scope %q", h.a.admin.scope)
+	}
 	e := h.a.admin.largest[0]
 	h.a.locateManagedEntry(h.a.admin.server, e)
 	h.settle()
