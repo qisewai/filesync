@@ -3,6 +3,7 @@ package main
 import (
 	"os"
 	"path/filepath"
+	"reflect"
 	"testing"
 
 	"filesync/config"
@@ -205,5 +206,27 @@ func TestDirectoryTreeLeavesFromServer(t *testing.T) {
 	h.settle()
 	if h.a.treeNode(sv, 1, "旧服务器").leaf() {
 		t.Fatal("a leaf without the server telling")
+	}
+}
+
+func TestUserDirs(t *testing.T) {
+	home := t.TempDir()
+	conf := t.TempDir()
+	t.Setenv("XDG_CONFIG_HOME", conf)
+	for _, d := range []string{"桌面", "下载", "媒体"} {
+		os.MkdirAll(filepath.Join(home, d), 0o755)
+	}
+	os.WriteFile(filepath.Join(conf, "user-dirs.dirs"), []byte(`# written by xdg-user-dirs-update
+XDG_DESKTOP_DIR="$HOME/桌面"
+XDG_DOWNLOAD_DIR="$HOME/下载"
+XDG_TEMPLATES_DIR="$HOME/"
+XDG_DOCUMENTS_DIR="$HOME/"
+XDG_MUSIC_DIR="$HOME/媒体"
+XDG_VIDEOS_DIR="$HOME/媒体"
+`), 0o644)
+	got := userDirs(home)
+	want := []localRoot{{"桌面", filepath.Join(home, "桌面")}, {"下载", filepath.Join(home, "下载")}, {"音乐", filepath.Join(home, "媒体")}}
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("user dirs %+v", got)
 	}
 }

@@ -7,6 +7,7 @@ import (
 	"io"
 	"net"
 	"net/url"
+	"os"
 	"path"
 	"strings"
 	"time"
@@ -42,6 +43,9 @@ type nasBrowser struct {
 	// asks for.
 	title string
 	local func()
+	// localDir, when set, takes a folder of this computer chosen among the
+	// favorites.
+	localDir func(dir string)
 
 	server *config.Server // the one in use
 	client *fileindex.Client
@@ -396,6 +400,11 @@ func (a *app) nasSaveServer() {
 		b.err = err.Error()
 		return
 	}
+	// A path typed in the path bar starts with the name, up to a slash.
+	if strings.Contains(b.name, "/") {
+		b.err = "服务器名称不能包含“/”。"
+		return
+	}
 	if other := a.store.ServerByAddr(addr); other != nil && other != b.editing {
 		b.err = "已经有这个地址的服务器：" + other.Title()
 		return
@@ -444,6 +453,9 @@ func (a *app) nasView(c *ui.Context) {
 			title = "选择 NAS 上备份到的目录"
 		}
 		ui.Text(c, title).FontSize(18).Bold()
+		if b.pick != nil && b.busy == "" && (b.screen == screenServers || b.screen == screenRoots || b.screen == screenDirs) {
+			a.pickerFavorites(c)
+		}
 		if b.err != "" {
 			notice(c, t.Danger, b.err)
 		}
@@ -833,4 +845,57 @@ func parentDir(p string) string {
 		return d
 	}
 	return ""
+}
+
+// pickerFavorites are the favorites a dialog choosing a directory offers:
+// those of the servers, and of this computer when it takes one.
+func (a *app) pickerFavorites(c *ui.Context) {
+	b := &a.nas
+	t := c.Theme()
+	var favs []*config.Favorite
+	for _, f := range a.store.Favorites {
+		if f.Local != "" && b.localDir != nil || f.Local == "" && a.store.Server(f.Server) != nil {
+			favs = append(favs, f)
+		}
+	}
+	if len(favs) == 0 {
+		return
+	}
+	ui.Row(c.Key("picker-favorites")).Gap(6).Wrap().AlignItems(ui.Center).Label("收藏").Children(func() {
+		ui.Text(c, "收藏：").FontSize(12).TextColor(t.TextMuted)
+		for i, f := range favs {
+			btn := ui.Button(c.Key(i), "").Padding(3, 8).Tooltip(a.favoriteWhere(f)).Label("前往收藏 " + f.Name).Children(func() {
+				ui.Icon(c, iconStarFilled).FontSize(12).TextColor(ui.Hex("#e0a526"))
+				ui.Text(c, a.favoriteTitle(f)).FontSize(12).SingleLine()
+			})
+			if btn.Clicked() {
+				a.pickFavorite(f)
+			}
+		}
+	})
+}
+
+// pickFavorite goes, in the dialog choosing a directory, to a favorite:
+// one of this computer is chosen at once, one of a server opened there
+// to be chosen.
+func (a *app) pickFavorite(f *config.Favorite) {
+	b := &a.nas
+	if f.Local != "" {
+		if fi, err := os.Stat(f.Local); err != nil || !fi.IsDir() {
+			b.err = "收藏的文件夹不存在或无法访问：" + f.Local
+			return
+		}
+		take := b.localDir
+		b.open = false
+		b.gen++
+		take(f.Local)
+		return
+	}
+	sv := a.store.Server(f.Server)
+	if sv == nil {
+		return
+	}
+	b.err = ""
+	b.startServer, b.startRoot, b.startPath = sv.ID, f.Root, f.Path
+	a.nasUse(sv)
 }

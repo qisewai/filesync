@@ -16,6 +16,11 @@ import (
 // app is the window's state.
 type app struct {
 	store *config.Store
+	favs  favorites
+	// pathEditing is the path being typed in the path bar, nil for none;
+	// pathDirs the local folders it read, kept while it edits.
+	pathEditing *pathEdit
+	pathDirs    map[string]*directoryNode
 
 	// post runs a function on the main thread and draws a new frame:
 	// Window.Update in the app, a queue in tests.
@@ -152,6 +157,7 @@ type draft struct {
 func newApp(store *config.Store) *app {
 	a := &app{
 		store:       store,
+		favs:        favorites{missing: map[string]bool{}},
 		selected:    -1,
 		post:        func(fn func()) { fn() },
 		pickDir:     func(string, string) (string, error) { return "", nil },

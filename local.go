@@ -11,6 +11,7 @@ import (
 	"strings"
 	"time"
 
+	"filesync/config"
 	"filesync/fileindex"
 
 	"github.com/egoist/mygo/ui"
@@ -51,6 +52,7 @@ func localRoots() []localRoot {
 	var out []localRoot
 	if home, err := os.UserHomeDir(); err == nil {
 		out = append(out, localRoot{"主目录", home})
+		out = append(out, userDirs(home)...)
 	}
 	if runtime.GOOS == "windows" {
 		for d := 'A'; d <= 'Z'; d++ {
@@ -86,6 +88,71 @@ func localRoots() []localRoot {
 		}
 		if !slices.ContainsFunc(out, func(r localRoot) bool { return r.dir == dir }) {
 			out = append(out, localRoot{name, dir})
+		}
+	}
+	return out
+}
+
+// userDirs are the folders of the desktop, documents, downloads and the
+// like, those there: on Linux as user-dirs.dirs of the desktop sets them,
+// on Windows in the profile.
+func userDirs(home string) []localRoot {
+	names := []struct{ key, name, fallback string }{
+		{"DESKTOP", "桌面", "Desktop"},
+		{"DOCUMENTS", "文档", "Documents"},
+		{"DOWNLOAD", "下载", "Downloads"},
+		{"PICTURES", "图片", "Pictures"},
+		{"MUSIC", "音乐", "Music"},
+		{"VIDEOS", "视频", "Videos"},
+	}
+	set := map[string]string{}
+	if runtime.GOOS != "windows" {
+		conf := os.Getenv("XDG_CONFIG_HOME")
+		if conf == "" {
+			conf = filepath.Join(home, ".config")
+		}
+		set = readUserDirs(filepath.Join(conf, "user-dirs.dirs"), home)
+	}
+	var out []localRoot
+	for _, n := range names {
+		dir, ok := set[n.key]
+		if !ok {
+			dir = filepath.Join(home, n.fallback)
+		}
+		// The desktop sets a folder it does not use to the home itself.
+		if filepath.Clean(dir) == filepath.Clean(home) {
+			continue
+		}
+		// Two set to one folder show once: the tree keys its nodes by it.
+		if slices.ContainsFunc(out, func(r localRoot) bool { return r.dir == dir }) {
+			continue
+		}
+		if fi, err := os.Stat(dir); err == nil && fi.IsDir() {
+			out = append(out, localRoot{n.name, dir})
+		}
+	}
+	return out
+}
+
+// readUserDirs reads the folders of user-dirs.dirs, by key, as DOWNLOAD,
+// from lines as XDG_DOWNLOAD_DIR="$HOME/下载".
+func readUserDirs(file, home string) map[string]string {
+	out := map[string]string{}
+	b, err := os.ReadFile(file)
+	if err != nil {
+		return out
+	}
+	for _, line := range strings.Split(string(b), "\n") {
+		key, value, ok := strings.Cut(strings.TrimSpace(line), "=")
+		if !ok || !strings.HasPrefix(key, "XDG_") || !strings.HasSuffix(key, "_DIR") {
+			continue
+		}
+		value = strings.Trim(value, `"`)
+		if rest, ok := strings.CutPrefix(value, "$HOME"); ok {
+			value = home + rest
+		}
+		if filepath.IsAbs(value) {
+			out[strings.TrimSuffix(strings.TrimPrefix(key, "XDG_"), "_DIR")] = value
 		}
 	}
 	return out
@@ -277,12 +344,8 @@ func (b *localBrowser) chosen() []fileindex.Entry {
 
 // localPath is, under the toolbar, where the page is.
 func (a *app) localPath(c *ui.Context) {
-	b := a.local
-	crumbs, dirs := localCrumbs(b.dir)
-	chosen := len(crumbs) - 1
-	if ui.Breadcrumbs(c, crumbs, &chosen).Label("本机位置").Shrink(1).MinWidth(0).Changed() && chosen < len(dirs) {
-		a.openLocal(dirs[chosen])
-	}
+	a.localPathBar(c, a.local.dir)
+	a.favoriteButton(c)
 }
 
 // localView is the page of a local directory: its commands, and its
@@ -370,6 +433,9 @@ func (a *app) localView(c *ui.Context) {
 			}
 			if m.Item("打开").Chosen() {
 				open(es[0])
+			}
+			if es[0].IsDir {
+				a.favoriteMenuItem(m, &config.Favorite{Name: es[0].Name, Local: es[0].Path})
 			}
 			m.Separator()
 		}
@@ -488,17 +554,15 @@ func (a *app) localTop(dir string) string {
 	return top
 }
 
-// revealLocal opens the branches down to dir, from the nearest place it
-// is in.
+// revealLocal opens the branches down to dir, and dir's, from the nearest
+// place it is in, as the tree of a server does.
 func (a *app) revealLocal(dir string) {
 	top := a.localTop(dir)
 	if top == "" {
 		return
 	}
 	for d := dir; ; d = filepath.Dir(d) {
-		if d != dir {
-			a.localNode(top, d).open = true
-		}
+		a.localNode(top, d).open = true
 		if d == top || filepath.Dir(d) == d {
 			break
 		}
@@ -597,6 +661,8 @@ func (a *app) localDirectoryView(c *ui.Context, top, dir, name string, svg *ui.S
 		if m.Item("打开").Chosen() {
 			a.openLocal(dir)
 		}
+		a.favoriteMenuItem(m, &config.Favorite{Name: name, Local: dir})
+		m.Separator()
 		if m.Item("创建备份任务…").Chosen() {
 			a.newTaskFrom(dir, nil)
 		}
@@ -656,6 +722,18 @@ func (a *app) localItems(c *ui.Context) {
 			svg = iconDisk
 		case r.name == "网络位置（KDE）":
 			svg = iconNetwork
+		case r.name == "桌面":
+			svg = iconLaptop
+		case r.name == "文档":
+			svg = iconDoc
+		case r.name == "下载":
+			svg = iconSave
+		case r.name == "图片":
+			svg = iconImage
+		case r.name == "音乐":
+			svg = iconAudio
+		case r.name == "视频":
+			svg = iconVideo
 		}
 		a.localDirectoryView(c, r.dir, r.dir, r.name, svg)
 	}

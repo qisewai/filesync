@@ -236,23 +236,11 @@ func paths(es []fileindex.Entry) []string {
 // browserPath is, under the toolbar, where the page is.
 func (a *app) browserPath(c *ui.Context) {
 	b := a.br
-	crumbs := []string{b.root.Name}
-	if b.path != "" {
-		crumbs = append(crumbs, strings.Split(b.path, "/")...)
-	}
-	chosen := len(crumbs) - 1
-	if ui.Breadcrumbs(c, crumbs, &chosen).Label("位置").Shrink(1).MinWidth(0).Changed() {
-		if chosen == 0 {
-			a.browse("")
-		} else if chosen <= strings.Count(b.path, "/")+1 && b.path != "" {
-			a.browse(strings.Join(crumbs[1:chosen+1], "/"))
-		} else {
-			a.browse(b.path)
-		}
-	}
+	a.serverPathBar(c, b.server, b.root, b.path)
 	if b.root.ReadOnly {
 		ui.Badge(c, "只读")
 	}
+	a.favoriteButton(c)
 }
 
 // browserView is the page of a root: its commands, and its files.
@@ -417,6 +405,9 @@ func (a *app) entryMenu(m *ui.Menu, es []fileindex.Entry, writable bool) {
 	}
 	if n == 1 && m.Item("打开").Chosen() {
 		a.openEntry(es[0])
+	}
+	if n == 1 && es[0].IsDir && a.br != nil {
+		a.favoriteMenuItem(m, favoriteOf(a.br.server, a.br.root, es[0].Path))
 	}
 	if n == 1 && !es[0].IsDir {
 		if m.Item("系统程序打开").Chosen() {

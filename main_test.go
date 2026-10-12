@@ -380,8 +380,10 @@ func TestReadOnlyRoot(t *testing.T) {
 	}
 	f.Writable.Store(false)
 
-	// A root that can be written says nothing.
-	h.click("服务器")
+	// A root that can be written says nothing. (The sidebar has a
+	// section named 服务器 too: back to the dialog's list directly.)
+	h.a.nas.screen = screenServers
+	h.tt.Frame()
 	h.click("浏览")
 	h.click("/data/nas")
 	if h.tt.HasText("打开 fileindex 设置") {

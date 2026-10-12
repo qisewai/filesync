@@ -118,3 +118,41 @@ func TestContents(t *testing.T) {
 		t.Errorf("%q", task.BackupPath())
 	}
 }
+
+func TestFavorites(t *testing.T) {
+	dir := t.TempDir()
+	s := &Store{Dir: dir}
+	sv := &Server{Name: "家里", Addr: "nas:8090"}
+	s.AddServer(sv)
+	local := &Favorite{Name: "项目", Local: "/home/example/项目"}
+	nas := &Favorite{Name: "照片", Server: sv.ID, Root: 1, RootName: "nas", Path: "照片/2026"}
+	s.AddFavorite(local)
+	s.AddFavorite(nas)
+	s.AddFavorite(&Favorite{Name: "again", Local: "/home/example/项目"})
+	if len(s.Favorites) != 2 || s.Favorite(&Favorite{Server: sv.ID, Root: 1, Path: "照片/2026"}) != nas {
+		t.Fatalf("favorites %+v", s.Favorites)
+	}
+	s.MoveFavorite(nas, -1)
+	s.MoveFavorite(nas, -1) // already first
+	if s.Favorites[0] != nas {
+		t.Fatalf("order %+v", s.Favorites)
+	}
+	if err := s.Save(); err != nil {
+		t.Fatal(err)
+	}
+	again, err := Load(dir)
+	if err != nil || len(again.Favorites) != 2 || !reflect.DeepEqual(again.Favorites[0], nas) || !reflect.DeepEqual(again.Favorites[1], local) {
+		t.Fatalf("loaded %+v, %v", again.Favorites, err)
+	}
+	// Removing a server drops its favorites.
+	if err := again.RemoveServer(sv.ID); err != nil {
+		t.Fatal(err)
+	}
+	if len(again.Favorites) != 1 || again.Favorites[0].Local == "" {
+		t.Fatalf("after removing the server %+v", again.Favorites)
+	}
+	again.RemoveFavorite(local)
+	if len(again.Favorites) != 0 {
+		t.Fatalf("after removing %+v", again.Favorites)
+	}
+}

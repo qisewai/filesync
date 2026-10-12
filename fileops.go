@@ -111,8 +111,7 @@ func (a *app) downloadIn(f *nasFiles, es []fileindex.Entry) { a.downloadTo(f, fa
 // entries there, asking first to replace what has their names; with move,
 // the entries then go to the trash of the server.
 func (a *app) downloadTo(f *nasFiles, move bool, es []fileindex.Entry, title string) {
-	c, ok := a.filesClient(f)
-	if !ok || len(es) == 0 {
+	if len(es) == 0 {
 		return
 	}
 	go func() {
@@ -125,23 +124,30 @@ func (a *app) downloadTo(f *nasFiles, move bool, es []fileindex.Entry, title str
 				f.fail(err.Error())
 				return
 			}
-			if dest == "" {
-				return
-			}
-			var taken []string
-			for _, e := range es {
-				if _, err := os.Lstat(filepath.Join(dest, e.Name)); err == nil {
-					taken = append(taken, e.Name)
-				}
-			}
-			start := func() { a.startDownloadFrom(c, f, es, dest, move) }
-			if len(taken) == 0 {
-				start()
-				return
-			}
-			a.ask("替换本机同名的项？", fmt.Sprintf("%s 中已经有 %s 等 %d 项与下载的同名。文件会被替换，文件夹会合并。", dest, strings.Join(taken[:min(3, len(taken))], "、"), len(taken)), "替换", start)
+			a.downloadInto(f, move, es, dest)
 		})
 	}()
+}
+
+// downloadInto downloads the entries into the directory dest of this
+// computer, asking first to replace what has their names.
+func (a *app) downloadInto(f *nasFiles, move bool, es []fileindex.Entry, dest string) {
+	c, ok := a.filesClient(f)
+	if !ok || len(es) == 0 || dest == "" {
+		return
+	}
+	var taken []string
+	for _, e := range es {
+		if _, err := os.Lstat(filepath.Join(dest, e.Name)); err == nil {
+			taken = append(taken, e.Name)
+		}
+	}
+	start := func() { a.startDownloadFrom(c, f, es, dest, move) }
+	if len(taken) == 0 {
+		start()
+		return
+	}
+	a.ask("替换本机同名的项？", fmt.Sprintf("%s 中已经有 %s 等 %d 项与下载的同名。文件会被替换，文件夹会合并。", dest, strings.Join(taken[:min(3, len(taken))], "、"), len(taken)), "替换", start)
 }
 
 // transferIn asks for a directory, then copies or moves the entries
@@ -187,6 +193,7 @@ func (a *app) transferIn(f *nasFiles, move bool, es []fileindex.Entry) {
 	})
 	a.nas.title = kind + "到"
 	a.nas.local = func() { a.downloadTo(f, move, es, kind+"到本机") }
+	a.nas.localDir = func(dir string) { a.downloadInto(f, move, es, dir) }
 }
 
 // relayIn copies or moves the entries into dir of a root of another

@@ -204,6 +204,8 @@ func (a *app) directoryMenu(m *ui.Menu, sv *config.Server, root fileindex.Root, 
 	if m.Item("打开").Chosen() {
 		a.showDirectory(sv.ID, root, dir)
 	}
+	a.favoriteMenuItem(m, favoriteOf(sv.ID, root, dir))
+	m.Separator()
 	if m.Item("新建文件夹…").Disabled(!writable).Chosen() {
 		inside(func() { a.br.naming, a.br.newName = true, "" })()
 	}

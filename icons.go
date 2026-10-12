@@ -59,6 +59,8 @@ var (
 	iconPlay        = icon(`<path d="M7 5v14l11-7z"/>`)
 	iconStop        = icon(`<rect x="6" y="6" width="12" height="12" rx="2"/>`)
 	iconCheck       = icon(`<path d="m5 12 5 5 9-10"/>`)
+	iconStar        = icon(`<path d="M12 3.5l2.6 5.3 5.9.9-4.3 4.1 1 5.8L12 16.9l-5.2 2.7 1-5.8-4.3-4.1 5.9-.9z"/>`)
+	iconStarFilled  = icon(`<path fill="currentColor" d="M12 3.5l2.6 5.3 5.9.9-4.3 4.1 1 5.8L12 16.9l-5.2 2.7 1-5.8-4.3-4.1 5.9-.9z"/>`)
 	iconLink        = icon(`<path d="M9 15l6-6"/><path d="M10 6l1-1a4 4 0 0 1 6 6l-1 1"/><path d="M14 18l-1 1a4 4 0 0 1-6-6l1-1"/>`)
 )
 

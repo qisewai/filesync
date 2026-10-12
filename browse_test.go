@@ -43,6 +43,22 @@ func (h *harness) waitTransfers() {
 	}
 }
 
+// waitStarted runs posted work until there are n transfers: those that
+// start once a check off the main thread answers.
+func (h *harness) waitStarted(n int) {
+	h.t.Helper()
+	deadline := time.After(5 * time.Second)
+	for len(h.a.transfers) < n {
+		select {
+		case fn := <-h.queue:
+			fn()
+			h.tt.Frame()
+		case <-deadline:
+			h.t.Fatal("the transfer did not start")
+		}
+	}
+}
+
 func TestNativeBrowserTreeSearchAndFileOperations(t *testing.T) {
 	f := fitest.New(t)
 	os.MkdirAll(filepath.Join(f.Root, "项目", "子目录"), 0755)
@@ -362,6 +378,7 @@ func TestCopyAndMoveToAnotherServer(t *testing.T) {
 	h.clickPage("照片")
 	h.click("移动到…")
 	pick("")
+	h.waitStarted(2)
 	h.waitTransfers()
 	if b, _ := os.ReadFile(filepath.Join(f2.Root, "照片", "a.jpg")); string(b) != "photo" {
 		t.Fatalf("move %q", b)
@@ -437,6 +454,7 @@ func TestCopyAndMoveBetweenComputerAndServer(t *testing.T) {
 	h.a.nas.sel = 0
 	h.click("打开")
 	h.click("选择当前目录“nas”")
+	h.waitStarted(3)
 	h.waitTransfers()
 	if b, _ := os.ReadFile(filepath.Join(f.Root, "新.txt")); string(b) != "new" {
 		t.Fatalf("copy to server %q", b)
@@ -450,6 +468,7 @@ func TestCopyAndMoveBetweenComputerAndServer(t *testing.T) {
 	h.a.nas.sel = 0
 	h.click("打开")
 	h.click("选择当前目录“nas”")
+	h.waitStarted(4)
 	h.waitTransfers()
 	if b, _ := os.ReadFile(filepath.Join(f.Root, "照片", "a.jpg")); string(b) != "photo" {
 		t.Fatalf("move to server %q", b)

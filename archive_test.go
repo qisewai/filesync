@@ -133,7 +133,7 @@ func TestArchiveBrowserLocalExportAndPicker(t *testing.T) {
 	dest := t.TempDir()
 	h.a.pickDir = func(string, string) (string, error) { return dest, nil }
 	h.a.downloadTo(h.a.archiveFiles(), false, []fileindex.Entry{e}, "解压到本机")
-	h.settle()
+	h.waitStarted(1)
 	h.waitTransfers()
 	b, err := os.ReadFile(filepath.Join(dest, e.Name))
 	if err != nil || string(b) != "压缩包内的文本" {

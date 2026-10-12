@@ -306,6 +306,7 @@ func (a *app) archiveExtract(es []fileindex.Entry) {
 	}
 	a.nas.title = "解压到"
 	a.nas.local = func() { a.downloadTo(f, false, es, "解压到本机") }
+	a.nas.localDir = func(dir string) { a.downloadInto(f, false, es, dir) }
 }
 func (a *app) extractArchive(server string, c *fileindex.Client, e fileindex.Entry) {
 	if c != nil && !c.InArchive() {

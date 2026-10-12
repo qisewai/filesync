@@ -60,6 +60,7 @@ func (a *app) view(c *ui.Context) {
 	a.recordHistory()
 	a.filePreviewView(c)
 	a.fileDialogs(c)
+	a.favoriteDialogs(c)
 	a.taskDialog(c)
 	a.nasView(c)
 	a.localIndexDialog(c)
@@ -139,27 +140,14 @@ func (a *app) sidebar(c *ui.Context) {
 					a.openSearch(query)
 					a.focusSearch = true
 				})
+				favs := ui.TreeItem(c.Key("favorites"), "", a.sectionOpen("favorites"), func() { a.favoriteItems(c) })
+				// The sections, and the servers, have no page: a click opens
+				// or closes them, as their arrows do.
+				favs.Children(func() { labeled(c, iconStar, "收藏", t.Text) }).Label("收藏").OnClick(a.toggleSection("favorites"))
 				local := ui.TreeItem(c.Key("local"), "", a.sectionOpen("local"), func() { a.localItems(c) })
-				local.Children(func() { labeled(c, iconLaptop, "本机", t.Text) }).Label("本机")
-				for _, sv := range a.store.Servers {
-					node := ui.TreeItem(c.Key("server/"+sv.ID), "", a.sectionOpen("server/"+sv.ID), func() {
-						a.serverItems(c, sv)
-					})
-					tip := sv.Addr
-					node.Children(func() {
-						if a.unreachable(sv) {
-							// Grayed, as what cannot be used now.
-							dim := t.TextMuted.Alpha(0.55)
-							ui.Icon(c, iconServer).FontSize(15).TextColor(dim)
-							ui.Text(c, sv.Title()).SingleLine().Grow(1).Shrink(1).MinWidth(0).TextColor(dim)
-							tip = sv.Addr + " · 无法连接，点右侧图标或右键重新连接"
-						} else {
-							labeled(c, iconServer, sv.Title(), t.Text)
-						}
-						a.serverMark(c, sv)
-					}).Label(sv.Title()).Tooltip(tip)
-					node.ContextMenu(func(m *ui.Menu) { a.serverMenu(m, sv) })
-				}
+				local.Children(func() { labeled(c, iconLaptop, "本机", t.Text) }).Label("本机").OnClick(a.toggleSection("local"))
+				servers := ui.TreeItem(c.Key("servers"), "", a.sectionOpen("servers"), func() { a.serverList(c) })
+				servers.Children(func() { labeled(c, iconRoots, "服务器", t.Text) }).Label("服务器").OnClick(a.toggleSection("servers"))
 				bk := a.navItem(c, "backup", iconBackup, "备份任务", func() { a.place = "backup" })
 				a.backupMark(c, bk)
 				a.navItem(c, "transfer-history", iconTasks, "传输记录", func() { a.showTransfers = true })
@@ -177,6 +165,53 @@ func (a *app) sidebar(c *ui.Context) {
 			})
 		})
 	})
+}
+
+// serverList is the servers in the sidebar, each with its directories.
+func (a *app) serverList(c *ui.Context) {
+	t := c.Theme()
+	if len(a.store.Servers) == 0 {
+		a.navItem(c, "add-server", iconPlus, "添加服务器…", func() {
+			a.openServers()
+			a.nasStartEdit(nil)
+		})
+		return
+	}
+	for _, sv := range a.store.Servers {
+		node := ui.TreeItem(c.Key("server/"+sv.ID), "", a.sectionOpen("server/"+sv.ID), func() {
+			a.serverItems(c, sv)
+		})
+		tip := sv.Addr
+		node.Children(func() {
+			if a.unreachable(sv) {
+				// Grayed, as what cannot be used now.
+				dim := t.TextMuted.Alpha(0.55)
+				ui.Icon(c, iconServer).FontSize(15).TextColor(dim)
+				ui.Text(c, sv.Title()).SingleLine().Grow(1).Shrink(1).MinWidth(0).TextColor(dim)
+				tip = sv.Addr + " · 无法连接，点右侧图标或右键重新连接"
+			} else {
+				labeled(c, iconServer, sv.Title(), t.Text)
+			}
+			a.serverMark(c, sv)
+		}).Label(sv.Title()).Tooltip(tip)
+		node.ContextMenu(func(m *ui.Menu) { a.serverMenu(m, sv) })
+		// Signed out, a click signs in; else it opens or closes it.
+		node.OnClick(func() {
+			if sv.Token == "" {
+				a.openLogin(sv.ID, func() {})
+				return
+			}
+			a.toggleSection("server/" + sv.ID)()
+		})
+	}
+}
+
+// toggleSection opens a branch of the sidebar, or closes it.
+func (a *app) toggleSection(key string) func() {
+	return func() {
+		open := a.sectionOpen(key)
+		*open = !*open
+	}
 }
 
 // backupMark shows, beside the backup tasks in the sidebar, the backup

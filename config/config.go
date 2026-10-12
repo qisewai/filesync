@@ -11,6 +11,7 @@ import (
 	"os"
 	"path"
 	"path/filepath"
+	"slices"
 	"sort"
 	"strings"
 	"time"
@@ -189,6 +190,56 @@ type Store struct {
 	LocalIndex  *LocalIndexSettings
 	// RecentSearches are the searches made last, the latest first.
 	RecentSearches []string
+	// Favorites are the folders pinned in the sidebar, in its order.
+	Favorites []*Favorite
+}
+
+// Favorite is a folder pinned in the sidebar: of this computer when Local
+// is set, else the directory Path of a root of a server.
+type Favorite struct {
+	Name     string `json:"name"`
+	Local    string `json:"local,omitempty"`
+	Server   string `json:"server,omitempty"`
+	Root     int64  `json:"root,omitempty"`
+	RootName string `json:"rootName,omitempty"`
+	Path     string `json:"path,omitempty"`
+}
+
+// Same reports whether f is the folder g is.
+func (f *Favorite) Same(g *Favorite) bool {
+	return f.Local == g.Local && f.Server == g.Server && f.Root == g.Root && f.Path == g.Path
+}
+
+// Favorite returns the favorite of the folder f is, or nil.
+func (s *Store) Favorite(f *Favorite) *Favorite {
+	for _, g := range s.Favorites {
+		if g.Same(f) {
+			return g
+		}
+	}
+	return nil
+}
+
+// AddFavorite pins a folder last, once.
+func (s *Store) AddFavorite(f *Favorite) {
+	if s.Favorite(f) == nil {
+		s.Favorites = append(s.Favorites, f)
+	}
+}
+
+// RemoveFavorite unpins a folder.
+func (s *Store) RemoveFavorite(f *Favorite) {
+	s.Favorites = slices.DeleteFunc(s.Favorites, func(g *Favorite) bool { return g.Same(f) })
+}
+
+// MoveFavorite moves a favorite by delta places, within the list.
+func (s *Store) MoveFavorite(f *Favorite, delta int) {
+	i := slices.IndexFunc(s.Favorites, func(g *Favorite) bool { return g.Same(f) })
+	j := i + delta
+	if i < 0 || j < 0 || j >= len(s.Favorites) {
+		return
+	}
+	s.Favorites[i], s.Favorites[j] = s.Favorites[j], s.Favorites[i]
 }
 
 // maxRecentSearches is how many searches RecentSearches keeps.
@@ -240,6 +291,7 @@ type fileData struct {
 	QuitOnClose  bool                `json:"quitOnClose,omitempty"`
 	LocalIndex   *LocalIndexSettings `json:"localIndex,omitempty"`
 	Recent       []string            `json:"recentSearches,omitempty"`
+	Favorites    []*Favorite         `json:"favorites,omitempty"`
 }
 
 // Load reads the store in dir; a directory without it has nothing.
@@ -260,6 +312,7 @@ func Load(dir string) (*Store, error) {
 	s.SidebarWidth, s.QuitOnClose = data.SidebarWidth, data.QuitOnClose
 	s.LocalIndex = data.LocalIndex
 	s.RecentSearches = data.Recent
+	s.Favorites = data.Favorites
 	addrs := make([]string, 0, len(data.Sessions))
 	for addr := range data.Sessions {
 		addrs = append(addrs, addr)
@@ -286,7 +339,7 @@ func (s *Store) Save() error {
 	if err := os.MkdirAll(s.Dir, 0o755); err != nil {
 		return err
 	}
-	data := fileData{Servers: s.Servers, Tasks: s.Tasks, SidebarWidth: s.SidebarWidth, QuitOnClose: s.QuitOnClose, LocalIndex: s.LocalIndex, Recent: s.RecentSearches}
+	data := fileData{Servers: s.Servers, Tasks: s.Tasks, SidebarWidth: s.SidebarWidth, QuitOnClose: s.QuitOnClose, LocalIndex: s.LocalIndex, Recent: s.RecentSearches, Favorites: s.Favorites}
 	if data.Servers == nil {
 		data.Servers = []*Server{}
 	}
@@ -358,6 +411,7 @@ func (s *Store) RemoveServer(id string) error {
 			break
 		}
 	}
+	s.Favorites = slices.DeleteFunc(s.Favorites, func(f *Favorite) bool { return f.Server == id })
 	return nil
 }
 
