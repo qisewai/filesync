@@ -837,6 +837,7 @@ func (a *app) systemOpenSource(server string, c *fileindex.Client, e fileindex.E
 	// not silently overwrite those edits. A new NAS version gets a new directory.
 	if !mediaFile(e) || download {
 		if fi, err := os.Stat(dest); err == nil && fi.Mode().IsRegular() {
+			a.recordOpenedFile(server, e.Name, dest)
 			a.openPath(dest)
 			return
 		}
@@ -885,10 +886,15 @@ func (a *app) systemOpenSource(server string, c *fileindex.Client, e fileindex.E
 	tr := a.addTransfer("下载并打开", e.Name)
 	tr.server = server
 	tr.total = e.Size
+	tr.localDir = filepath.Dir(dest)
+	tr.localFile = dest
 	ctx, cancel := context.WithCancel(context.Background())
 	tr.cancel = cancel
+	a.saveTransferHistory()
 	go func() {
-		err := fileindex.DownloadProxyFile(ctx, address, dest, func(p fileindex.Progress) { a.post(func() { tr.done = p.Done; tr.total = p.Total }) })
+		err := fileindex.DownloadProxyFile(ctx, address, dest, func(p fileindex.Progress) {
+			a.post(func() { tr.done, tr.total, tr.folderReady = p.Done, p.Total, true })
+		})
 		a.post(func() {
 			defer cancel()
 			if err == nil && ctx.Err() != nil {

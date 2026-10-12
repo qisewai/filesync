@@ -83,10 +83,10 @@ func TestTransfersPopover(t *testing.T) {
 	h.want("a.txt")
 	h.a.finishTransfer(tr, nil, nil)
 	h.tt.Frame()
-	h.want("传输已完成")
+	h.want("传输记录 · 1 项")
 	h.click("清除已完成")
 	h.tt.Frame()
-	if len(h.a.transfers) != 0 || h.tt.HasText("传输已完成") {
+	if len(h.a.transfers) != 0 || !h.tt.HasText("暂无传输记录") {
 		t.Fatal("not cleared")
 	}
 }

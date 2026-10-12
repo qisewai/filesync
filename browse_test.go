@@ -137,6 +137,11 @@ func TestNativeBrowserUploadDownloadAndTasks(t *testing.T) {
 	h.want("上传")
 	h.want("下载")
 	h.want("复制")
+	for _, tr := range h.a.transfers {
+		if tr.kind == "下载" && (tr.localDir != dest || !tr.folderReady) {
+			t.Fatalf("download directory missing: %+v", tr)
+		}
+	}
 }
 
 func TestTaskSnapshotRecoversMissingEvents(t *testing.T) {

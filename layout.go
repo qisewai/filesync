@@ -29,7 +29,7 @@ func (a *app) view(c *ui.Context) {
 			a.nav.View(c, func(r *ui.Route) {
 				r.Title(a.pageTitle())
 				ui.Column(c).Grow(1).MinHeight(0).Padding(10, 24, 16, 24).Gap(12).Children(func() {
-					if a.errorMsg != "" && a.place != "" && a.place != "backup" {
+					if a.errorMsg != "" && a.place != "backup" {
 						closableNotice(c, c.Theme().Danger, a.errorMsg, func() { a.errorMsg = "" })
 					}
 					a.page(c)
@@ -119,9 +119,6 @@ func (a *app) welcome(c *ui.Context) {
 			}
 			return
 		}
-		if a.errorMsg != "" {
-			closableNotice(c, t.Danger, a.errorMsg, func() { a.errorMsg = "" })
-		}
 		ui.Text(c, "从左侧选择 NAS 上的目录，或在“本机”中选择要备份的文件。").TextColor(t.TextMuted)
 		if ui.Button(c, "浏览本机文件").Clicked() {
 			a.openLocal(a.startLocal())
@@ -165,6 +162,7 @@ func (a *app) sidebar(c *ui.Context) {
 				}
 				bk := a.navItem(c, "backup", iconBackup, "备份任务", func() { a.place = "backup" })
 				a.backupMark(c, bk)
+				a.navItem(c, "transfer-history", iconTasks, "传输记录", func() { a.showTransfers = true })
 			}).Label("位置")
 		})
 		ui.Row(c).Padding(8).Gap(6).AlignItems(ui.Center).BorderWidth(1, 0, 0, 0).BorderColor(t.Border).Children(func() {

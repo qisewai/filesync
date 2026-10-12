@@ -128,6 +128,13 @@ func TestNativePreviewTextImageNavigationAndSystemOpen(t *testing.T) {
 	if opened == "" {
 		t.Fatal("cached open failed")
 	}
+	if len(h.a.transfers) != 2 || h.a.transfers[0].kind != "打开" || h.a.transfers[0].localFile != cached {
+		t.Fatal("cached reopening missing from history")
+	}
+	flushHistory(t, h.a)
+	if saved := readHistory(t, h.a.store.Dir); len(saved.Items) != 2 || saved.Items[0].File != cached {
+		t.Fatal("cached open path not persisted")
+	}
 	data, err = os.ReadFile(opened)
 	if err != nil || string(data) != "local edit" {
 		t.Fatal("reopening cache overwrote local application edits")
@@ -185,6 +192,9 @@ func TestMediaOpenUsesPlaylistProxyAndFallback(t *testing.T) {
 	// Downloaded first, it is a transfer.
 	if len(h.a.transfers) != 1 || h.a.transfers[0].kind != "下载并打开" {
 		t.Fatalf("transfers %d", len(h.a.transfers))
+	}
+	if tr := h.a.transfers[0]; tr.localDir != filepath.Dir(opened) || !tr.folderReady {
+		t.Fatalf("download cache directory missing: %+v", tr)
 	}
 	data, err = os.ReadFile(opened)
 	if err != nil || string(data) != "0123456789" || strings.HasSuffix(opened, ".m3u") {

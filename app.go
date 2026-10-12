@@ -117,12 +117,13 @@ type app struct {
 	docLoad func(url string)
 	docErr  string
 
-	transfers     []*transfer
-	transferSeq   int
-	showTransfers bool
-	watching      map[string]func() // stops following a server's events
-	noEvents      bool              // tests: no events followed
-	closed        bool
+	transferHistory *transferHistoryWriter
+	transfers       []*transfer
+	transferSeq     int
+	showTransfers   bool
+	watching        map[string]func() // stops following a server's events
+	noEvents        bool              // tests: no events followed
+	closed          bool
 
 	thumbs     map[string]*thumbOf
 	thumbSlots chan struct{}
@@ -186,6 +187,7 @@ func newApp(store *config.Store) *app {
 	a.tasks.Selected = &a.selected
 	a.tasks.Key = func(i int) any { return a.store.Tasks[i].ID }
 	a.tasks.Label = func(i int) string { return a.store.Tasks[i].Name }
+	a.loadTransferHistory()
 	return a
 }
 
@@ -605,6 +607,12 @@ func (a *app) maybeClose() {
 }
 
 func (a *app) stopBackground() {
+	if !a.closed {
+		a.saveTransferHistory()
+		if a.transferHistory != nil {
+			a.transferHistory.close()
+		}
+	}
 	if a.sidebarMoved && !a.closed {
 		a.sidebarMoved = false
 		a.save()

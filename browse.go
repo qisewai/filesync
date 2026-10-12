@@ -700,11 +700,16 @@ func (a *app) startDownloadFrom(c *fileindex.Client, f *nasFiles, es []fileindex
 	}
 	tr := a.addTransfer(kind, title+" → "+dest)
 	tr.server = f.server
+	tr.localDir, tr.folderReady = dest, true
+	if len(es) == 1 && !es[0].IsDir {
+		tr.localFile = filepath.Join(dest, es[0].Name)
+	}
 	if len(es) == 1 && !es[0].IsDir {
 		tr.total = es[0].Size
 	}
 	ctx, cancel := context.WithCancel(context.Background())
 	tr.cancel = cancel
+	a.saveTransferHistory()
 	root := es[0].Root
 	onProgress := func(p fileindex.Progress) {
 		a.post(func() { tr.done, tr.current = p.Done, p.Current; tr.total = max(p.Total, tr.total) })

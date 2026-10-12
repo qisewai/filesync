@@ -54,6 +54,14 @@ func main() {
 		log.Fatalf("无法读取设置 %s: %v", dir, err)
 	}
 	a := newApp(store)
+	defer func() {
+		a.stopBackground()
+		if a.transferHistory != nil {
+			if err := a.transferHistory.wait(); err != nil {
+				log.Printf("保存传输记录失败：%v", err)
+			}
+		}
+	}()
 	a.localCachePath, err = localindex.DefaultSnapshotPath()
 	if err != nil {
 		a.errorMsg = "无法确定本机索引快照位置：" + err.Error()
@@ -158,6 +166,10 @@ func main() {
 		})
 	})
 	if err := mygo.App.Run(); err != nil {
+		a.stopBackground()
+		if a.transferHistory != nil {
+			a.transferHistory.wait()
+		}
 		log.Fatal(err)
 	}
 }

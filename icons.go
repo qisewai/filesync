@@ -42,6 +42,7 @@ var (
 	iconActual      = icon(`<rect x="3" y="5" width="18" height="14" rx="2"/><path d="M8 10v4"/><path d="M16 10v4"/><path d="M12 10.5h.01"/><path d="M12 13.5h.01"/>`)
 	iconOpenOut     = icon(`<path d="M14 4h6v6"/><path d="m20 4-9 9"/><path d="M18 14v4a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h4"/>`)
 	iconSave        = icon(`<path d="M12 4v11"/><path d="m7 10 5 5 5-5"/><path d="M5 20h14"/>`)
+	iconSaveOpen    = icon(`<path d="M7 3v11"/><path d="m3 10 4 4 4-4"/><path d="M3 20h18"/><path d="M15 4h6v6"/><path d="m21 4-8 8"/>`)
 	iconUp          = icon(`<path d="M12 19V5"/><path d="m5 12 7-7 7 7"/>`)
 	iconSearch      = icon(`<circle cx="11" cy="11" r="7"/><path d="m20 20-4-4"/>`)
 	iconChevronDown = icon(`<path d="m6 9 6 6 6-6"/>`)

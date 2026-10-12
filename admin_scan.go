@@ -138,6 +138,7 @@ func (a *app) trackedScan(c *fileindex.Client, tr *transfer, j *fileindex.ScanJo
 
 func (a *app) trackScan(c *fileindex.Client, tr *transfer, j *fileindex.ScanJob) {
 	tr.scanJob = j.ID
+	a.saveTransferHistory()
 	a.trackedScan(c, tr, j)
 	if !tr.running() {
 		return

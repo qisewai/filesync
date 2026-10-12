@@ -31,7 +31,12 @@ func newHarness(t *testing.T, store *config.Store) *harness {
 	h.a.post = func(fn func()) { h.queue <- fn }
 	h.a.noEvents = true
 	h.a.localRoots = []localRoot{} // none of the computer's own
-	t.Cleanup(h.a.stopBackground)
+	t.Cleanup(func() {
+		h.a.stopBackground()
+		if h.a.transferHistory != nil {
+			h.a.transferHistory.wait()
+		}
+	})
 	h.tt = ui.NewTester(h.a.view, 980, 680)
 	return h
 }

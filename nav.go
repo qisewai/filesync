@@ -278,15 +278,10 @@ func pathBase(p string) string {
 
 // statusBar is the bar under the pages: what the page shows and has
 // chosen, then the transfers, and the state of the index of this
-// computer's files; pages of neither, without transfers, have none.
+// computer's files. The history entry remains available on every page.
 func (a *app) statusBar(c *ui.Context) {
 	t := c.Theme()
 	onTrash := a.recycle != nil && a.place == trashPlace(a.recycle.server)
-	searched := a.onSearch() && len(a.gsearch.groups) > 0
-	if !a.onArchive() && !a.onLocal() && !a.onRoot() && !onTrash && !searched && len(a.transfers) == 0 {
-		a.showTransfers = false
-		return
-	}
 	ui.Row(c).Padding(4, 16).Gap(10).AlignItems(ui.Center).MinHeight(34).BorderWidth(1, 0, 0, 0).BorderColor(t.Border).Children(func() {
 		switch {
 		case a.onArchive():
@@ -312,10 +307,6 @@ func (a *app) statusBar(c *ui.Context) {
 // how the last ended; a click shows them in a popover.
 func (a *app) transferIndicator(c *ui.Context) {
 	t := c.Theme()
-	if len(a.transfers) == 0 {
-		a.showTransfers = false
-		return
-	}
 	active, failed := 0, 0
 	var done, total int64
 	for _, tr := range a.transfers {
@@ -325,11 +316,14 @@ func (a *app) transferIndicator(c *ui.Context) {
 			if tr.total > 0 {
 				done, total = done+min(tr.done, tr.total), total+tr.total
 			}
-		case tr.state == "error":
+		case tr.state == "failed":
 			failed++
 		}
 	}
-	text, color := "传输已完成", t.Success
+	text, color := "传输记录", t.TextMuted
+	if len(a.transfers) > 0 {
+		text = fmt.Sprintf("传输记录 · %d 项", len(a.transfers))
+	}
 	switch {
 	case active > 0:
 		text, color = fmt.Sprintf("%d 个传输", active), t.TextMuted
@@ -340,7 +334,7 @@ func (a *app) transferIndicator(c *ui.Context) {
 		text, color = fmt.Sprintf("%d 个传输失败", failed), t.Danger
 	}
 	anchor := ui.ButtonBase(c.Key("transfers-indicator")).Padding(3, 8).Gap(6).AlignItems(ui.Center).Radius(t.Radius).
-		Label("传输任务").Tooltip("查看传输任务")
+		Label("传输任务").Tooltip("查看传输任务和历史记录")
 	if anchor.Hovered() || a.showTransfers {
 		anchor.Background(t.SurfaceHover)
 	}
@@ -351,7 +345,7 @@ func (a *app) transferIndicator(c *ui.Context) {
 		case failed > 0:
 			ui.Icon(c, iconAlert).FontSize(13).TextColor(color)
 		default:
-			ui.Icon(c, iconCheck).FontSize(13).TextColor(color)
+			ui.Icon(c, iconTasks).FontSize(13).TextColor(color)
 		}
 		rolling(ui.Text(c, text).FontSize(12).SingleLine().FontFeatures("tnum").TextColor(color))
 	})
@@ -363,10 +357,13 @@ func (a *app) transferIndicator(c *ui.Context) {
 		panel.Width(460).MaxHeight(min(480, h-80)).Margin(6, 0).Padding(12).Gap(8).Radius(t.Radius*2).
 			Background(t.Background).Border(1, t.Border).Shadow(0, 8, 24, 0, ui.RGBA(0, 0, 0, 0.18))
 		ui.Row(c).Gap(8).AlignItems(ui.Center).Children(func() {
-			ui.Text(c, "传输任务").Bold().Grow(1)
+			ui.Text(c, "传输记录").Bold().Grow(1)
 			ui.Button(c.Key("clear-transfers"), "清除已完成").Disabled(active == len(a.transfers)).OnClick(a.clearTransfers)
 		})
 		ui.Scroll(c).Shrink(1).MinHeight(0).Gap(6).Children(func() {
+			if len(a.transfers) == 0 {
+				ui.Text(c, "暂无传输记录").TextColor(t.TextMuted).Padding(12, 0)
+			}
 			for _, tr := range a.transfers {
 				a.transferRow(c, tr)
 			}

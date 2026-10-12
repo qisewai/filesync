@@ -4,6 +4,8 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"os"
+	"path/filepath"
 	"time"
 
 	"filesync/config"
@@ -15,19 +17,23 @@ import (
 
 // transfer is an upload, a download, or a copy or move the server runs.
 type transfer struct {
-	id      int
-	kind    string // 上传 | 下载 | 打开 | 复制 | 移动
-	title   string
-	state   string // running | done | failed | canceled
-	err     string
-	note    string   // server completion details, including skipped items
-	errors  []string // the files that failed
-	cancel  func()
-	started time.Time
+	id       int
+	kind     string // 上传 | 下载 | 打开 | 复制 | 移动
+	title    string
+	state    string // running | done | failed | canceled | interrupted
+	err      string
+	note     string   // server completion details, including skipped items
+	errors   []string // the files that failed
+	cancel   func()
+	started  time.Time
+	finished time.Time
 
 	done, total int64 // bytes, total 0 when unknown
 	files       int
 	current     string
+	localFile   string // one complete downloaded file, available to reopen
+	localDir    string // download destination or the system-open cache directory
+	folderReady bool   // the worker has created the cache directory, or the user picked it
 
 	// A task of the server, followed by its events.
 	server            string
@@ -46,6 +52,7 @@ func (a *app) addTransfer(kind, title string) *transfer {
 	a.transferSeq++
 	t := &transfer{id: a.transferSeq, kind: kind, title: title, state: "running", started: time.Now()}
 	a.transfers = append([]*transfer{t}, a.transfers...)
+	a.saveTransferHistory()
 	return t
 }
 
@@ -65,12 +72,15 @@ func (a *app) finishTransfer(t *transfer, err error, failed []string) {
 		t.state, t.err = "failed", fmt.Sprintf("%d 项没有成功", len(failed))
 	default:
 		t.state = "done"
+		t.folderReady = t.localDir != ""
 		if t.after != nil {
 			t.after()
 		}
 	}
 	t.errors = failed
 	t.current = ""
+	t.finished = time.Now()
+	a.saveTransferHistory()
 	a.maybeClose()
 }
 
@@ -98,6 +108,7 @@ func (a *app) applyTask(tr *transfer, task *fileindex.Task) {
 }
 
 func (a *app) trackServerTask(c *fileindex.Client, tr *transfer, task *fileindex.Task) {
+	a.saveTransferHistory()
 	a.applyTask(tr, task)
 	if !tr.running() {
 		return
@@ -180,9 +191,16 @@ func (a *app) serverHasTransfers(id string) bool {
 func (a *app) transferRow(c *ui.Context, tr *transfer) {
 	t := c.Theme()
 	ui.Row(c.Key(tr.id)).Gap(10).Padding(4, 2).Children(func() {
-		ui.Text(c, tr.kind).Width(36).FontSize(12).Bold().TextColor(t.Accent)
+		kindTip := tr.kind
+		if tr.kind == "下载并打开" {
+			kindTip = "下载到本机缓存后，用系统程序打开"
+		}
+		ui.Row(c.Key("kind")).Size(30, 30).Shrink(0).Center().Radius(t.Radius).
+			Background(t.Accent.Alpha(0.08)).Label(tr.kind).Tooltip(kindTip).Children(func() {
+			ui.Icon(c, transferIcon(tr.kind)).FontSize(18).TextColor(t.Accent)
+		})
 		ui.Column(c).Grow(1).Shrink(1).MinWidth(0).Gap(3).Children(func() {
-			ui.Text(c, tr.title).SingleLine()
+			ui.Text(c, tr.title).SingleLine().Tooltip(tr.title)
 			switch tr.state {
 			case "running":
 				frac := -1.0
@@ -205,7 +223,11 @@ func (a *app) transferRow(c *ui.Context, tr *transfer) {
 				}
 				rolling(ui.Text(c, info).FontSize(12).TextColor(t.TextMuted).SingleLine().FontFeatures("tnum"))
 			case "done":
-				message := "完成 · " + formatDuration(time.Since(tr.started).Seconds()) + "前开始"
+				at := tr.finished
+				if at.IsZero() {
+					at = tr.started
+				}
+				message := "完成 · " + at.Local().Format("2006-01-02 15:04")
 				color := t.Success
 				if tr.note != "" {
 					message += " · " + tr.note
@@ -213,19 +235,84 @@ func (a *app) transferRow(c *ui.Context, tr *transfer) {
 				}
 				ui.Text(c, message).FontSize(12).TextColor(color).MaxLines(2).Tooltip(message)
 			case "canceled":
-				ui.Text(c, "已取消").FontSize(12).TextColor(t.Warning)
+				ui.Text(c, "已取消 · "+tr.started.Local().Format("2006-01-02 15:04")).FontSize(12).TextColor(t.Warning)
+			case "interrupted":
+				ui.Text(c, "上次未完成 · "+tr.started.Local().Format("2006-01-02 15:04")).FontSize(12).TextColor(t.Warning).Tooltip(tr.err)
 			default:
 				msg := tr.err
 				if len(tr.errors) > 0 {
 					msg += "：" + tr.errors[0]
 				}
-				ui.Text(c, msg).FontSize(12).TextColor(t.Danger).MaxLines(2).Tooltip(msg)
+				ui.Text(c, msg+" · "+tr.started.Local().Format("2006-01-02 15:04")).FontSize(12).TextColor(t.Danger).MaxLines(2).Tooltip(msg)
 			}
 		})
-		if tr.running() && tr.cancel != nil && ui.Button(c, "取消").Clicked() {
-			tr.cancel()
-		}
+		ui.Row(c.Key("actions")).Shrink(0).Gap(4).AlignItems(ui.Center).Children(func() {
+			if tr.localFile != "" && tr.state == "done" {
+				iconButton(c, "open-file", iconOpenOut, "打开下载文件", "用系统程序打开："+tr.localFile, false, func() { a.openTransferFile(tr) }).Size(30, 30)
+			}
+			if tr.localDir != "" {
+				iconButton(c, "open-folder", iconFolder, "打开下载所在目录", "打开下载所在目录："+tr.localDir, !tr.folderReady, func() {
+					a.openPath(tr.localDir)
+				}).Size(30, 30)
+			}
+			if tr.running() && tr.cancel != nil {
+				iconButton(c, "cancel", iconStop, "取消", "取消任务", false, tr.cancel).Size(30, 30)
+			}
+			removeTip := "删除任务记录，保留下载文件"
+			if tr.running() {
+				removeTip = "请先取消任务，再删除记录"
+			}
+			iconButton(c, "remove", iconTrash, "删除任务记录", removeTip, tr.running(), func() {
+				a.removeTransfer(tr)
+			}).Size(30, 30)
+		})
 	})
+}
+
+func transferIcon(kind string) *ui.SVG {
+	switch kind {
+	case "上传":
+		return iconUpload
+	case "下载":
+		return iconSave
+	case "下载并打开":
+		return iconSaveOpen
+	case "打开":
+		return iconOpenOut
+	case "复制":
+		return iconCopy
+	case "移动":
+		return iconMove
+	case "解压":
+		return iconArchive
+	case "删除", "彻底删除":
+		return iconTrash
+	case "恢复":
+		return iconRetry
+	case "扫描", "查重":
+		return iconSearch
+	case "校验":
+		return iconCheck
+	default:
+		return iconTasks
+	}
+}
+
+// removeTransfer removes a finished record, keeping its downloaded files and
+// leaving active tasks tracked for cancellation, progress and quit handling.
+func (a *app) removeTransfer(tr *transfer) {
+	if tr.running() {
+		return
+	}
+	for i, item := range a.transfers {
+		if item == tr {
+			copy(a.transfers[i:], a.transfers[i+1:])
+			a.transfers[len(a.transfers)-1] = nil
+			a.transfers = a.transfers[:len(a.transfers)-1]
+			a.saveTransferHistory()
+			return
+		}
+	}
 }
 
 func (a *app) clearTransfers() {
@@ -239,6 +326,7 @@ func (a *app) clearTransfers() {
 		a.transfers[i] = nil
 	}
 	a.transfers = kept
+	a.saveTransferHistory()
 }
 
 // watch follows the events of a signed-in server while the app runs: the
@@ -338,4 +426,33 @@ func hooks(a *app, tr *transfer) engine.Hooks {
 			tr.files = p.Done
 		})
 	}}
+}
+
+func (a *app) recordOpenedFile(server, name, file string) {
+	tr := a.addTransfer("打开", name)
+	tr.server = server
+	tr.localFile = file
+	tr.localDir = filepath.Dir(file)
+	a.finishTransfer(tr, nil, nil)
+}
+func (a *app) openTransferFile(tr *transfer) {
+	file, name, server := tr.localFile, tr.title, tr.server
+	go func() {
+		info, err := os.Stat(file)
+		a.post(func() {
+			if a.closed {
+				return
+			}
+			if err != nil {
+				a.errorMsg = "无法打开下载文件：" + err.Error()
+				return
+			}
+			if !info.Mode().IsRegular() {
+				a.errorMsg = "下载文件已不存在或不是普通文件"
+				return
+			}
+			a.recordOpenedFile(server, name, file)
+			a.openPath(file)
+		})
+	}()
 }
