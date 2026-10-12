@@ -15,16 +15,18 @@ import (
 
 // Entry is a file or directory of a root, as the server lists it.
 type Entry struct {
-	ID       int64  `json:"id"`
-	Root     int64  `json:"root_id"`
-	RootName string `json:"root_name"`
-	Name     string `json:"name"`
-	Path     string `json:"path"` // relative to the root, with slashes
-	Parent   string `json:"parent"`
-	IsDir    bool   `json:"is_dir"`
-	Size     int64  `json:"size"`
-	MTime    int64  `json:"mtime"` // unix seconds
-	Ext      string `json:"ext"`
+	Link      bool   `json:"link,omitempty"`
+	Encrypted bool   `json:"encrypted,omitempty"`
+	ID        int64  `json:"id"`
+	Root      int64  `json:"root_id"`
+	RootName  string `json:"root_name"`
+	Name      string `json:"name"`
+	Path      string `json:"path"` // relative to the root, with slashes
+	Parent    string `json:"parent"`
+	IsDir     bool   `json:"is_dir"`
+	Size      int64  `json:"size"`
+	MTime     int64  `json:"mtime"` // unix seconds
+	Ext       string `json:"ext"`
 	// HasDirs, of a directory listed, tells whether it holds directories;
 	// nil when the server does not tell.
 	HasDirs *bool `json:"has_dirs,omitempty"`

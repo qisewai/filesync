@@ -84,6 +84,8 @@ func (a *app) page(c *ui.Context) {
 		a.settingsPage(c)
 	case a.onSearch():
 		a.searchPage(c)
+	case a.onArchive():
+		a.archiveView(c)
 	case a.onLocal():
 		a.localView(c)
 	case a.recycle != nil && a.place == trashPlace(a.recycle.server):
@@ -421,6 +423,15 @@ func (a *app) loadRoots(sv *config.Server) {
 // serverChanged forgets what was read of a server, after its session or
 // address changed or it was removed.
 func (a *app) serverChanged(id string) {
+	if a.arc != nil && a.arc.server == id {
+		if a.arc.cancel != nil {
+			a.arc.cancel()
+		}
+		a.arc = nil
+		if a.onArchive() || a.place == "archive" {
+			a.place = ""
+		}
+	}
 	if a.admin != nil && a.admin.server == id {
 		a.admin.stop()
 		a.admin = nil

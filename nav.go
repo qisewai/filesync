@@ -7,6 +7,7 @@ import (
 	"strconv"
 	"strings"
 
+	"filesync/fileindex"
 	"github.com/egoist/mygo/ui"
 )
 
@@ -31,6 +32,8 @@ import (
 // location is the location of the place shown.
 func (a *app) location() string {
 	switch {
+	case a.onArchive():
+		return a.archiveLocation()
 	case a.place == "settings":
 		return "/settings"
 	case a.place == "backup" && a.taskShown != "":
@@ -75,6 +78,10 @@ func (a *app) goLocation(loc string) {
 	case parts[0] == "settings":
 		a.place = "settings"
 	case parts[0] == "local":
+		if file := q.Get("archive"); file != "" && filepath.IsAbs(file) {
+			a.openArchive(localPlace, nil, fileindex.Entry{Path: file, Name: filepath.Base(file)}, q.Get("entry"))
+			return
+		}
 		dir := q.Get("dir")
 		if dir == "" || !filepath.IsAbs(dir) {
 			dir = a.startLocal()
@@ -84,6 +91,15 @@ func (a *app) goLocation(loc string) {
 		a.openAdmin(parts[1], parts[2])
 	case parts[0] == "trash" && len(parts) == 2:
 		a.openTrash(parts[1])
+	case parts[0] == "nas" && len(parts) >= 3 && q.Get("archive") != "":
+		for _, r := range a.roots[parts[1]] {
+			if strconv.FormatInt(r.ID, 10) == parts[2] {
+				if c, ok := a.serverClient(parts[1]); ok {
+					a.openArchive(parts[1], c, fileindex.Entry{Root: r.ID, Path: q.Get("archive"), Name: pathBase(q.Get("archive"))}, q.Get("dir"))
+				}
+				return
+			}
+		}
 	case parts[0] == "nas" && len(parts) == 3:
 		for _, r := range a.roots[parts[1]] {
 			if strconv.FormatInt(r.ID, 10) == parts[2] {
@@ -107,6 +123,11 @@ func (a *app) followHistory() {
 // recordHistory adds the place shown to the history, as the app went
 // there: the first replaces the empty page the router starts with.
 func (a *app) recordHistory() {
+	if !a.onArchive() && a.arc != nil && a.arc.loading && a.arc.cancel != nil {
+		a.arc.cancel()
+		a.arc.gen++
+		a.arc.loading = false
+	}
 	loc := a.location()
 	if loc == a.navShown {
 		return
@@ -131,6 +152,8 @@ func (a *app) pageTitle() string {
 		return s
 	}
 	switch {
+	case a.onArchive():
+		return "压缩包 · " + pathBase(a.arc.file)
 	case a.place == "backup":
 		return "备份任务"
 	case a.place == "search":
@@ -163,6 +186,9 @@ func (a *app) onRoot() bool {
 // topBar is the toolbar over the pages: back and forward, up, then the
 // search, all along.
 func (a *app) topBar(c *ui.Context) {
+	if up := a.upward(); up != nil {
+		c.OnShortcut(ui.Alt, ui.KeyUp, up)
+	}
 	t := c.Theme()
 	ui.Row(c).Padding(8, 16, 8, 10).Gap(8).AlignItems(ui.Center).MinHeight(52).BorderWidth(0, 0, 1, 0).BorderColor(t.Border).Children(func() {
 		ui.Toolbar(c, func() {
@@ -174,11 +200,10 @@ func (a *app) topBar(c *ui.Context) {
 					up()
 				}
 			})
-			if up != nil && c.Shortcut(ui.Alt, ui.KeyUp) {
-				up()
-			}
 		}).Width(3*36 + 8).Shrink(0).Label("导航")
 		switch {
+		case a.onArchive():
+			ui.Text(c, "压缩包内容只读 · 搜索不包含包内文件").TextColor(t.TextMuted).Shrink(1)
 		case a.onLocal():
 			a.fileSearch(c, localPlace)
 		case a.onRoot():
@@ -196,6 +221,8 @@ func (a *app) topBar(c *ui.Context) {
 func (a *app) locationBar(c *ui.Context) {
 	ui.Row(c).Padding(10, 24, 0, 24).Gap(8).AlignItems(ui.Center).MinHeight(40).Children(func() {
 		switch {
+		case a.onArchive():
+			a.archivePath(c)
 		case a.onLocal():
 			a.localPath(c)
 		case a.onRoot():
@@ -225,6 +252,8 @@ func (a *app) anywhereSearch(c *ui.Context) {
 // none.
 func (a *app) upward() func() {
 	switch {
+	case a.onArchive():
+		return a.archiveUp
 	case a.onLocal():
 		b := a.local
 		if up := filepath.Dir(b.dir); up != b.dir {
@@ -254,12 +283,14 @@ func (a *app) statusBar(c *ui.Context) {
 	t := c.Theme()
 	onTrash := a.recycle != nil && a.place == trashPlace(a.recycle.server)
 	searched := a.onSearch() && len(a.gsearch.groups) > 0
-	if !a.onLocal() && !a.onRoot() && !onTrash && !searched && len(a.transfers) == 0 {
+	if !a.onArchive() && !a.onLocal() && !a.onRoot() && !onTrash && !searched && len(a.transfers) == 0 {
 		a.showTransfers = false
 		return
 	}
 	ui.Row(c).Padding(4, 16).Gap(10).AlignItems(ui.Center).MinHeight(34).BorderWidth(1, 0, 0, 0).BorderColor(t.Border).Children(func() {
 		switch {
+		case a.onArchive():
+			a.archiveStatus(c)
 		case a.onLocal():
 			a.localStatus(c)
 		case a.onRoot():

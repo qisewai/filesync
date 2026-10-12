@@ -61,7 +61,7 @@ func (p *LocalProxy) Register(owner string, c *Client, root int64, rel string) (
 		cancel()
 		return "", fmt.Errorf("本机代理已关闭")
 	}
-	p.entries[key] = proxySource{owner: owner, client: New(c.Addr, c.Token), root: root, path: rel, ctx: ctx, cancel: cancel}
+	p.entries[key] = proxySource{owner: owner, client: c.clone(), root: root, path: rel, ctx: ctx, cancel: cancel}
 	return (&url.URL{Scheme: "http", Host: p.addr, Path: key}).String(), nil
 }
 func (p *LocalProxy) Revoke(owner string) {

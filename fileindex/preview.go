@@ -2,6 +2,7 @@ package fileindex
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"io"
 	"net/http"
@@ -14,7 +15,11 @@ func (c *Client) ReadPreview(ctx context.Context, root int64, path string, limit
 	if limit <= 0 {
 		return nil, false, fmt.Errorf("预览长度必须大于零")
 	}
-	req, err := http.NewRequestWithContext(ctx, "GET", c.url(fmt.Sprintf("/api/download/%d", root), url.Values{"path": {path}}), nil)
+	q := url.Values{"path": {path}}
+	if c.InArchive() {
+		q.Set("limit", fmt.Sprint(limit+1))
+	}
+	req, err := http.NewRequestWithContext(ctx, "GET", c.url(fmt.Sprintf("/api/download/%d", root), q), nil)
 	if err != nil {
 		return nil, false, err
 	}
@@ -33,6 +38,15 @@ func (c *Client) ReadPreview(ctx context.Context, root int64, path string, limit
 		return []byte{}, false, nil
 	}
 	if res.StatusCode/100 != 2 {
+		if c.InArchive() {
+			var out struct {
+				Error string `json:"error"`
+			}
+			json.NewDecoder(io.LimitReader(res.Body, 64<<10)).Decode(&out)
+			if out.Error != "" {
+				return nil, false, &StatusError{Code: res.StatusCode, Msg: out.Error}
+			}
+		}
 		return nil, false, &StatusError{Code: res.StatusCode, Msg: res.Status}
 	}
 	data, err := io.ReadAll(io.LimitReader(res.Body, limit+1))

@@ -81,6 +81,9 @@ func mediaFile(e fileindex.Entry) bool {
 	return false
 }
 func (a *app) sourceCurrent(server string, c *fileindex.Client) bool {
+	if c != nil && c.InArchive() && c.ArchiveSource.Local {
+		return !a.closed && server == localPlace
+	}
 	sv := a.store.Server(server)
 	return !a.closed && sv != nil && sv.Addr == c.Addr && sv.Token == c.Token && sv.Token != ""
 }
@@ -95,7 +98,11 @@ func (a *app) closePreview() {
 }
 func (a *app) showPreview(server string, c *fileindex.Client, e fileindex.Entry, group []fileindex.Entry) {
 	a.closePreview()
-	ctx, cancel := context.WithTimeout(context.Background(), requestTimeout)
+	ctx, cancel := context.WithCancel(context.Background())
+	if !c.InArchive() {
+		cancel()
+		ctx, cancel = context.WithTimeout(context.Background(), requestTimeout)
+	}
 	p := &preview{open: true, loading: true, server: server, client: c, entry: e, group: group, cancel: cancel, zoom: 1}
 	a.preview = p
 	kind := previewKind(e)
@@ -488,7 +495,7 @@ func (a *app) filmFrame(c *ui.Context, p *preview, e fileindex.Entry, current bo
 	t := c.Theme()
 	frame := ui.ButtonBase(c.Key("film/"+e.Path)).Size(64, 48).Radius(6).Clip().Label("缩略图 " + e.Name).Tooltip(e.Name).Background(ui.RGBA(255, 255, 255, 0.06))
 	var bmp *ui.Bitmap
-	if a.br != nil && a.br.server == p.server {
+	if !p.client.InArchive() && a.br != nil && a.br.server == p.server {
 		bmp = a.thumb(e)
 	}
 	frame.Children(func() {
@@ -779,7 +786,11 @@ func openCachePath(c *fileindex.Client, e fileindex.Entry) (string, error) {
 	if err != nil {
 		return "", err
 	}
-	key := sha256.Sum256([]byte(fmt.Sprintf("%s\x00%d\x00%s\x00%d\x00%d", c.Addr, e.Root, e.Path, e.Size, e.MTime)))
+	identity := fmt.Sprintf("%s\x00%d\x00%s\x00%d\x00%d", c.Addr, e.Root, e.Path, e.Size, e.MTime)
+	if c.InArchive() {
+		identity += "\x00" + c.ArchiveSource.Path + "\x00" + c.ArchiveSource.Version
+	}
+	key := sha256.Sum256([]byte(identity))
 	name := strings.Map(func(r rune) rune {
 		if r < 32 || strings.ContainsRune(`<>:"/\|?*`, r) {
 			return '_'
@@ -806,6 +817,13 @@ func openCachePath(c *fileindex.Client, e fileindex.Entry) (string, error) {
 	return filepath.Join(cache, "filesync", "open", fmt.Sprintf("%x", key), "file-"+name), nil
 }
 func (a *app) systemOpenSource(server string, c *fileindex.Client, e fileindex.Entry, download bool) {
+	if c.InArchive() {
+		download = true
+	}
+	if e.Link || e.Encrypted {
+		a.errorMsg = "符号链接或加密文件不能打开"
+		return
+	}
 	if !a.sourceCurrent(server, c) {
 		return
 	}

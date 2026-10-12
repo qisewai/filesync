@@ -360,6 +360,14 @@ func (a *app) localView(c *ui.Context) {
 			es = nil
 		}
 		if len(es) == 1 {
+			if archiveEntry(es[0]) {
+				if m.Item("打开压缩包").Chosen() {
+					a.openLocalEntry(es[0])
+				}
+				if m.Item("解压到…").Chosen() {
+					a.extractArchive(localPlace, nil, es[0])
+				}
+			}
 			if m.Item("打开").Chosen() {
 				open(es[0])
 			}
@@ -418,6 +426,10 @@ func itemsCount(n int) string { return fmt.Sprintf("%d 项", n) }
 
 // openLocalEntry goes into a directory, or opens a file with its app.
 func (a *app) openLocalEntry(e fileindex.Entry) {
+	if archiveEntry(e) {
+		a.openArchive(localPlace, nil, e, "")
+		return
+	}
 	if e.IsDir {
 		a.openLocal(e.Path)
 		return

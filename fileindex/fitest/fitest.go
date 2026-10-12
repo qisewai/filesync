@@ -6,6 +6,7 @@ import (
 	"archive/tar"
 	"cmp"
 	"encoding/json"
+	archiveio "filesync/internal/archive"
 	"fmt"
 	"hash/fnv"
 	"image"
@@ -42,7 +43,8 @@ type Server struct {
 	// Trash receives what is deleted, at its path from the root.
 	Trash string
 	// Expired makes the server refuse sessions until the next login.
-	Expired atomic.Bool
+	Expired          atomic.Bool
+	HoldArchiveLists atomic.Bool
 	// Writable makes root 2 writable, as when its read-only setting is
 	// turned off.
 	Writable atomic.Bool
@@ -121,6 +123,29 @@ func New(t testing.TB) *Server {
 	api.HandleFunc("GET /api/search", s.search)
 	api.HandleFunc("GET /api/thumb/{id}", s.thumb)
 	api.HandleFunc("GET /api/download/{id}", s.download)
+	archives := &archiveio.Handler{Resolve: func(r *http.Request) (string, error) {
+		base, ok := s.rootDir(r.URL.Query().Get("root"))
+		if !ok {
+			return "", fmt.Errorf("no root")
+		}
+		rel, err := archiveio.Clean(r.URL.Query().Get("path"))
+		if err != nil {
+			return "", err
+		}
+		return filepath.Join(base, filepath.FromSlash(rel)), nil
+	}}
+	api.HandleFunc("GET /api/archive/list", func(w http.ResponseWriter, r *http.Request) {
+		if s.HoldArchiveLists.Load() {
+			w.Header().Set("Content-Type", "application/x-ndjson")
+			w.Write([]byte("{\"read\":0,\"size\":100}\n"))
+			w.(http.Flusher).Flush()
+			<-r.Context().Done()
+			return
+		}
+		archives.ServeHTTP(w, r)
+	})
+	api.Handle("GET /api/archive/file", archives)
+	api.Handle("GET /api/archive/export", archives)
 	api.HandleFunc("GET /api/backup/export", s.export)
 	api.HandleFunc("POST /api/fs/rename", s.rename)
 	api.HandleFunc("POST /api/fs/transfer", s.transfer)

@@ -405,6 +405,16 @@ func (a *app) browserStatus(c *ui.Context) {
 
 func (a *app) entryMenu(m *ui.Menu, es []fileindex.Entry, writable bool) {
 	n := len(es)
+	if n == 1 && archiveEntry(es[0]) {
+		if m.Item("打开压缩包").Chosen() {
+			a.openEntry(es[0])
+		}
+		if m.Item("解压到…").Chosen() {
+			if c, sv := a.brClient(); c != nil {
+				a.extractArchive(sv.ID, c, es[0])
+			}
+		}
+	}
 	if n == 1 && m.Item("打开").Chosen() {
 		a.openEntry(es[0])
 	}
@@ -521,6 +531,12 @@ func (a *app) thumbExt(server, ext string) bool {
 // openEntry opens directories, previews images/text, and routes other files
 // through the local proxy to a system application.
 func (a *app) openEntry(e fileindex.Entry) {
+	if archiveEntry(e) {
+		if c, sv := a.brClient(); c != nil {
+			a.openArchive(sv.ID, c, e, "")
+		}
+		return
+	}
 	if e.IsDir {
 		a.browseIn(e.Root, e.Path)
 		return

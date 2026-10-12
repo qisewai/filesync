@@ -21,6 +21,7 @@ import (
 // nasFiles is where the operations on files of a server run from.
 type nasFiles struct {
 	server string
+	client *fileindex.Client // immutable archive source, when present
 	// root and dir are where the pickers of a target start.
 	root int64
 	dir  string
@@ -110,7 +111,7 @@ func (a *app) downloadIn(f *nasFiles, es []fileindex.Entry) { a.downloadTo(f, fa
 // entries there, asking first to replace what has their names; with move,
 // the entries then go to the trash of the server.
 func (a *app) downloadTo(f *nasFiles, move bool, es []fileindex.Entry, title string) {
-	c, ok := a.serverClient(f.server)
+	c, ok := a.filesClient(f)
 	if !ok || len(es) == 0 {
 		return
 	}
@@ -191,7 +192,7 @@ func (a *app) transferIn(f *nasFiles, move bool, es []fileindex.Entry) {
 // relayIn copies or moves the entries into dir of a root of another
 // server, asking first to replace what it has of the same names.
 func (a *app) relayIn(f *nasFiles, move bool, es []fileindex.Entry, to string, root int64, dir, kind, title string) {
-	src, ok := a.serverClient(f.server)
+	src, ok := a.filesClient(f)
 	dst, ok2 := a.serverClient(to)
 	if !ok || !ok2 {
 		return
@@ -448,4 +449,11 @@ func (a *app) deleteDialog(c *ui.Context, d *deleteAsk) {
 	if !open && a.deleting == d {
 		a.deleting = nil
 	}
+}
+
+func (a *app) filesClient(f *nasFiles) (*fileindex.Client, bool) {
+	if f.client != nil {
+		return f.client, a.sourceCurrent(f.server, f.client)
+	}
+	return a.serverClient(f.server)
 }

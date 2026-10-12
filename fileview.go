@@ -84,6 +84,11 @@ func (a *app) fileTable(c *ui.Context, v *fileView) {
 			ui.Row(c).Gap(8).AlignItems(ui.Center).Children(func() {
 				fileIcon(c, e, 16)
 				ui.Text(c, e.Name).SingleLine().Grow(1).Shrink(1)
+				if e.Encrypted {
+					ui.Badge(c, "已加密")
+				} else if e.Link {
+					ui.Badge(c, "符号链接")
+				}
 			})
 		case 1:
 			if !e.IsDir {
@@ -122,6 +127,11 @@ func (a *app) fileGrid(c *ui.Context, v *fileView) {
 			}
 			ui.Text(c, breakable(e.Name)).FontSize(12).MaxLines(2).TextAlign(ui.Center).
 				Width(gridCell - 12).MinWidth(0).Clip().Label(e.Name)
+			if e.Encrypted {
+				ui.Badge(c, "已加密")
+			} else if e.Link {
+				ui.Badge(c, "符号链接")
+			}
 		}).Tooltip(e.Name)
 	}).Grow(1).Padding(8).Label(v.label)
 	if grid.Submitted() && *v.cursor >= 0 && *v.cursor < len(v.items) {

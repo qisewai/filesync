@@ -69,6 +69,7 @@ type app struct {
 
 	// place is what the sidebar chose: "backup", or a root as
 	// "root/<server>/<id>".
+	arc   *archiveBrowser
 	place string
 	// nav is the history of the places shown, and navShown the location
 	// of the place it shows (see nav.go).
@@ -619,6 +620,9 @@ func (a *app) stopBackground() {
 		a.admin.stop()
 	}
 	a.closePreview()
+	if a.arc != nil && a.arc.cancel != nil {
+		a.arc.cancel()
+	}
 	if a.proxy != nil {
 		a.proxy.Close()
 	}

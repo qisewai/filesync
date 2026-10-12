@@ -37,7 +37,8 @@ type Client struct {
 	// Token is the session, which Login sets.
 	Token string
 
-	hc *http.Client
+	ArchiveSource *ArchiveSource
+	hc            *http.Client
 }
 
 // transport keeps connections to the server open between requests, with
@@ -60,6 +61,7 @@ func New(addr, token string) *Client {
 }
 
 func (c *Client) url(path string, q url.Values) string {
+	path, q = c.archiveURL(path, q)
 	u := "http://" + c.Addr + path
 	if len(q) > 0 {
 		u += "?" + q.Encode()
@@ -86,6 +88,9 @@ func (c *Client) do(ctx context.Context, method, path string, q url.Values, body
 
 // send sends a request and returns the answer when it succeeded.
 func (c *Client) send(ctx context.Context, method, path string, q url.Values, body io.Reader) (*http.Response, error) {
+	if c.InArchive() && method != "GET" && method != "HEAD" {
+		return nil, errors.New("压缩包内容只读")
+	}
 	req, err := http.NewRequestWithContext(ctx, method, c.url(path, q), body)
 	if err != nil {
 		return nil, err
