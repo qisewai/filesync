@@ -479,7 +479,7 @@ func (a *app) rootsView(c *ui.Context, m *adminPage) {
 			case 2:
 				if root.Active != nil && root.Active.Job != nil {
 					j := root.Active.Job
-					ui.Text(c, scanStateText(j.Status)+fmt.Sprintf(" · 已扫描 %d 项", j.Scanned)).SingleLine()
+					rolling(ui.Text(c, scanStateText(j.Status)+fmt.Sprintf(" · 已扫描 %d 项", j.Scanned)).SingleLine())
 					ui.Text(c, root.Active.Current).SingleLine().FontSize(12)
 				} else if root.LastJob != nil {
 					j := root.LastJob

@@ -245,7 +245,7 @@ func (a *app) scanningView(c *ui.Context, j *job, task *config.Task) {
 	ui.Column(c).Grow(1).Center().Gap(14).Children(func() {
 		ui.Spinner(c).FontSize(28).Label("正在扫描")
 		ui.Text(c, j.status)
-		ui.Textf(c, "已扫描 %d 项", j.scanned).TextColor(t.TextMuted).FontFeatures("tnum")
+		rolling(ui.Textf(c, "已扫描 %d 项", j.scanned).TextColor(t.TextMuted).FontFeatures("tnum"))
 		if ui.Button(c, "取消").Clicked() {
 			j.cancel()
 			a.job = nil
@@ -371,8 +371,8 @@ func (a *app) runningView(c *ui.Context, j *job, task *config.Task) {
 			}
 			ui.Progress(c, min(frac, 1)).Label("备份进度")
 			ui.Row(c).Children(func() {
-				ui.Textf(c, "%d / %d 项", p.Done, p.Total).FontFeatures("tnum").Grow(1)
-				ui.Textf(c, "%s / %s", formatBytes(p.DoneBytes), formatBytes(p.TotalBytes)).FontFeatures("tnum")
+				rolling(ui.Textf(c, "%d / %d 项", p.Done, p.Total).FontFeatures("tnum").Grow(1))
+				rolling(ui.Textf(c, "%s / %s", formatBytes(p.DoneBytes), formatBytes(p.TotalBytes)).FontFeatures("tnum"))
 			})
 			info := "速度 " + formatBytes(int64(j.speed.rate())) + "/s"
 			if eta := j.speed.eta(p.TotalBytes - p.DoneBytes); eta > 0 {

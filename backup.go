@@ -174,7 +174,7 @@ func (a *app) jobInline(c *ui.Context, j *job, task *config.Task) {
 	ui.Column(c).Gap(6).Padding(10, 0, 0, 0).BorderWidth(1, 0, 0, 0).BorderColor(t.Border).Children(func() {
 		switch j.state {
 		case jobScanning:
-			ui.Textf(c, "正在比较本机和 NAS 上的文件… 已扫描 %s 项", groupDigits(int64(j.scanned))).FontSize(12).FontFeatures("tnum").TextColor(t.TextMuted)
+			rolling(ui.Textf(c, "正在比较本机和 NAS 上的文件… 已扫描 %s 项", groupDigits(int64(j.scanned))).FontSize(12).FontFeatures("tnum").TextColor(t.TextMuted))
 		case jobRunning:
 			p := j.progress
 			frac := 0.0
@@ -189,7 +189,7 @@ func (a *app) jobInline(c *ui.Context, j *job, task *config.Task) {
 				info += " · 剩余约 " + formatDuration(eta.Seconds())
 			}
 			ui.Row(c).Gap(8).AlignItems(ui.Center).Children(func() {
-				ui.Text(c, info).FontSize(12).SingleLine().Shrink(1).FontFeatures("tnum").TextColor(t.TextMuted)
+				rolling(ui.Text(c, info).FontSize(12).SingleLine().Shrink(1).FontFeatures("tnum").TextColor(t.TextMuted))
 				ui.Spacer(c)
 				ui.Button(c.Key("watch/"+task.ID), "详情").OnClick(func() { j.detail = true })
 			})

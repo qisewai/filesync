@@ -26,6 +26,7 @@ type harness struct {
 }
 
 func newHarness(t *testing.T, store *config.Store) *harness {
+	rollNumbers = false
 	h := &harness{t: t, a: newApp(store), queue: make(chan func(), 1024)}
 	h.a.post = func(fn func()) { h.queue <- fn }
 	h.a.noEvents = true

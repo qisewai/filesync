@@ -251,7 +251,7 @@ func (a *app) localIndexStatus(c *ui.Context) {
 		} else {
 			ui.Row(c).Width(7).Height(7).Radius(4).Background(dot)
 		}
-		ui.Text(c, text).FontSize(12).SingleLine().FontFeatures("tnum").TextColor(t.TextMuted).Tooltip(tip)
+		rolling(ui.Text(c, text).FontSize(12).SingleLine().FontFeatures("tnum").TextColor(t.TextMuted).Tooltip(tip))
 		if m.running {
 			label := "取消扫描"
 			if m.saving {

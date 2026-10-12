@@ -202,7 +202,7 @@ func (a *app) transferRow(c *ui.Context, tr *transfer) {
 				if tr.current != "" {
 					info += " · " + tr.current
 				}
-				ui.Text(c, info).FontSize(12).TextColor(t.TextMuted).SingleLine()
+				rolling(ui.Text(c, info).FontSize(12).TextColor(t.TextMuted).SingleLine().FontFeatures("tnum"))
 			case "done":
 				message := "完成 · " + formatDuration(time.Since(tr.started).Seconds()) + "前开始"
 				color := t.Success

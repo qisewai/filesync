@@ -996,7 +996,7 @@ func (a *app) searchScopes(c *ui.Context) {
 				case err != "":
 					ui.Icon(c, iconAlert).FontSize(12).TextColor(t.Danger).Tooltip(err)
 				default:
-					ui.Text(c, groupDigits(int64(total))).FontSize(12).FontFeatures("tnum").TextColor(color)
+					rolling(ui.Text(c, groupDigits(int64(total))).FontSize(12).FontFeatures("tnum").TextColor(color))
 				}
 			})
 			if chip.Clicked() {

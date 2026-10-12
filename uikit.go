@@ -72,7 +72,21 @@ func statusDot(c *ui.Context, color ui.Color) {
 	ui.Row(c).Width(7).Height(7).Radius(4).Background(color)
 }
 
-// statusText is the text of the status bar.
+// statusText is the text of the status bar, whose numbers roll as they
+// change.
 func statusText(c *ui.Context, s string) ui.Element {
-	return ui.Text(c, s).FontSize(12).SingleLine().Shrink(1).FontFeatures("tnum").TextColor(c.Theme().TextMuted)
+	return rolling(ui.Text(c, s).FontSize(12).SingleLine().Shrink(1).FontFeatures("tnum").TextColor(c.Theme().TextMuted))
 }
+
+// rolling makes the characters of a text that change roll into place, as
+// the digits of a counter, unless rollNumbers is off.
+func rolling(e ui.Element) ui.Element {
+	if !rollNumbers {
+		return e
+	}
+	return e.ContentTransition(ui.ContentTransition{Numeric: true})
+}
+
+// rollNumbers is whether numbers roll as they change: tests, which draw a
+// frame after another while anything moves, show them at once.
+var rollNumbers = true

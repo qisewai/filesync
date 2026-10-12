@@ -322,7 +322,7 @@ func (a *app) transferIndicator(c *ui.Context) {
 		default:
 			ui.Icon(c, iconCheck).FontSize(13).TextColor(color)
 		}
-		ui.Text(c, text).FontSize(12).SingleLine().FontFeatures("tnum").TextColor(color)
+		rolling(ui.Text(c, text).FontSize(12).SingleLine().FontFeatures("tnum").TextColor(color))
 	})
 	if anchor.Clicked() {
 		a.showTransfers = !a.showTransfers
