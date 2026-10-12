@@ -17,6 +17,13 @@ import (
 type app struct {
 	store *config.Store
 	favs  favorites
+	// hiddenTitleBar is whether the window started without the system's
+	// title bar: the toolbar takes its place, beside the window controls,
+	// which it draws itself with ownControls. maximized is whether the
+	// window fills the screen, which then has no outline.
+	hiddenTitleBar, ownControls, maximized bool
+	minimizeWindow, closeButton            func()
+	maximizeWindow                         func(on bool)
 	// pathEditing is the path being typed in the path bar, nil for none;
 	// pathDirs the local folders it read, kept while it edits.
 	pathEditing *pathEdit
@@ -156,17 +163,20 @@ type draft struct {
 
 func newApp(store *config.Store) *app {
 	a := &app{
-		store:       store,
-		favs:        favorites{missing: map[string]bool{}},
-		selected:    -1,
-		post:        func(fn func()) { fn() },
-		pickDir:     func(string, string) (string, error) { return "", nil },
-		pickFiles:   func(string) ([]string, error) { return nil, nil },
-		openPath:    func(string) {},
-		openURL:     func(string) {},
-		keepAwake:   func(string) func() { return func() {} },
-		closeWindow: func() {},
-		notify:      func(string, string) {},
+		store:          store,
+		favs:           favorites{missing: map[string]bool{}},
+		selected:       -1,
+		post:           func(fn func()) { fn() },
+		pickDir:        func(string, string) (string, error) { return "", nil },
+		pickFiles:      func(string) ([]string, error) { return nil, nil },
+		openPath:       func(string) {},
+		openURL:        func(string) {},
+		keepAwake:      func(string) func() { return func() {} },
+		closeWindow:    func() {},
+		minimizeWindow: func() {},
+		maximizeWindow: func(bool) {},
+		closeButton:    func() {},
+		notify:         func(string, string) {},
 
 		open:         map[string]*bool{},
 		roots:        map[string][]fileindex.Root{},

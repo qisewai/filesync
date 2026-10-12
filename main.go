@@ -74,7 +74,7 @@ func main() {
 	}
 	mygo.App.WhenReady(func() {
 		var win *mygo.Window
-		win = mygo.NewWindow(mygo.WindowOptions{
+		opts := mygo.WindowOptions{
 			Title:     "FileSync · fileindex 客户端",
 			Width:     1180,
 			Height:    760,
@@ -82,7 +82,39 @@ func main() {
 			MinHeight: 480,
 			StateKey:  "main",
 			Content:   ui.View(a.view),
-		})
+		}
+		// The toolbar takes the place of the title bar, unless the settings
+		// keep the title bar. On Windows the system's window controls go
+		// over it. On Linux the window goes frameless, and the toolbar draws
+		// the controls: KWin and other Wayland compositors decorate a window
+		// whose title bar is only hidden, and draw no title bar only for one
+		// that says it decorates itself.
+		if !a.store.SystemTitleBar {
+			a.hiddenTitleBar = true
+			if runtime.GOOS == "linux" {
+				opts.Frameless = true
+				a.ownControls = true
+			} else {
+				opts.TitleBarStyle = mygo.TitleBarHidden
+			}
+		}
+		win = mygo.NewWindow(opts)
+		// The buttons of the toolbar act once the frame they are clicked in
+		// is drawn: MyGo's OpenGL drawing aborts the process when the window
+		// hides while it draws a frame.
+		a.minimizeWindow = func() { go win.Minimize() }
+		a.maximizeWindow = func(on bool) {
+			if on {
+				go win.Maximize()
+			} else {
+				go win.Unmaximize()
+			}
+		}
+		a.closeButton = func() { go win.Close() } // as the system's button: to the tray, or asking
+		win.OnMaximize(func() { a.post(func() { a.maximized = true }) })
+		win.OnUnmaximize(func() { a.post(func() { a.maximized = false }) })
+		win.OnEnterFullScreen(func() { a.post(func() { a.maximized = true }) })
+		win.OnLeaveFullScreen(func() { a.post(func() { a.maximized = false }) })
 		// The tray follows the work posted, which goes on while the window
 		// is hidden and draws no frames.
 		a.post = func(fn func()) {
@@ -140,7 +172,7 @@ func main() {
 		a.closeWindow = func() {
 			a.quitWhenDone, a.job = false, nil
 			quitting = true
-			win.Close()
+			go win.Close() // after the frame, as the toolbar's buttons
 		}
 		// Quitting, as the session ends or on SIGTERM, closes the window
 		// rather than hiding it.

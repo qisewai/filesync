@@ -38,6 +38,11 @@ func (a *app) view(c *ui.Context) {
 			a.statusBar(c)
 		})
 	}).Fill()
+	// A frameless window has no shadow on Wayland: an outline tells it
+	// from what is behind it.
+	if a.ownControls && !a.maximized {
+		split.Border(1, c.Theme().Border)
+	}
 	if a.viewerCovers() {
 		// Under the viewer's opaque backdrop, the page is built, keeping
 		// its state, but not drawn: drawn, its rounded clips would be
@@ -130,6 +135,9 @@ func (a *app) welcome(c *ui.Context) {
 func (a *app) sidebar(c *ui.Context) {
 	t := c.Theme()
 	ui.Column(c).Fill().Background(t.Surface).Children(func() {
+		if a.hiddenTitleBar {
+			a.sidebarHead(c)
+		}
 		ui.Scroll(c).Grow(1).MinHeight(0).Padding(10, 8).Children(func() {
 			ui.Tree(c.Key("servers-tree"), func() {
 				a.navItem(c, "search", iconSearch, "搜索", func() {
@@ -164,6 +172,18 @@ func (a *app) sidebar(c *ui.Context) {
 				a.nasStartEdit(nil)
 			})
 		})
+	})
+}
+
+// sidebarHead is the head of the sidebar in a window without the system's
+// title bar: the app's name, as high as the toolbar beside it, moving the
+// window, clear of window controls on the left.
+func (a *app) sidebarHead(c *ui.Context) {
+	t := c.Theme()
+	ui.Row(c.Key("sidebar-head")).Height(a.toolbarHeight(c)).Padding(0, 12, 0, 16+c.TitleBar().Left).Gap(8).AlignItems(ui.Center).
+		BorderWidth(0, 0, 1, 0).BorderColor(t.Border).DragWindow().Children(func() {
+		ui.Icon(c, iconBackup).FontSize(18).TextColor(t.Accent)
+		ui.Text(c, "FileSync").Bold().SingleLine().Shrink(1).MinWidth(0)
 	})
 }
 

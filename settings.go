@@ -135,6 +135,21 @@ func (a *app) localIndexCard(c *ui.Context) {
 func (a *app) generalCard(c *ui.Context) {
 	t := c.Theme()
 	settingsCard(c, iconGear, "常规", "", func() {
+		system := a.store.SystemTitleBar
+		ui.Row(c).Gap(10).AlignItems(ui.Center).Children(func() {
+			ui.Column(c).Grow(1).Shrink(1).MinWidth(0).Gap(2).Children(func() {
+				ui.Text(c, "使用系统标题栏")
+				hint := "关闭时工具栏代替标题栏，最小化、最大化、关闭按钮在工具栏右端。桌面环境上显示不正常时可打开。"
+				if system == a.hiddenTitleBar {
+					hint = "重新启动 FileSync 后生效。"
+				}
+				ui.Text(c, hint).FontSize(12).TextColor(t.TextMuted)
+			})
+			if ui.Switch(c.Key("system-title-bar"), &system).Label("系统标题栏").Changed() {
+				a.store.SystemTitleBar = system
+				a.save()
+			}
+		})
 		if a.tray != nil {
 			inTray := !a.store.QuitOnClose
 			ui.Row(c).Gap(10).AlignItems(ui.Center).Children(func() {

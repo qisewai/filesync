@@ -298,8 +298,13 @@ func (a *app) imageViewer(c *ui.Context, p *preview) {
 		panel.Width(w).Height(h)
 		a.viewerKeys(c, p)
 
-		// The bar: what, then what can be done.
-		ui.Row(c).Padding(10, 12, 10, 20).Gap(4).AlignItems(ui.Center).Children(func() {
+		// The bar: what, then what can be done; it moves the window, as
+		// its title bar, clear of the window controls.
+		top := ui.Row(c).Padding(10, 12+c.TitleBar().Right, 10, 20+c.TitleBar().Left).MinHeight(c.TitleBar().Height).Gap(4).AlignItems(ui.Center)
+		if a.hiddenTitleBar {
+			top.DragWindow()
+		}
+		top.Children(func() {
 			ui.Column(c).Grow(1).Shrink(1).MinWidth(0).Gap(2).Children(func() {
 				ui.Text(c, p.entry.Name).FontSize(15).Bold().TextColor(viewerText).SingleLine().Selectable()
 				meta := []string{}
@@ -708,10 +713,12 @@ func (a *app) textViewer(c *ui.Context, p *preview) {
 	ui.DialogBase(c.Key("native-preview"), &p.open, func(backdrop, panel ui.Element) {
 		backdrop.Background(ui.RGBA(0, 0, 0, 0.45))
 		w, h := c.Size()
+		// Clear of the window controls above it.
+		inset := max(24, c.TitleBar().Height+8)
 		if doc {
-			panel.Width(min(1180, w-48)).Height(h - 48)
+			panel.Width(min(1180, w-48)).Height(h - 2*inset)
 		} else {
-			panel.Width(min(920, w-48)).Height(min(680, h-48))
+			panel.Width(min(920, w-48)).Height(min(680, h-2*inset))
 		}
 		panel.Radius(t.Radius*3).Background(t.Background).Border(1, t.Border).Clip().
 			Shadow(0, 12, 40, 0, ui.RGBA(0, 0, 0, 0.25))

@@ -187,7 +187,10 @@ type Store struct {
 	// QuitOnClose quits as the window closes, rather than keeping the app
 	// in the tray.
 	QuitOnClose bool
-	LocalIndex  *LocalIndexSettings
+	// SystemTitleBar keeps the system's title bar, rather than the app's
+	// toolbar taking its place, from the next start.
+	SystemTitleBar bool
+	LocalIndex     *LocalIndexSettings
 	// RecentSearches are the searches made last, the latest first.
 	RecentSearches []string
 	// Favorites are the folders pinned in the sidebar, in its order.
@@ -289,6 +292,7 @@ type fileData struct {
 	Sessions     map[string]string   `json:"sessions,omitempty"`
 	SidebarWidth float32             `json:"sidebarWidth,omitempty"`
 	QuitOnClose  bool                `json:"quitOnClose,omitempty"`
+	SystemTitle  bool                `json:"systemTitleBar,omitempty"`
 	LocalIndex   *LocalIndexSettings `json:"localIndex,omitempty"`
 	Recent       []string            `json:"recentSearches,omitempty"`
 	Favorites    []*Favorite         `json:"favorites,omitempty"`
@@ -309,7 +313,7 @@ func Load(dir string) (*Store, error) {
 		return nil, err
 	}
 	s.Servers = data.Servers
-	s.SidebarWidth, s.QuitOnClose = data.SidebarWidth, data.QuitOnClose
+	s.SidebarWidth, s.QuitOnClose, s.SystemTitleBar = data.SidebarWidth, data.QuitOnClose, data.SystemTitle
 	s.LocalIndex = data.LocalIndex
 	s.RecentSearches = data.Recent
 	s.Favorites = data.Favorites
@@ -339,7 +343,7 @@ func (s *Store) Save() error {
 	if err := os.MkdirAll(s.Dir, 0o755); err != nil {
 		return err
 	}
-	data := fileData{Servers: s.Servers, Tasks: s.Tasks, SidebarWidth: s.SidebarWidth, QuitOnClose: s.QuitOnClose, LocalIndex: s.LocalIndex, Recent: s.RecentSearches, Favorites: s.Favorites}
+	data := fileData{Servers: s.Servers, Tasks: s.Tasks, SidebarWidth: s.SidebarWidth, QuitOnClose: s.QuitOnClose, SystemTitle: s.SystemTitleBar, LocalIndex: s.LocalIndex, Recent: s.RecentSearches, Favorites: s.Favorites}
 	if data.Servers == nil {
 		data.Servers = []*Server{}
 	}

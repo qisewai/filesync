@@ -190,7 +190,13 @@ func (a *app) topBar(c *ui.Context) {
 		c.OnShortcut(ui.Alt, ui.KeyUp, up)
 	}
 	t := c.Theme()
-	ui.Row(c).Padding(8, 16, 8, 10).Gap(8).AlignItems(ui.Center).MinHeight(52).BorderWidth(0, 0, 1, 0).BorderColor(t.Border).Children(func() {
+	// Without the system's title bar, it is the title bar: it moves the
+	// window, keeping clear of the window controls.
+	bar := ui.Row(c).Padding(8, 16+c.TitleBar().Right, 8, 10).Gap(8).AlignItems(ui.Center).MinHeight(a.toolbarHeight(c)).BorderWidth(0, 0, 1, 0).BorderColor(t.Border)
+	if a.hiddenTitleBar {
+		bar.DragWindow()
+	}
+	bar.Children(func() {
 		ui.Toolbar(c, func() {
 			ui.BackButton(c, a.nav).Tooltip("后退（Alt+←）")
 			ui.ForwardButton(c, a.nav).Tooltip("前进（Alt+→）")
@@ -213,7 +219,50 @@ func (a *app) topBar(c *ui.Context) {
 		default:
 			a.anywhereSearch(c)
 		}
+		if a.ownControls {
+			a.windowControls(c)
+		}
 	})
+}
+
+// windowControls are the buttons minimizing, maximizing and closing a
+// frameless window, at the end of the toolbar, as the desktop's are.
+func (a *app) windowControls(c *ui.Context) {
+	t := c.Theme()
+	ui.Row(c.Key("window-controls")).Gap(2).AlignItems(ui.Center).Shrink(0).Margin(0, -8, 0, 8).Children(func() {
+		button := func(key string, svg *ui.SVG, label string, danger bool, click func()) {
+			b := ui.ButtonBase(c.Key(key)).Size(36, 32).Radius(t.Radius).Label(label).Tooltip(label).OnClick(click)
+			hover := b.Hovered()
+			b.Children(func() {
+				color := t.TextMuted
+				if hover && danger {
+					color = ui.RGBA(255, 255, 255, 1)
+				}
+				ui.Icon(c, svg).FontSize(15).TextColor(color)
+			})
+			switch {
+			case hover && danger:
+				b.Background(ui.Hex("#e5484d"))
+			case hover:
+				b.Background(t.SurfaceHover)
+			}
+		}
+		button("minimize", iconMinimize, "最小化", false, a.minimizeWindow)
+		if a.maximized {
+			button("maximize", iconRestoreWin, "还原", false, func() { a.maximizeWindow(false) })
+		} else {
+			button("maximize", iconMaximize, "最大化", false, func() { a.maximizeWindow(true) })
+		}
+		button("close", iconClose, "关闭", true, a.closeButton)
+	})
+}
+
+// toolbarHeight is the height of the toolbar, and of the head of the
+// sidebar beside it: as the window controls, at least.
+const toolbarHeight = 52
+
+func (a *app) toolbarHeight(c *ui.Context) float32 {
+	return max(c.TitleBar().Height, toolbarHeight)
 }
 
 // locationBar is the row under the toolbar: where the page is, or its
