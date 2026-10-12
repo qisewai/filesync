@@ -5,6 +5,7 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/binary"
+	"errors"
 	"fmt"
 	"image"
 	"math"
@@ -42,6 +43,10 @@ type preview struct {
 	// swipe is the step a swipe of the picture fitting asks, 0 for none.
 	swipe       int
 	stripScroll float32 // the wheel turned over the strip, to a step
+	// doc is the URL the document shows at in the web view, "" for none;
+	// source shows a web page's text instead.
+	doc    string
+	source bool
 	// sibs is what siblings found, made once: the group does not change.
 	sibs   []fileindex.Entry
 	sibsAt int
@@ -56,7 +61,11 @@ func previewKind(e fileindex.Entry) string {
 	switch ext {
 	case ".jpg", ".jpeg", ".png", ".gif", ".webp", ".bmp":
 		return "image"
-	case ".txt", ".md", ".log", ".csv", ".tsv", ".json", ".jsonl", ".yaml", ".yml", ".toml", ".ini", ".conf", ".cfg", ".go", ".py", ".js", ".ts", ".tsx", ".jsx", ".vue", ".css", ".html", ".htm", ".xml", ".svg", ".sh", ".sql", ".rs", ".c", ".h", ".cpp", ".java", ".srt", ".vtt":
+	case ".pdf":
+		return "pdf"
+	case ".html", ".htm", ".xhtml":
+		return "html"
+	case ".txt", ".md", ".log", ".csv", ".tsv", ".json", ".jsonl", ".yaml", ".yml", ".toml", ".ini", ".conf", ".cfg", ".go", ".py", ".js", ".ts", ".tsx", ".jsx", ".vue", ".css", ".xml", ".svg", ".sh", ".sql", ".rs", ".c", ".h", ".cpp", ".java", ".srt", ".vtt":
 		return "text"
 	}
 	if !strings.Contains(e.Name, ".") || strings.HasPrefix(e.Name, ".") && strings.Count(e.Name, ".") == 1 {
@@ -78,6 +87,9 @@ func (a *app) sourceCurrent(server string, c *fileindex.Client) bool {
 func (a *app) closePreview() {
 	if p := a.preview; p != nil {
 		p.cancel()
+		if p.doc != "" {
+			a.hideDoc()
+		}
 		a.preview = nil
 	}
 }
@@ -92,39 +104,50 @@ func (a *app) showPreview(server string, c *fileindex.Client, e fileindex.Entry,
 		var bitmap *ui.Bitmap
 		var text, note string
 		var err error
-		limit := int64(textPreviewLimit)
-		if kind == "image" {
-			limit = imagePreviewLimit
+		limit, tooLarge := int64(textPreviewLimit), ""
+		switch kind {
+		case "image":
+			limit, tooLarge = imagePreviewLimit, "图片超过 32 MB，请用系统程序打开"
+		case "pdf":
+			limit, tooLarge = imagePreviewLimit, "PDF 超过 32 MB，请用系统程序打开"
+		case "html":
+			limit, tooLarge = htmlPreviewLimit, "网页超过 4 MB，请用系统程序打开"
 		}
 		var data []byte
 		var truncated bool
-		if kind == "image" && e.Size > limit {
-			err = fmt.Errorf("图片超过 32 MB，请用系统程序打开")
+		if tooLarge != "" && e.Size > limit {
+			err = errors.New(tooLarge)
 		} else {
 			data, truncated, err = c.ReadPreview(ctx, e.Root, e.Path, limit)
 		}
+		if err == nil && truncated && tooLarge != "" {
+			err = errors.New(tooLarge)
+		}
 		if err == nil {
-			if kind == "image" {
-				if truncated {
-					err = fmt.Errorf("图片超过 32 MB，请用系统程序打开")
-				} else {
-					var cfg image.Config
-					cfg, _, err = image.DecodeConfig(bytes.NewReader(data))
-					if err == nil && (cfg.Width <= 0 || cfg.Height <= 0 || int64(cfg.Width)*int64(cfg.Height) > 16_000_000) {
-						err = fmt.Errorf("图片超过 1600 万像素，请用系统程序打开")
-					}
-					if err == nil {
-						bitmap, err = ui.DecodeBitmap(data)
-					}
-					if err == nil {
-						w, h := bitmap.Size()
-						note = fmt.Sprintf("%d × %d · %s", w, h, formatBytes(e.Size))
-						if strings.EqualFold(path.Ext(e.Name), ".gif") {
-							note += " · GIF 显示首帧"
-						}
+			switch kind {
+			case "pdf":
+				note = "PDF · " + formatBytes(e.Size)
+			case "html":
+				text, err = decodePreviewText(data, false)
+				data = []byte(text)
+				note = "网页 · 不运行脚本，不加载外部资源"
+			case "image":
+				var cfg image.Config
+				cfg, _, err = image.DecodeConfig(bytes.NewReader(data))
+				if err == nil && (cfg.Width <= 0 || cfg.Height <= 0 || int64(cfg.Width)*int64(cfg.Height) > 16_000_000) {
+					err = fmt.Errorf("图片超过 1600 万像素，请用系统程序打开")
+				}
+				if err == nil {
+					bitmap, err = ui.DecodeBitmap(data)
+				}
+				if err == nil {
+					w, h := bitmap.Size()
+					note = fmt.Sprintf("%d × %d · %s", w, h, formatBytes(e.Size))
+					if strings.EqualFold(path.Ext(e.Name), ".gif") {
+						note += " · GIF 显示首帧"
 					}
 				}
-			} else {
+			default:
 				text, err = decodePreviewText(data, truncated)
 				note = "UTF-8 / UTF-16 · 只读，可选择复制"
 				if truncated {
@@ -140,6 +163,10 @@ func (a *app) showPreview(server string, c *fileindex.Client, e fileindex.Entry,
 			p.bitmap = bitmap
 			p.text = text
 			p.note = note
+			if err == nil && (kind == "pdf" || kind == "html") {
+				p.doc = a.docs.put(kind, data)
+				a.showDoc(p.doc)
+			}
 			if err != nil {
 				p.err = err.Error()
 				if err == fileindex.ErrAuth {
@@ -664,14 +691,22 @@ func viewerArrow(c *ui.Context, key string, svg *ui.SVG, label string, disabled 
 	b.OnClick(click)
 }
 
-// textViewer shows a text file in a card over the window.
+// textViewer shows a text file, or a document in the web view, in a card
+// over the window: a document's larger.
 func (a *app) textViewer(c *ui.Context, p *preview) {
 	t := c.Theme()
 	list, at := p.siblings()
+	kind := previewKind(p.entry)
+	doc := kind == "pdf" || kind == "html"
 	ui.DialogBase(c.Key("native-preview"), &p.open, func(backdrop, panel ui.Element) {
 		backdrop.Background(ui.RGBA(0, 0, 0, 0.45))
 		w, h := c.Size()
-		panel.Width(min(920, w-48)).Height(min(680, h-48)).Radius(t.Radius*3).Background(t.Background).Border(1, t.Border).Clip().
+		if doc {
+			panel.Width(min(1180, w-48)).Height(h - 48)
+		} else {
+			panel.Width(min(920, w-48)).Height(min(680, h-48))
+		}
+		panel.Radius(t.Radius*3).Background(t.Background).Border(1, t.Border).Clip().
 			Shadow(0, 12, 40, 0, ui.RGBA(0, 0, 0, 0.25))
 		a.viewerKeys(c, p)
 		ui.Row(c).Padding(12, 12, 12, 18).Gap(10).AlignItems(ui.Center).BorderWidth(0, 0, 1, 0).BorderColor(t.Border).Children(func() {
@@ -685,6 +720,15 @@ func (a *app) textViewer(c *ui.Context, p *preview) {
 				meta = append(meta, formatBytes(p.entry.Size), p.entry.ModTime().Format("2006-01-02 15:04"), path.Join(p.entry.RootName, p.entry.Parent))
 				ui.Text(c, strings.Join(meta, " · ")).FontSize(12).TextColor(t.TextMuted).SingleLine()
 			})
+			if kind == "html" && p.doc != "" {
+				shown := 0
+				if p.source {
+					shown = 1
+				}
+				if ui.Segmented(c.Key("html-shown"), &shown, "网页", "源代码").Label("显示").Changed() {
+					p.source = shown == 1
+				}
+			}
 			if len(list) > 1 {
 				viewerButton(c, "prev", iconPrev, "上一项", at <= 0, false, func() { a.previewStep(-1) })
 				viewerButton(c, "next", iconNext, "下一项", at < 0 || at >= len(list)-1, false, func() { a.previewStep(1) })
@@ -695,13 +739,29 @@ func (a *app) textViewer(c *ui.Context, p *preview) {
 			})
 			viewerButton(c, "close", iconClose, "关闭预览", false, false, a.closePreview)
 		})
-		ui.Column(c).Grow(1).MinHeight(0).Padding(12).Children(func() {
+		body := ui.Column(c).Grow(1).MinHeight(0).Padding(12)
+		webPage := doc && !p.loading && p.err == "" && !p.source
+		if webPage && a.docView != nil {
+			body.Padding(0) // the page to the card's edges
+		}
+		body.Children(func() {
 			switch {
 			case p.loading:
 				ui.Column(c).Grow(1).Center().Children(func() { ui.Spinner(c).FontSize(22).Label("正在加载预览") })
 			case p.err != "":
 				notice(c, t.Danger, p.err)
 				ui.Spacer(c)
+			case webPage && a.docView != nil:
+				ui.WebView(c, a.docView).Grow(1).Label(p.entry.Name)
+			case webPage:
+				ui.Column(c).Grow(1).Center().Gap(12).Children(func() {
+					fileIcon(c, p.entry, 40)
+					ui.Text(c, "无法在这里显示："+a.docErr).TextColor(t.TextMuted).TextAlign(ui.Center).MaxLines(3)
+					ui.Button(c.Key("doc-open-out"), "用系统程序打开").OnClick(func() {
+						a.closePreview()
+						a.systemOpenSource(p.server, p.client, p.entry, false)
+					})
+				})
 			default:
 				ui.TextArea(c.Key("preview-text"), &p.text).ReadOnly(true).Font("monospace").Grow(1).MinHeight(0).Label("文本预览")
 			}

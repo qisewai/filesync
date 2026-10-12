@@ -29,6 +29,9 @@ type app struct {
 	// web page in the browser.
 	openPath func(string)
 	openURL  func(string)
+	// newDocView makes the web view documents show in, and how it loads a
+	// URL; nil where there is none, as in tests.
+	newDocView func() (view ui.NativeWebView, load func(url string), err error)
 	// keepAwake keeps the computer from sleeping until release is called.
 	keepAwake func(reason string) (release func())
 	// closeWindow closes the window, which quits the app.
@@ -106,6 +109,12 @@ type app struct {
 	proxy          *fileindex.LocalProxy
 	recycle        *recycleBrowser
 	admin          *adminPage
+	// docs is the document previewed, served to docView, the web view made
+	// the first time one shows; docErr tells why it could not be made.
+	docs    docFiles
+	docView ui.NativeWebView
+	docLoad func(url string)
+	docErr  string
 
 	transfers     []*transfer
 	transferSeq   int

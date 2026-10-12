@@ -25,7 +25,7 @@ func TestNativePreviewTextImageNavigationAndSystemOpen(t *testing.T) {
 	t.Setenv("XDG_CACHE_HOME", t.TempDir())
 	f := fitest.New(t)
 	os.WriteFile(filepath.Join(f.Root, "笔记.txt"), []byte("你好，原生预览\n第二行"), 0644)
-	os.WriteFile(filepath.Join(f.Root, "报告.pdf"), []byte("%PDF-1.4 test"), 0644)
+	os.WriteFile(filepath.Join(f.Root, "报告.docx"), []byte("%DOCX test"), 0644)
 	img := image.NewRGBA(image.Rect(0, 0, 160, 100))
 	for y := 0; y < 100; y++ {
 		for x := 0; x < 160; x++ {
@@ -107,11 +107,11 @@ func TestNativePreviewTextImageNavigationAndSystemOpen(t *testing.T) {
 		f.Close()
 	}
 	h.click("关闭预览")
-	h.click("报告.pdf")
+	h.click("报告.docx")
 	h.tt.Key(0, ui.KeyEnter)
 	h.waitTransfers()
 	data, err := os.ReadFile(opened)
-	if err != nil || string(data) != "%PDF-1.4 test" {
+	if err != nil || string(data) != "%DOCX test" {
 		t.Fatalf("opened %q %q %v", opened, data, err)
 	}
 	cached := opened
@@ -120,7 +120,7 @@ func TestNativePreviewTextImageNavigationAndSystemOpen(t *testing.T) {
 	}
 	opened = ""
 	for _, e := range h.a.br.items {
-		if e.Name == "报告.pdf" {
+		if e.Name == "报告.docx" {
 			h.a.openEntry(e)
 		}
 	}

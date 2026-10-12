@@ -60,6 +60,10 @@ func main() {
 	}
 	a.plainText = x11TextScale()
 
+	// Schemes go before the windows that load them.
+	if err := mygo.Protocol.Handle(docScheme, &a.docs); err != nil {
+		log.Printf("文档预览不可用：%v", err)
+	}
 	mygo.App.WhenReady(func() {
 		var win *mygo.Window
 		win = mygo.NewWindow(mygo.WindowOptions{
@@ -104,6 +108,24 @@ func main() {
 			if err := mygo.Shell.OpenExternal(u); err != nil {
 				win.Update(func() { a.errorMsg = "无法打开 " + u + ": " + err.Error() })
 			}
+		}
+		a.newDocView = func() (ui.NativeWebView, func(string), error) {
+			v, err := win.NewWebView(mygo.WebViewOptions{BackgroundColor: "#ffffff"})
+			if err != nil {
+				return nil, nil, err
+			}
+			// The page stays on its document: a link followed opens in
+			// the browser instead.
+			v.Page().OnWillNavigate(func(e *mygo.NavigateEvent) {
+				if docNavigable(e.URL) {
+					return
+				}
+				e.PreventDefault()
+				if e.UserInitiated && (strings.HasPrefix(e.URL, "https://") || strings.HasPrefix(e.URL, "http://")) {
+					a.openURL(e.URL)
+				}
+			})
+			return v, func(u string) { v.Page().LoadURL(u) }, nil
 		}
 		a.keepAwake = func(reason string) func() { return mygo.Power.KeepAwake(reason, false) }
 		quitting := false // the window closes to quit, not to the tray
