@@ -4,10 +4,12 @@ import (
 	"fmt"
 	"path"
 	"sort"
+	"strconv"
 	"strings"
 
 	"filesync/fileindex"
 	"github.com/egoist/mygo/ui"
+	"github.com/egoist/mygo/ui/chart"
 )
 
 func (a *app) statsView(c *ui.Context, m *adminPage) {
@@ -23,22 +25,10 @@ func (a *app) statsView(c *ui.Context, m *adminPage) {
 	ov := m.overview
 	ui.Scroll(c).Grow(1).MinHeight(0).Children(func() {
 		ui.Column(c).Gap(14).Padding(0, 8, 4, 0).Children(func() {
-			a.statsSummary(c, ov)
-			// Rows of cards as high as the higher: the chart grows to the
-			// folders beside it.
+			a.statsSummary(c, m, ov)
+			// Rows of cards as high as the higher.
 			ui.Row(c).Gap(14).Wrap().AlignItems(ui.Stretch).Children(func() {
 				statsCard(c, "文件夹占用", 3, func() { a.statsFolders(c, m, ov) })
-				statsCard(c, "按修改年份", 2, func() { yearChart(c, ov.Years) })
-			})
-			ui.Row(c).Gap(14).Wrap().AlignItems(ui.Stretch).Children(func() {
-				statsCard(c, "文件类型", 3, func() {
-					for _, b := range ov.Categories {
-						usageRow(c, "", nil, categoryColor(b.Key), categoryLabel(b.Key), b.Size, ov.Size, b.Count, nil)
-					}
-					if len(ov.Categories) == 0 {
-						statsEmpty(c)
-					}
-				})
 				statsCard(c, "扩展名 Top 15", 2, func() {
 					exts := append([]fileindex.Bucket(nil), ov.Exts...)
 					sort.SliceStable(exts, func(i, j int) bool { return exts[i].Size > exts[j].Size })
@@ -54,52 +44,137 @@ func (a *app) statsView(c *ui.Context, m *adminPage) {
 					}
 				})
 			})
+			ui.Row(c).Children(func() {
+				statsCard(c, "按修改年份", 1, func() { yearChart(c, m, ov.Years) })
+			})
 			a.largestCard(c, m)
 		})
 	})
 }
 
-// statsSummary is the total, and how the kinds of files share it.
-func (a *app) statsSummary(c *ui.Context, ov *fileindex.Overview) {
+// statsSummary is the total, and how the kinds of files share it, in a
+// donut and its legend: pointing at a kind in either shows it in both.
+func (a *app) statsSummary(c *ui.Context, m *adminPage, ov *fileindex.Overview) {
 	t := c.Theme()
-	ui.Column(c).Padding(18).Gap(14).Radius(t.Radius*2).Border(1, t.Border).Background(t.Background).Children(func() {
-		ui.Row(c).Gap(28).AlignItems(ui.End).Wrap().Children(func() {
-			ui.Column(c).Gap(2).Children(func() {
-				ui.Text(c, "总大小").FontSize(12).TextColor(t.TextMuted)
-				ui.Text(c, formatBytes(ov.Size)).FontSize(30).Bold().FontFeatures("tnum")
-			})
-			figure := func(label string, n int64) {
-				ui.Column(c).Gap(2).Children(func() {
-					ui.Text(c, label).FontSize(12).TextColor(t.TextMuted)
-					ui.Text(c, groupDigits(n)).FontSize(20).Bold().FontFeatures("tnum")
-				})
-			}
-			figure("文件", ov.Files)
-			figure("文件夹", ov.Dirs)
-		})
-		if ov.Size <= 0 || len(ov.Categories) == 0 {
-			return
+	var cats []fileindex.Bucket
+	for _, b := range ov.Categories {
+		if b.Size > 0 {
+			cats = append(cats, b)
 		}
-		// One bar, shared by the kinds of files.
-		ui.Row(c).Height(12).Radius(6).Clip().Background(t.Border).Label("文件类型占比").Children(func() {
-			for _, b := range ov.Categories {
-				if b.Size <= 0 {
-					continue
+	}
+	if m.catHover >= len(cats) {
+		m.catHover = -1
+	}
+	hover := -1
+	ui.Row(c).Padding(18, 24).Gap(32).AlignItems(ui.Center).Wrap().Radius(t.Radius*2).Border(1, t.Border).Background(t.Background).Children(func() {
+		if len(cats) > 0 {
+			if i := categoryDonut(c, m, cats, ov.Size); i >= 0 {
+				hover = i
+			}
+		}
+		ui.Column(c).Grow(1).Basis(0).MinWidth(260).Gap(16).Children(func() {
+			ui.Row(c).Gap(32).AlignItems(ui.End).Wrap().Children(func() {
+				figure := func(label, value string, size float32) {
+					ui.Column(c).Gap(2).Children(func() {
+						ui.Text(c, label).FontSize(12).TextColor(t.TextMuted)
+						ui.Text(c, value).FontSize(size).Bold().FontFeatures("tnum")
+					})
 				}
-				ui.Column(c).Height(12).WidthPercent(float32(float64(b.Size) / float64(ov.Size) * 100)).Background(categoryColor(b.Key)).
-					Tooltip(fmt.Sprintf("%s %s（%.1f%%）", categoryLabel(b.Key), formatBytes(b.Size), percentOf(b.Size, ov.Size)))
-			}
-		})
-		ui.Row(c).Gap(18).Wrap().Children(func() {
-			for _, b := range ov.Categories {
-				ui.Row(c).Gap(6).AlignItems(ui.Center).Children(func() {
-					ui.Column(c).Size(10, 10).Radius(3).Background(categoryColor(b.Key))
-					ui.Text(c, categoryLabel(b.Key)).FontSize(12)
-					ui.Text(c, formatBytes(b.Size)).FontSize(12).TextColor(t.TextMuted).FontFeatures("tnum")
-				})
-			}
+				figure("总大小", formatBytes(ov.Size), 28)
+				figure("文件", groupDigits(ov.Files), 20)
+				figure("文件夹", groupDigits(ov.Dirs), 20)
+			})
+			// The legend, two columns of the kinds.
+			ui.Row(c).GapX(20).GapY(4).Wrap().Children(func() {
+				for i, b := range cats {
+					item := ui.Row(c.Key("cat/"+b.Key)).Gap(8).AlignItems(ui.Center).Padding(4, 8).Radius(t.Radius).
+						Width(236).Label(categoryLabel(b.Key)).
+						Tooltip(fmt.Sprintf("%s 个文件", groupDigits(b.Count)))
+					if item.Hovered() {
+						hover = i
+					}
+					if i == m.catHover {
+						item.Background(t.SurfaceHover)
+					}
+					item.Children(func() {
+						ui.Column(c).Size(10, 10).Radius(3).Background(categoryColor(b.Key))
+						ui.Text(c, categoryLabel(b.Key)).FontSize(13).Grow(1)
+						ui.Text(c, formatBytes(b.Size)).FontSize(12).FontFeatures("tnum")
+						ui.Text(c, fmt.Sprintf("%.1f%%", percentOf(b.Size, ov.Size))).FontSize(12).TextColor(t.TextMuted).Width(46).TextAlign(ui.End).FontFeatures("tnum")
+					})
+				}
+			})
 		})
 	})
+	if hover != m.catHover {
+		// The donut and the legend built before the pointer was known
+		// show it in the next frame.
+		m.catHover = hover
+		c.After(0)
+	}
+}
+
+// The donut of the summary: its size, and the radii of its ring.
+const (
+	donutSize  = 156
+	donutInner = 52
+	donutOuter = 72
+)
+
+// categoryDonut shows the kinds of files as a ring, the one pointed at
+// standing out, and how many kinds, or the share of the one pointed at,
+// in its middle. It returns the kind under the pointer, -1 for none.
+func categoryDonut(c *ui.Context, m *adminPage, cats []fileindex.Bucket, total int64) int {
+	t := c.Theme()
+	values := make([]float64, len(cats))
+	for i, b := range cats {
+		values[i] = float64(b.Size)
+	}
+	slices := chart.Pie(values, 0.025)
+	const mid = donutSize / 2
+	ring := ui.Box(c.Key("category-donut")).Size(donutSize, donutSize).Center().Label("文件类型占比").
+		Description(categoryShares(cats, total))
+	under := -1
+	if x, y, over := ring.PointerPosition(); over {
+		if i, ok := chart.SliceAt(slices, x-mid, y-mid, donutInner, donutOuter+4); ok {
+			under = i
+		}
+	}
+	hover := m.catHover
+	ring.Draw(func(p *ui.Painter, r ui.Rect) {
+		for i, s := range slices {
+			outer, color := float32(donutOuter), categoryColor(cats[i].Key)
+			if hover >= 0 && i != hover {
+				color = color.Alpha(0.35)
+			}
+			if i == hover {
+				outer += 4
+			}
+			p.FillPath(chart.Sector(r.X+mid, r.Y+mid, donutInner, outer, s), color)
+		}
+	})
+	ring.Children(func() {
+		ui.Column(c).Width(2*donutInner - 8).Gap(1).AlignItems(ui.Center).Children(func() {
+			label, value := "文件类型", fmt.Sprintf("%d 类", len(cats))
+			if hover >= 0 {
+				b := cats[hover]
+				label, value = categoryLabel(b.Key), fmt.Sprintf("%.1f%%", percentOf(b.Size, total))
+			}
+			ui.Text(c, label).FontSize(11).TextColor(t.TextMuted).SingleLine()
+			ui.Text(c, value).FontSize(15).Bold().SingleLine().FontFeatures("tnum")
+		})
+	})
+	return under
+}
+
+// categoryShares says how the kinds share the space, for assistive
+// technology.
+func categoryShares(cats []fileindex.Bucket, total int64) string {
+	parts := make([]string, len(cats))
+	for i, b := range cats {
+		parts[i] = fmt.Sprintf("%s %s（%.1f%%）", categoryLabel(b.Key), formatBytes(b.Size), percentOf(b.Size, total))
+	}
+	return strings.Join(parts, "，")
 }
 
 // statsFolders is how the folders shown share their space; a folder opens
@@ -260,8 +335,9 @@ func usageRow(c *ui.Context, key string, svg *ui.SVG, color ui.Color, label stri
 }
 
 // yearChart shows the space of the files by the year they were changed,
-// as columns.
-func yearChart(c *ui.Context, years []fileindex.Bucket) {
+// as bars over an axis of sizes: the pointer, or the arrows, choose a
+// year to tell its size and files.
+func yearChart(c *ui.Context, m *adminPage, years []fileindex.Bucket) {
 	t := c.Theme()
 	if len(years) == 0 {
 		statsEmpty(c)
@@ -269,36 +345,77 @@ func yearChart(c *ui.Context, years []fileindex.Bucket) {
 	}
 	ys := append([]fileindex.Bucket(nil), years...)
 	sort.Slice(ys, func(i, j int) bool { return ys[i].Key < ys[j].Key })
+	labels := make([]string, len(ys))
 	var top int64
-	for _, y := range ys {
+	for i, y := range ys {
+		labels[i] = y.Key
 		top = max(top, y.Size)
 	}
-	// Narrow columns show some of the years, and their sizes on hover.
-	every := (len(ys) + 6) / 7
-	sizes := len(ys) <= 6
-	// The columns grow with the card, as high as the cards beside it.
-	ui.Row(c).Gap(6).AlignItems(ui.Stretch).MinHeight(170).Grow(1).Padding(8, 0, 0, 0).Children(func() {
-		for i, y := range ys {
-			frac := float32(0)
-			if top > 0 {
-				frac = float32(float64(y.Size) / float64(top))
+	x := chart.NewBand(labels...).Padding(0.3, 0.15)
+	unit, div := byteUnit(top)
+	y := chart.NewLinear(0, max(float64(top)/div, 1)).Nice(4)
+	y.Format = func(v float64) string { return strconv.FormatFloat(v, 'g', 4, 64) + " " + unit }
+	ticks := y.Ticks(4)
+	// Narrow bands label some of the years, the latest always.
+	bottom := x.Ticks()
+	every := (len(ys) + 11) / 12
+	for i := range bottom {
+		if (len(ys)-1-i)%every != 0 {
+			bottom[i].Label = ""
+		}
+	}
+	xs := make([]float32, len(ys))
+	for i := range ys {
+		xs[i] = x.At(i)
+	}
+	describe := func(i int) string {
+		return fmt.Sprintf("%s 年：%s，%s 个文件", ys[i].Key, formatBytes(ys[i].Size), groupDigits(ys[i].Count))
+	}
+	label := func(side chart.Side, tick chart.Tick) {
+		ui.Text(c, tick.Label).NoWrap().FontSize(11).TextColor(t.TextMuted).FontFeatures("tnum")
+	}
+	chart.Plot(c.Key("year-chart"), chart.Axes{Left: ticks, Bottom: bottom, Label: label}, func(area ui.Element) {
+		area.Draw(func(p *ui.Painter, r ui.Rect) {
+			for _, tick := range ticks {
+				p.Line(r.X, chart.Y(r, tick.At), r.X+r.W, chart.Y(r, tick.At), 1, t.Border.Alpha(0.7))
 			}
-			label := y.Key
-			if (len(ys)-1-i)%every != 0 {
-				label = " "
+		})
+		chart.Select(c, area, &m.yearPick, xs, describe)
+		pick := m.yearPick
+		for i, b := range ys {
+			color := t.Accent.Alpha(0.85)
+			if pick >= 0 && i != pick {
+				color = t.Accent.Alpha(0.4)
 			}
-			ui.Column(c).Grow(1).Basis(0).MinWidth(0).MaxWidth(56).Gap(4).AlignItems(ui.Center).Tooltip(fmt.Sprintf("%s 年：%s，%s 个文件", y.Key, formatBytes(y.Size), groupDigits(y.Count))).Children(func() {
-				// The plot: the column at its foot, its size over it.
-				ui.Column(c).Grow(1).MinHeight(0).WidthPercent(100).Justify(ui.End).AlignItems(ui.Center).Gap(3).Children(func() {
-					if sizes {
-						ui.Text(c, formatBytes(y.Size)).FontSize(10).TextColor(t.TextMuted).SingleLine().FontFeatures("tnum")
-					}
-					ui.Column(c).HeightPercent(max(frac*86, 1)).MinHeight(2).WidthPercent(100).MaxWidth(36).Radius(4).Background(t.Accent.Alpha(0.85))
-				})
-				ui.Text(c, label).FontSize(11).FontFeatures("tnum")
+			chart.Rect(c, x.Band(i), y.Span(0, float64(b.Size)/div)).MinHeight(2).Radius(3, 3, 0, 0).Background(color)
+		}
+		if pick >= 0 && pick < len(ys) {
+			// The label by the bar, inside the plot at its ends.
+			at, h := xs[pick], ui.Center
+			switch {
+			case at < 0.2:
+				h = ui.Start
+			case at > 0.8:
+				h = ui.End
+			}
+			chart.Anchor(c, at, y.At(float64(ys[pick].Size)/div), h, ui.End, func() {
+				ui.Text(c, describe(pick)).NoWrap().FontSize(12).FontFeatures("tnum").Padding(4, 10).Margin(0, 0, 6, 0).
+					Radius(t.Radius).Background(t.Background).Border(1, t.Border).Shadow(0, 2, 8, 0, ui.RGBA(0, 0, 0, 0.12))
 			})
 		}
-	}).Label("按修改年份")
+	}).Height(240).Gap(8).Margin(8, 0, 0, 0).Label("按修改年份").Description("各年修改的文件大小，用左右方向键逐年查看")
+}
+
+// byteUnit is the unit sizes up to n read best in, and its bytes.
+func byteUnit(n int64) (string, float64) {
+	unit, div := "B", 1.0
+	for _, u := range []string{"KB", "MB", "GB", "TB"} {
+		if float64(n) < div*1024 {
+			break
+		}
+		unit, div = u, div*1024
+	}
+	return unit, div
 }
 
 func percentOf(size, total int64) float64 {

@@ -6,6 +6,7 @@ import (
 	"image/png"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -468,5 +469,63 @@ func TestLargeDirectoryUsageListCanNavigateLastRow(t *testing.T) {
 	}
 	for range 4 {
 		h.tt.Frame()
+	}
+}
+
+func TestStatisticsChartsFollowPointerAndKeys(t *testing.T) {
+	f := fitest.New(t)
+	h := browserHarness(t, f)
+	h.tt.SetSize(1280, 1400)
+	h.manage("空间统计")
+	m := h.a.admin
+	g := int64(1 << 30)
+	m.overview = &fileindex.Overview{Files: 3, Dirs: 1, Size: 100 * g,
+		Categories: []fileindex.Bucket{{Key: "video", Size: 60 * g}, {Key: "image", Size: 30 * g}, {Key: "other", Size: 10 * g}},
+		Years:      []fileindex.Bucket{{Key: "2023", Size: 20 * g}, {Key: "2021", Size: 50 * g}, {Key: "2022", Size: 30 * g, Count: 7}},
+	}
+	frames := func() {
+		for range 3 {
+			h.tt.Frame()
+		}
+	}
+	shown := func(text string) bool { return slices.Contains(h.tt.Texts(), text) }
+	frames()
+	if !shown("3 类") {
+		t.Fatal("donut middle should count the kinds")
+	}
+	// The ring's right side is the first kind's, from twelve o'clock.
+	ring, ok := h.tt.Find("文件类型占比")
+	if !ok {
+		t.Fatal("no donut")
+	}
+	h.tt.Move(ring.X+ring.W/2+donutOuter-6, ring.Y+ring.H/2)
+	frames()
+	if m.catHover != 0 || shown("3 类") || !shown("60.0%") {
+		t.Fatalf("slice under the pointer not shown: %d", m.catHover)
+	}
+	// The legend points at the same kinds.
+	r, _ := h.tt.Find("图片")
+	h.tt.Move(r.X+r.W/2, r.Y+r.H/2)
+	frames()
+	if m.catHover != 1 {
+		t.Fatalf("legend under the pointer not shown: %d", m.catHover)
+	}
+	h.tt.Move(5, 5)
+	frames()
+	if m.catHover != -1 || !shown("3 类") {
+		t.Fatal("hover stayed after leaving")
+	}
+	// Years go in order; the pointer over a bar, then the arrows, choose.
+	r, _ = h.tt.Find("2022")
+	h.tt.Move(r.X+r.W/2, r.Y-30)
+	frames()
+	if m.yearPick != 1 || !shown("2022 年：30.0 GB，7 个文件") {
+		t.Fatalf("year under the pointer not chosen: %d", m.yearPick)
+	}
+	h.tt.Press(r.X+r.W/2, r.Y-30)
+	h.tt.Key(0, ui.KeyRight)
+	frames()
+	if m.yearPick != 2 {
+		t.Fatalf("arrow did not choose the next year: %d", m.yearPick)
 	}
 }

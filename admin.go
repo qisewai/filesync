@@ -42,17 +42,20 @@ type adminPage struct {
 	dupeRows                      []duplicateRow
 	deletingDupes                 bool
 	overview                      *fileindex.Overview
-	largest                       []fileindex.Entry
-	largestSort                   tableSort
-	dirs                          []fileindex.DirUsage
-	dirList                       ui.ListState
-	usageRoot                     int64
-	usagePath                     string
-	statsDir                      string
-	largestList                   ui.ListState
-	largestCursor                 int
-	tasks                         []fileindex.Task
-	refreshPending                bool
+	// catHover is the kind of files pointed at in the summary, yearPick
+	// the year chosen in its chart; -1 for none.
+	catHover, yearPick int
+	largest            []fileindex.Entry
+	largestSort        tableSort
+	dirs               []fileindex.DirUsage
+	dirList            ui.ListState
+	usageRoot          int64
+	usagePath          string
+	statsDir           string
+	largestList        ui.ListState
+	largestCursor      int
+	tasks              []fileindex.Task
+	refreshPending     bool
 }
 
 func adminPlace(server, tab string) string { return "admin/" + server + "/" + tab }
@@ -78,7 +81,7 @@ func (a *app) openAdmin(server, tab string) {
 	if a.admin != nil {
 		a.admin.stop()
 	}
-	m := &adminPage{server: server, tab: tab, rootCursor: -1, largestCursor: -1, scope: "全部目录", minSize: "≥ 1 MB", page: 1, selected: map[int64]bool{}}
+	m := &adminPage{server: server, tab: tab, rootCursor: -1, largestCursor: -1, catHover: -1, yearPick: -1, scope: "全部目录", minSize: "≥ 1 MB", page: 1, selected: map[int64]bool{}}
 	m.rootList.Selected = &m.rootCursor
 	m.rootList.Key = func(i int) any { return a.roots[server][i].ID }
 	m.largestList.Selected = &m.largestCursor
