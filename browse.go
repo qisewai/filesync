@@ -11,6 +11,7 @@ import (
 
 	"filesync/config"
 	"filesync/fileindex"
+	"filesync/localtrash"
 
 	"github.com/egoist/mygo/ui"
 )
@@ -312,7 +313,7 @@ func (a *app) browserView(c *ui.Context) {
 			return s
 		}
 		toolButton(c, "download", iconSave, "下载…", tip("下载到本机"), !oneRoot, func() { a.download(es) })
-		toolButton(c, "copy-to", iconCopy, "复制到…", tip("复制到这台服务器的其他位置"), !oneRoot, func() { a.transferTo(false, es) })
+		toolButton(c, "copy-to", iconCopy, "复制到…", tip("复制到这台或其他服务器上"), !oneRoot, func() { a.transferTo(false, es) })
 		toolButton(c, "move-to", iconMove, "移动到…", tip(""), !writable || !oneRoot, func() { a.transferTo(true, es) })
 		if n == 1 {
 			toolButton(c, "rename", iconRename, "重命名", "重命名（F2）", !writable, func() { a.startRename(es[0]) })
@@ -599,36 +600,64 @@ func (a *app) startUpload(files []string) {
 	if b == nil || b.root.ReadOnly || b.loading || b.operating || len(files) == 0 {
 		return
 	}
-	c, sv := a.brClient()
-	if c == nil {
+	dir := b.path
+	a.startUploadTo(b.server, b.root.ID, path.Join(b.root.Name, b.path), b.path, files, false, func() {
+		if a.br == b && b.path == dir {
+			a.reloadKeeping()
+		}
+	})
+}
+
+// startUploadTo sends files and folders of this computer into dir of a
+// root of a server, where showing it; with move, what landed whole then
+// goes to the trash of this computer. after runs once it ended well.
+func (a *app) startUploadTo(server string, root int64, where, dir string, files []string, move bool, after func()) {
+	sv := a.store.Server(server)
+	if sv == nil || len(files) == 0 {
 		return
 	}
+	c := fileindex.New(sv.Addr, sv.Token)
 	title := filepath.Base(files[0])
 	if len(files) > 1 {
 		title = fmt.Sprintf("%s 等 %d 项", title, len(files))
 	}
-	where := path.Join(b.root.Name, b.path)
-	tr := a.addTransfer("上传", title+" → "+where)
-	tr.server = b.server
+	kind := "上传"
+	if move {
+		kind = "移动"
+	}
+	tr := a.addTransfer(kind, title+" → "+where)
+	tr.server = server
 	ctx, cancel := context.WithCancel(context.Background())
 	tr.cancel = cancel
-	loc := fileindex.Location{Addr: sv.Addr, Root: b.root.ID, Path: b.path}
-	dir := b.path
+	loc := fileindex.Location{Addr: sv.Addr, Root: root, Path: dir}
 	go func() {
 		res := c.Upload(ctx, loc, files, hooks(a, tr))
+		var failed []string
+		broken := map[string]bool{} // the items with an entry not landed
+		for _, e := range res.Errors {
+			failed = append(failed, e.Action.Path+"："+e.Err.Error())
+			top, _, _ := strings.Cut(e.Action.Path, "/")
+			broken[top] = true
+		}
+		err := res.Fatal
+		if res.Canceled {
+			err = context.Canceled
+		}
+		if move && err == nil {
+			for _, f := range files {
+				if broken[filepath.Base(f)] {
+					failed = append(failed, filepath.Base(f)+"：没有完整上传，保留在本机")
+				} else if terr := localtrash.Move(f); terr != nil {
+					failed = append(failed, filepath.Base(f)+"：已上传，但本机文件未能移入回收站："+terr.Error())
+				}
+			}
+		}
 		a.post(func() {
-			var failed []string
-			for _, e := range res.Errors {
-				failed = append(failed, e.Action.Path+"："+e.Err.Error())
-			}
-			err := res.Fatal
-			if res.Canceled {
-				err = context.Canceled
-			}
-			if a.br == b && b.path == dir {
-				tr.after = a.reloadKeeping
-			}
+			tr.after = after
 			a.finishTransfer(tr, err, failed)
+			if move {
+				a.localChanged(filepath.Dir(files[0]))
+			}
 			if errors.Is(err, fileindex.ErrAuth) {
 				a.signedOut(sv)
 			}
@@ -639,7 +668,9 @@ func (a *app) startUpload(files []string) {
 // download asks where, then downloads the entries there.
 func (a *app) download(es []fileindex.Entry) { a.downloadIn(a.brFiles(), es) }
 
-func (a *app) startDownloadFrom(c *fileindex.Client, server string, es []fileindex.Entry, dest string) {
+// startDownloadFrom downloads the entries into dest; with move, what came
+// whole then goes to the trash of the server.
+func (a *app) startDownloadFrom(c *fileindex.Client, f *nasFiles, es []fileindex.Entry, dest string, move bool) {
 	if len(es) == 0 {
 		return
 	}
@@ -647,8 +678,12 @@ func (a *app) startDownloadFrom(c *fileindex.Client, server string, es []fileind
 	if len(es) > 1 {
 		title = fmt.Sprintf("%s 等 %d 项", title, len(es))
 	}
-	tr := a.addTransfer("下载", title+" → "+dest)
-	tr.server = server
+	kind := "下载"
+	if move {
+		kind = "移动"
+	}
+	tr := a.addTransfer(kind, title+" → "+dest)
+	tr.server = f.server
 	if len(es) == 1 && !es[0].IsDir {
 		tr.total = es[0].Size
 	}
@@ -670,7 +705,23 @@ func (a *app) startDownloadFrom(c *fileindex.Client, server string, es []fileind
 				failed = append(failed, e.Error())
 			}
 		}
-		a.post(func() { a.finishTransfer(tr, err, failed) })
+		// A move leaves the server only once all came whole.
+		moved := false
+		if move && err == nil && len(failed) == 0 {
+			if err = c.Trash(ctx, root, paths(es)); err != nil {
+				err = fmt.Errorf("已下载到本机，但服务器上的文件未能移入回收站：%w", err)
+			} else {
+				moved = true
+			}
+		} else if move && err == nil {
+			failed = append(failed, "有文件没有完整下载，服务器上的文件全部保留")
+		}
+		a.post(func() {
+			a.finishTransfer(tr, err, failed)
+			if moved {
+				f.changed("")
+			}
+		})
 	}()
 }
 

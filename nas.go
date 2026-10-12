@@ -37,8 +37,11 @@ type nasBrowser struct {
 	// servers, or only signs in, after which afterLogin runs.
 	pick       func(server string, root int64, rootName, path string)
 	afterLogin func()
-	// sameServer, when set, is the only server the dialog offers.
-	sameServer string
+	// title, when set, is the title of the dialog choosing a directory;
+	// local, when set, offers a folder of this computer too, which it
+	// asks for.
+	title string
+	local func()
 
 	server *config.Server // the one in use
 	client *fileindex.Client
@@ -117,15 +120,18 @@ func (a *app) openPicker(server string, root int64, p string, pick func(server s
 	}
 }
 
-// openPickerIn opens the dialog to choose a directory of the server in
-// use, at once: copies and moves stay on it.
+// openPickerIn opens the dialog to choose a directory in the server in
+// use, at once; the others are a step up.
 func (a *app) openPickerIn(server string, root int64, p string, pick func(server string, root int64, rootName, path string)) {
 	sv := a.store.Server(server)
 	if sv == nil {
 		return
 	}
-	a.nas = nasBrowser{open: true, pick: pick, sameServer: server, probes: map[string]*serverProbe{}}
+	a.nas = nasBrowser{open: true, pick: pick, probes: map[string]*serverProbe{}}
 	a.nas.startServer, a.nas.startRoot, a.nas.startPath = server, root, p
+	for _, other := range a.store.Servers {
+		a.probe(other)
+	}
 	a.nasUse(sv)
 }
 
@@ -432,6 +438,8 @@ func (a *app) nasView(c *ui.Context) {
 			title = "编辑服务器"
 		case b.screen == screenLogin:
 			title = "登录 " + b.server.Title()
+		case b.pick != nil && b.title != "":
+			title = b.title
 		case b.pick != nil:
 			title = "选择 NAS 上备份到的目录"
 		}
@@ -490,13 +498,23 @@ func (a *app) nasServers(c *ui.Context) {
 		ui.Text(c, "选择一个服务器：").TextColor(t.TextMuted)
 	}
 	ui.Scroll(c).Grow(1).Border(1, t.Border).Radius(t.Radius * 2).Children(func() {
-		if len(a.store.Servers) == 0 {
+		if b.pick != nil && b.local != nil {
+			ui.Row(c.Key("local")).Gap(10).Padding(10, 12).AlignItems(ui.Center).Children(func() {
+				ui.Column(c).Grow(1).Shrink(1).Gap(2).Children(func() {
+					ui.Text(c, "本机").Bold().SingleLine()
+					ui.Text(c, "这台电脑上的文件夹").FontSize(12).TextColor(t.TextMuted).SingleLine()
+				})
+				if ui.PrimaryButton(c.Key("use-local"), "选择本机文件夹…").Clicked() {
+					local := b.local
+					b.open = false
+					b.gen++
+					local()
+				}
+			})
+		} else if len(a.store.Servers) == 0 {
 			ui.Text(c, "还没有服务器。点“添加服务器”，输入 NAS 上 fileindex 的地址。").TextColor(t.TextMuted).Padding(12)
 		}
 		for _, sv := range a.store.Servers {
-			if b.sameServer != "" && sv.ID != b.sameServer {
-				continue
-			}
 			row := ui.Row(c.Key(sv.ID)).Gap(10).Padding(10, 12).Children(func() {
 				ui.Column(c).Grow(1).Shrink(1).Gap(2).Children(func() {
 					ui.Text(c, sv.Title()).Bold().SingleLine()

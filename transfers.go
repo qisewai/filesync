@@ -31,6 +31,7 @@ type transfer struct {
 
 	// A task of the server, followed by its events.
 	server            string
+	peer              string // the other server of a copy between two
 	task              int64
 	scanRoot, scanJob int64
 	// after runs on the main thread once it ends well, as a refresh.
@@ -169,7 +170,7 @@ func (a *app) activeTransfers() int {
 
 func (a *app) serverHasTransfers(id string) bool {
 	for _, tr := range a.transfers {
-		if tr.server == id && tr.running() {
+		if (tr.server == id || tr.peer == id) && tr.running() {
 			return true
 		}
 	}

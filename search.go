@@ -794,7 +794,7 @@ func (a *app) searchPage(c *ui.Context) {
 		switch {
 		case acts.files != nil:
 			toolButton(c, "hit-download", iconSave, "下载…", "下载到本机", false, func() { a.downloadIn(acts.files, es) })
-			toolButton(c, "hit-copy", iconCopy, "复制到…", "复制到这台服务器的其他位置", false, func() { a.transferIn(acts.files, false, es) })
+			toolButton(c, "hit-copy", iconCopy, "复制到…", "复制到这台或其他服务器上", false, func() { a.transferIn(acts.files, false, es) })
 			toolButton(c, "hit-move", iconMove, "移动到…", "", !acts.writable, func() { a.transferIn(acts.files, true, es) })
 			if n == 1 {
 				toolButton(c, "hit-rename", iconRename, "重命名", "重命名（F2）", !acts.writable, func() { a.renameIn(acts.files, es[0]) })

@@ -304,7 +304,10 @@ func (a *app) localView(c *ui.Context) {
 	}
 	// Backing up and showing in the file manager are in the menu of the
 	// files.
-	commandBar(c, n, filesSize(es), func() { b.sel.Clear() }, func() {}, nil, func() {
+	commandBar(c, n, filesSize(es), func() { b.sel.Clear() }, func() {}, func() {
+		toolButton(c, "local-copy-to", iconCopy, "复制到服务器…", "上传到服务器上的文件夹", false, func() { a.sendLocal(false, es) })
+		toolButton(c, "local-move-to", iconMove, "移动到服务器…", "上传到服务器后，把本机的移入回收站", false, func() { a.sendLocal(true, es) })
+	}, func() {
 		viewToggle(c, "local-view-toggle", &b.grid)
 		moreMenu(c, "local-more", func(m *ui.Menu) {
 			if m.Item("显示隐藏文件").Checked(b.hidden).Chosen() {
@@ -359,6 +362,15 @@ func (a *app) localView(c *ui.Context) {
 		if len(es) == 1 {
 			if m.Item("打开").Chosen() {
 				open(es[0])
+			}
+			m.Separator()
+		}
+		if len(es) > 0 {
+			if m.Item("复制到服务器…").Chosen() {
+				a.sendLocal(false, es)
+			}
+			if m.Item("移动到服务器…").Chosen() {
+				a.sendLocal(true, es)
 			}
 			m.Separator()
 		}
@@ -646,4 +658,70 @@ func (a *app) startLocal() string {
 		return home
 	}
 	return string(filepath.Separator)
+}
+
+// sendLocal asks for a directory of a server, then copies or moves files
+// of this computer there, asking first to replace what has their names.
+func (a *app) sendLocal(move bool, es []fileindex.Entry) {
+	if len(es) == 0 {
+		return
+	}
+	kind := "复制"
+	if move {
+		kind = "移动"
+	}
+	files := make([]string, len(es))
+	for i, e := range es {
+		files[i] = e.Path
+	}
+	server := ""
+	if a.br != nil {
+		server = a.br.server
+	}
+	a.openPicker(server, 0, "", func(sv string, root int64, rootName, dir string) {
+		c, ok := a.serverClient(sv)
+		if !ok {
+			return
+		}
+		go func() {
+			ctx, cancel := context.WithTimeout(context.Background(), requestTimeout)
+			defer cancel()
+			there, err := c.List(ctx, root, dir, true)
+			a.post(func() {
+				if a.closed {
+					return
+				}
+				if err != nil {
+					if a.local != nil {
+						a.local.err = "无法读取目标目录：" + err.Error()
+					}
+					return
+				}
+				have := map[string]bool{}
+				for _, e := range there {
+					have[e.Name] = true
+				}
+				var taken []string
+				for _, f := range files {
+					if have[filepath.Base(f)] {
+						taken = append(taken, filepath.Base(f))
+					}
+				}
+				start := func() { a.startUploadTo(sv, root, a.target(sv, rootName, dir), dir, files, move, nil) }
+				if len(taken) == 0 {
+					start()
+					return
+				}
+				a.ask("替换目标中同名的项？", fmt.Sprintf("目标目录中已经有 %s 等 %d 项与%s的同名。文件会被替换，文件夹会合并。", strings.Join(taken[:min(3, len(taken))], "、"), len(taken), kind), "替换", start)
+			})
+		}()
+	})
+	a.nas.title = kind + "到服务器"
+}
+
+// localChanged lists dir again, if the page shows it.
+func (a *app) localChanged(dir string) {
+	if a.place == localPlace && a.local != nil && a.local.dir == dir {
+		a.openLocal(dir)
+	}
 }

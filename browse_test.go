@@ -306,3 +306,156 @@ func TestCloseDoesNotWaitForeverWhenServerCannotCancel(t *testing.T) {
 		t.Fatalf("server cancellation %+v", tr)
 	}
 }
+
+func TestCopyAndMoveToAnotherServer(t *testing.T) {
+	f, f2 := fitest.New(t), fitest.New(t)
+	os.MkdirAll(filepath.Join(f.Root, "照片"), 0755)
+	os.WriteFile(filepath.Join(f.Root, "照片", "a.jpg"), []byte("photo"), 0644)
+	os.WriteFile(filepath.Join(f.Root, "笔记.txt"), []byte("notes"), 0644)
+	os.MkdirAll(filepath.Join(f2.Root, "收"), 0755)
+	os.WriteFile(filepath.Join(f2.Root, "收", "笔记.txt"), []byte("old"), 0644)
+	store := signedIn(t, f)
+	store.AddServer(&config.Server{Name: "公司", Addr: f2.Addr(), Token: "tok"})
+	h := newHarness(t, store)
+	h.settle()
+	h.a.goPlace(rootPlace(store.Servers[0].ID, 1))
+	h.settle()
+	// pick chooses, in the picker opened in this server, a directory of
+	// the other.
+	pick := func(dir string) {
+		h.t.Helper()
+		h.a.nasUse(store.Servers[1])
+		h.settle()
+		h.a.nas.sel = 0
+		h.click("打开")
+		label := "选择当前目录“nas”"
+		if dir != "" {
+			for i, name := range h.a.nas.dirs {
+				if name == dir {
+					h.a.nas.sel = i
+				}
+			}
+			h.tt.Frame()
+			label = "选择“" + dir + "”"
+		}
+		h.click(label)
+	}
+
+	h.click("笔记.txt")
+	h.click("复制到…")
+	pick("收")
+	h.want("替换目标中同名的项？")
+	h.click("替换")
+	h.waitTransfers()
+	if b, _ := os.ReadFile(filepath.Join(f2.Root, "收", "笔记.txt")); string(b) != "notes" {
+		t.Fatalf("copy %q", b)
+	}
+	if _, err := os.Stat(filepath.Join(f.Root, "笔记.txt")); err != nil {
+		t.Fatal("copy removed the source")
+	}
+
+	h.clickPage("照片")
+	h.click("移动到…")
+	pick("")
+	h.waitTransfers()
+	if b, _ := os.ReadFile(filepath.Join(f2.Root, "照片", "a.jpg")); string(b) != "photo" {
+		t.Fatalf("move %q", b)
+	}
+	if _, err := os.Stat(filepath.Join(f.Trash, "照片", "a.jpg")); err != nil {
+		t.Fatal("moved source not in the trash:", err)
+	}
+	h.want("笔记.txt")
+	if h.tt.HasText("照片") {
+		t.Error("moved folder still listed")
+	}
+}
+
+func TestCopyAndMoveBetweenComputerAndServer(t *testing.T) {
+	t.Setenv("XDG_DATA_HOME", t.TempDir())
+	f := fitest.New(t)
+	os.MkdirAll(filepath.Join(f.Root, "照片"), 0755)
+	os.WriteFile(filepath.Join(f.Root, "照片", "a.jpg"), []byte("photo"), 0644)
+	os.WriteFile(filepath.Join(f.Root, "笔记.txt"), []byte("notes"), 0644)
+	h := browserHarness(t, f)
+	dest := t.TempDir()
+	os.WriteFile(filepath.Join(dest, "笔记.txt"), []byte("old"), 0644)
+	h.a.pickDir = func(string, string) (string, error) { return dest, nil }
+	// toLocal chooses this computer in the picker opened in the server.
+	toLocal := func() {
+		h.t.Helper()
+		n := len(h.a.transfers)
+		h.a.nas.screen = screenServers
+		h.tt.Frame()
+		h.click("选择本机文件夹…")
+		// The folder dialog runs off the UI thread.
+		deadline := time.After(5 * time.Second)
+		for !h.tt.HasText("替换本机同名的项？") && len(h.a.transfers) == n {
+			select {
+			case fn := <-h.queue:
+				fn()
+				h.tt.Frame()
+			case <-deadline:
+				h.t.Fatal("nothing started")
+			}
+		}
+	}
+
+	// Server → computer.
+	h.clickPage("笔记.txt")
+	h.click("复制到…")
+	h.want("复制到")
+	toLocal()
+	h.click("替换")
+	h.waitTransfers()
+	if b, _ := os.ReadFile(filepath.Join(dest, "笔记.txt")); string(b) != "notes" {
+		t.Fatalf("copy to computer %q", b)
+	}
+	h.clickPage("照片")
+	h.click("移动到…")
+	toLocal()
+	h.waitTransfers()
+	if b, _ := os.ReadFile(filepath.Join(dest, "照片", "a.jpg")); string(b) != "photo" {
+		t.Fatalf("move to computer %q", b)
+	}
+	if _, err := os.Stat(filepath.Join(f.Trash, "照片", "a.jpg")); err != nil {
+		t.Fatal("moved folder not in the server's trash:", err)
+	}
+
+	// Computer → server.
+	os.WriteFile(filepath.Join(dest, "新.txt"), []byte("new"), 0644)
+	h.a.openLocal(dest)
+	h.settle()
+	h.clickPage("新.txt")
+	h.click("复制到服务器…")
+	h.want("复制到服务器")
+	h.click("浏览")
+	h.a.nas.sel = 0
+	h.click("打开")
+	h.click("选择当前目录“nas”")
+	h.waitTransfers()
+	if b, _ := os.ReadFile(filepath.Join(f.Root, "新.txt")); string(b) != "new" {
+		t.Fatalf("copy to server %q", b)
+	}
+	if _, err := os.Stat(filepath.Join(dest, "新.txt")); err != nil {
+		t.Fatal("copy removed the local file")
+	}
+	h.clickPage("照片")
+	h.click("移动到服务器…")
+	h.click("浏览")
+	h.a.nas.sel = 0
+	h.click("打开")
+	h.click("选择当前目录“nas”")
+	h.waitTransfers()
+	if b, _ := os.ReadFile(filepath.Join(f.Root, "照片", "a.jpg")); string(b) != "photo" {
+		t.Fatalf("move to server %q", b)
+	}
+	if _, err := os.Lstat(filepath.Join(dest, "照片")); !os.IsNotExist(err) {
+		t.Fatal("moved folder still on the computer")
+	}
+	if b, _ := os.ReadFile(filepath.Join(os.Getenv("XDG_DATA_HOME"), "Trash", "files", "照片", "a.jpg")); string(b) != "photo" {
+		t.Fatalf("local trash has %q", b)
+	}
+	if h.tt.HasText("照片") {
+		t.Error("moved folder still listed")
+	}
+}

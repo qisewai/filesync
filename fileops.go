@@ -104,13 +104,18 @@ func (a *app) opIn(f *nasFiles, label string, fn func(ctx context.Context, c *fi
 }
 
 // downloadIn asks where, then downloads the entries there.
-func (a *app) downloadIn(f *nasFiles, es []fileindex.Entry) {
+func (a *app) downloadIn(f *nasFiles, es []fileindex.Entry) { a.downloadTo(f, false, es, "下载到") }
+
+// downloadTo asks for a directory of this computer, then downloads the
+// entries there, asking first to replace what has their names; with move,
+// the entries then go to the trash of the server.
+func (a *app) downloadTo(f *nasFiles, move bool, es []fileindex.Entry, title string) {
 	c, ok := a.serverClient(f.server)
 	if !ok || len(es) == 0 {
 		return
 	}
 	go func() {
-		dest, err := a.pickDir("下载到", "")
+		dest, err := a.pickDir(title, "")
 		a.post(func() {
 			if a.closed {
 				return
@@ -128,7 +133,7 @@ func (a *app) downloadIn(f *nasFiles, es []fileindex.Entry) {
 					taken = append(taken, e.Name)
 				}
 			}
-			start := func() { a.startDownloadFrom(c, f.server, es, dest) }
+			start := func() { a.startDownloadFrom(c, f, es, dest, move) }
 			if len(taken) == 0 {
 				start()
 				return
@@ -138,26 +143,27 @@ func (a *app) downloadIn(f *nasFiles, es []fileindex.Entry) {
 	}()
 }
 
-// transferIn asks for a directory of the same server, then copies or moves
-// the entries there, as a task of the server.
+// transferIn asks for a directory, then copies or moves the entries
+// there: on the same server as a task of the server, on another through
+// this computer.
 func (a *app) transferIn(f *nasFiles, move bool, es []fileindex.Entry) {
 	server := f.server
 	c, ok := a.serverClient(server)
 	if !ok || len(es) == 0 {
 		return
 	}
+	kind := "复制"
+	if move {
+		kind = "移动"
+	}
 	a.openPickerIn(server, f.root, f.dir, func(sv string, root int64, rootName, dir string) {
-		if sv != server {
-			f.fail("只能复制或移动到同一个服务器上")
-			return
-		}
-		kind := "复制"
-		if move {
-			kind = "移动"
-		}
 		title := es[0].Name
 		if len(es) > 1 {
 			title = fmt.Sprintf("%s 等 %d 项", title, len(es))
+		}
+		if sv != server {
+			a.relayIn(f, move, es, sv, root, dir, kind, title+" → "+a.target(sv, rootName, dir))
+			return
 		}
 		tr := a.addTransfer(kind, title+" → "+path.Join(rootName, dir))
 		tr.server = server
@@ -178,7 +184,98 @@ func (a *app) transferIn(f *nasFiles, move bool, es []fileindex.Entry) {
 			})
 		}()
 	})
-	a.nas.sameServer = server
+	a.nas.title = kind + "到"
+	a.nas.local = func() { a.downloadTo(f, move, es, kind+"到本机") }
+}
+
+// relayIn copies or moves the entries into dir of a root of another
+// server, asking first to replace what it has of the same names.
+func (a *app) relayIn(f *nasFiles, move bool, es []fileindex.Entry, to string, root int64, dir, kind, title string) {
+	src, ok := a.serverClient(f.server)
+	dst, ok2 := a.serverClient(to)
+	if !ok || !ok2 {
+		return
+	}
+	go func() {
+		ctx, cancel := context.WithTimeout(context.Background(), requestTimeout)
+		defer cancel()
+		there, err := dst.List(ctx, root, dir, true)
+		a.post(func() {
+			if a.closed {
+				return
+			}
+			if err != nil {
+				f.fail("无法读取目标目录：" + err.Error())
+				return
+			}
+			names := map[string]bool{}
+			for _, e := range there {
+				names[e.Name] = true
+			}
+			var taken []string
+			for _, e := range es {
+				if names[e.Name] {
+					taken = append(taken, e.Name)
+				}
+			}
+			start := func() { a.startRelay(f, src, dst, move, es, to, root, dir, kind, title) }
+			if len(taken) == 0 {
+				start()
+				return
+			}
+			a.ask("替换目标中同名的项？", fmt.Sprintf("目标目录中已经有 %s 等 %d 项与%s的同名。文件会被替换，文件夹会合并。", strings.Join(taken[:min(3, len(taken))], "、"), len(taken), kind), "替换", start)
+		})
+	}()
+}
+
+// startRelay passes the export of the entries on to the other server, as
+// a transfer of this computer; a move then trashes what landed whole.
+func (a *app) startRelay(f *nasFiles, src, dst *fileindex.Client, move bool, es []fileindex.Entry, to string, root int64, dir, kind, title string) {
+	tr := a.addTransfer(kind, title)
+	tr.server, tr.peer = f.server, to
+	ctx, cancel := context.WithCancel(context.Background())
+	tr.cancel = cancel
+	srcRoot := es[0].Root
+	onProgress := func(p fileindex.Progress) {
+		a.post(func() { tr.done, tr.current = p.Done, p.Current; tr.total = max(p.Total, tr.total) })
+	}
+	go func() {
+		whole, errs, err := fileindex.Relay(ctx, src, srcRoot, paths(es), dst, root, dir, onProgress)
+		var failed []string
+		for _, e := range errs {
+			failed = append(failed, e.Error())
+		}
+		var moved bool
+		if move && err == nil {
+			// Only what landed whole leaves; the export numbers names
+			// chosen twice, which are then all kept.
+			count := map[string]int{}
+			for _, e := range es {
+				count[e.Name]++
+			}
+			var gone []string
+			for _, e := range es {
+				if count[e.Name] == 1 && whole[e.Name] {
+					gone = append(gone, e.Path)
+				} else {
+					failed = append(failed, e.Name+": 没有完整复制，保留在源服务器上")
+				}
+			}
+			if len(gone) > 0 {
+				if err = src.Trash(ctx, srcRoot, gone); err != nil {
+					err = fmt.Errorf("已复制到目标，但源文件未能移入回收站：%w", err)
+				} else {
+					moved = true
+				}
+			}
+		}
+		a.post(func() {
+			a.finishTransfer(tr, err, failed)
+			if moved {
+				f.changed("")
+			}
+		})
+	}()
 }
 
 // trashIn moves es to the trash.
