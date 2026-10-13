@@ -179,10 +179,10 @@ func (a *app) serverPathBar(c *ui.Context, server string, root fileindex.Root, d
 			name: names[i],
 			dirs: func() ([]fileindex.Entry, bool) {
 				n := a.treeNode(server, root.ID, d)
-				if !n.loaded && !n.loading {
+				if n.due() {
 					a.loadDirectory(sv, root.ID, d, n)
 				}
-				return n.dirs, n.loaded && !n.loading
+				return n.dirs, n.loaded
 			},
 			openDir: func(e fileindex.Entry) { a.showDirectory(server, root, e.Path) },
 		}
@@ -323,7 +323,7 @@ func (a *app) pathOptions(text string) ([]pathOption, string) {
 	}
 	dir := strings.Join(parts[2:len(parts)-1], "/")
 	n := a.treeNode(sv.ID, root.ID, dir)
-	if !n.loaded && !n.loading {
+	if n.due() {
 		a.loadDirectory(sv, root.ID, dir, n)
 	}
 	if n.err != "" {

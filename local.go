@@ -776,7 +776,7 @@ func (a *app) sendLocal(move bool, es []fileindex.Entry) {
 		go func() {
 			ctx, cancel := context.WithTimeout(context.Background(), requestTimeout)
 			defer cancel()
-			there, err := c.List(ctx, root, dir, true)
+			there, err := c.List(ctx, root, dir)
 			a.post(func() {
 				if a.closed {
 					return

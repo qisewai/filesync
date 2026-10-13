@@ -17,15 +17,25 @@ import (
 // Only expanded directories are listed; collapsed branches never wake disks.
 type directoryNode struct {
 	open, loaded, loading bool
-	dirs                  []fileindex.Entry
-	err                   string
-	gen                   int
-	loadStart             time.Time
+	// stale: changed on the server since read. Read again when shown, it
+	// shows as it was meanwhile, rather than empty, then filled again.
+	stale bool
+	// refreshDue, of a root's top node: the root changed on the server,
+	// and its directories are marked stale in a moment, once for the
+	// many changes an upload makes.
+	refreshDue bool
+	dirs       []fileindex.Entry
+	err        string
+	gen        int
+	loadStart  time.Time
 }
 
 // leaf reports whether the directory is known to hold no directories:
-// it shows no arrow to open.
-func (n *directoryNode) leaf() bool { return n.loaded && !n.loading && n.err == "" && len(n.dirs) == 0 }
+// it shows no arrow to open. Read again, it stays as it was till read.
+func (n *directoryNode) leaf() bool { return n.loaded && n.err == "" && len(n.dirs) == 0 }
+
+// due reports whether the directory is to be read: never read, or stale.
+func (n *directoryNode) due() bool { return (!n.loaded || n.stale) && !n.loading }
 
 // openState and children are those of its TreeItem: none for a leaf.
 func (n *directoryNode) openState() *bool {
@@ -82,7 +92,7 @@ func (a *app) revealDirectory(b *browser) {
 func (a *app) cacheDirectories(server string, root int64, dir string, items []fileindex.Entry) {
 	n := a.treeNode(server, root, dir)
 	n.gen++ // a browser listing supersedes any older tree request
-	n.dirs, n.err, n.loaded, n.loading = nil, "", true, false
+	n.dirs, n.err, n.loaded, n.loading, n.stale = nil, "", true, false, false
 	for _, e := range items {
 		if !e.IsDir {
 			continue
@@ -107,11 +117,11 @@ func (a *app) directoryView(c *ui.Context, sv *config.Server, root fileindex.Roo
 	key := treeKey(sv.ID, root.ID, dir)
 	n := a.treeNode(sv.ID, root.ID, dir)
 	item := ui.TreeItem(c.Key(key), "", n.openState(), n.children(func() {
-		if !n.loaded && !n.loading {
+		if n.due() {
 			a.loadDirectory(sv, root.ID, dir, n)
 		}
 		switch {
-		case n.loading:
+		case n.loading && !n.loaded:
 			n.loadingText(c)
 		case n.err != "":
 			ui.Button(c.Key(key+"/retry"), "重试读取目录").Tooltip(n.err).OnClick(func() { n.loaded = false })
@@ -143,16 +153,20 @@ func (a *app) loadDirectory(sv *config.Server, root int64, dir string, n *direct
 	gen := n.gen
 	c := fileindex.New(sv.Addr, sv.Token)
 	key := treeKey(sv.ID, root, dir)
-	live := a.br != nil && a.br.server == sv.ID && a.br.root.ID == root && a.br.live
 	go func() {
 		ctx, cancel := context.WithTimeout(context.Background(), requestTimeout)
 		defer cancel()
-		items, err := c.List(ctx, root, dir, live)
+		items, err := c.List(ctx, root, dir)
 		a.post(func() {
 			if a.closed || a.tree[key] != n || n.gen != gen || sv.Token != c.Token || sv.Addr != c.Addr {
 				return
 			}
-			n.loading, n.loaded = false, true
+			if err != nil && n.loaded && n.stale {
+				// Read again in vain: as it was, till the next change.
+				n.loading, n.stale = false, false
+				return
+			}
+			n.loading, n.loaded, n.stale = false, true, false
 			if err != nil {
 				n.err = err.Error()
 				if errors.Is(err, fileindex.ErrAuth) {
@@ -165,15 +179,36 @@ func (a *app) loadDirectory(sv *config.Server, root int64, dir string, n *direct
 	}()
 }
 
+// invalidateTree reads the directories of a root again, as the server
+// tells they changed: those shown, at most once a second, as an upload
+// tells of many changes; meanwhile they show as they were.
 func (a *app) invalidateTree(server string, root int64) {
-	prefix := rootPlace(server, root) + "/"
-	for key, n := range a.tree {
-		if strings.HasPrefix(key, prefix) {
-			n.gen++
-			n.loaded, n.loading = false, false
-		}
+	top := a.treeNode(server, root, "")
+	if top.refreshDue {
+		return
 	}
+	top.refreshDue = true
+	go func() {
+		time.Sleep(treeRefreshDelay)
+		a.post(func() {
+			top.refreshDue = false
+			if a.closed {
+				return
+			}
+			prefix := rootPlace(server, root) + "/"
+			for key, n := range a.tree {
+				if strings.HasPrefix(key, prefix) {
+					n.gen++ // what is being read may be older than the change
+					n.loading, n.stale = false, n.loaded
+				}
+			}
+		})
+	}()
 }
+
+// treeRefreshDelay gathers the changes the server tells of before the
+// directories are read again.
+var treeRefreshDelay = time.Second
 
 // showDirectory shows the directory dir of a root, choosing its entry
 // choose, if any.
@@ -264,7 +299,9 @@ func (a *app) directoryMenu(m *ui.Menu, sv *config.Server, root fileindex.Root, 
 // page if it shows it.
 func (a *app) refreshDirectory(sv *config.Server, root fileindex.Root, dir string) {
 	n := a.treeNode(sv.ID, root.ID, dir)
-	n.loaded, n.open = false, true
+	// Read again, shown as it was meanwhile.
+	n.gen++
+	n.loading, n.stale, n.open = false, n.loaded, true
 	if a.br != nil && a.br.server == sv.ID && a.br.root.ID == root.ID && a.br.path == dir {
 		a.refresh()
 	}

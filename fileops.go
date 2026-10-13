@@ -211,7 +211,7 @@ func (a *app) relayIn(f *nasFiles, move bool, es []fileindex.Entry, to string, r
 	go func() {
 		ctx, cancel := context.WithTimeout(context.Background(), requestTimeout)
 		defer cancel()
-		there, err := dst.List(ctx, root, dir, true)
+		there, err := dst.List(ctx, root, dir)
 		a.post(func() {
 			if a.closed {
 				return

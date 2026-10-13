@@ -30,7 +30,6 @@ type browser struct {
 	err       string
 	gen       int // drops the answers of loads a newer one replaced
 
-	live bool // list from the disk rather than the index
 	grid bool
 
 	sel       ui.Selection[string] // by path
@@ -46,6 +45,7 @@ type browser struct {
 	opLabel string // what the operation under way does
 
 	refreshPending bool
+	quiet          bool // read again as the server changed it, shown as it was meanwhile
 	cancel         context.CancelFunc
 	keepSelection  map[string]bool
 	thumbCtx       context.Context
@@ -99,9 +99,9 @@ func (a *app) browse(p string, choose ...string) {
 	}
 	b.path = p
 	a.revealDirectory(b)
-	root, live := b.root.ID, b.live
+	root := b.root.ID
 	a.load(func(ctx context.Context, c *fileindex.Client) ([]fileindex.Entry, int, error) {
-		items, err := c.List(ctx, root, p, live)
+		items, err := c.List(ctx, root, p)
 		return items, len(items), err
 	}, choose...)
 }
@@ -138,6 +138,7 @@ func (a *app) load(fetch func(ctx context.Context, c *fileindex.Client) ([]filei
 	b.cancel = cancel
 	gen := b.gen
 	b.loading, b.err = true, ""
+	b.quiet = false // what is read quietly is dropped
 	b.keepSelection = nil
 	go func() {
 		defer cancel()
@@ -179,8 +180,9 @@ func (a *app) load(fetch func(ctx context.Context, c *fileindex.Client) ([]filei
 
 func (a *app) refresh() { a.browse(a.br.path) }
 
-// refreshSoon refreshes once events stop coming for a moment, as many come
-// while files are written.
+// refreshSoon reads the directory again as the server tells it changed: a
+// moment after, once for the many changes files written make; quietly,
+// shown as it was meanwhile.
 func (a *app) refreshSoon() {
 	b := a.br
 	if b.refreshPending {
@@ -191,8 +193,68 @@ func (a *app) refreshSoon() {
 		time.Sleep(700 * time.Millisecond)
 		a.post(func() {
 			b.refreshPending = false
-			if !a.closed && a.br == b && !b.loading && !b.naming && a.renaming == nil {
-				a.reloadKeeping()
+			switch {
+			case a.closed || a.br != b || b.loading || b.naming || a.renaming != nil:
+			case b.quiet:
+				a.refreshSoon() // once the reading under way is done
+			default:
+				a.reloadQuietly()
+			}
+		})
+	}()
+}
+
+// reloadQuietly lists the directory again, as the server changed it: not
+// loading meanwhile, which would turn off the commands and the choice, and
+// keeping the choice and the cursor as they are when it is read. Gone
+// wrong, it shows as it was, till the next change.
+func (a *app) reloadQuietly() {
+	b := a.br
+	c, sv := a.brClient()
+	if c == nil {
+		return
+	}
+	b.gen++
+	gen := b.gen
+	ctx, cancel := context.WithTimeout(context.Background(), requestTimeout)
+	b.cancel = cancel
+	b.quiet = true
+	p, root := b.path, b.root.ID
+	go func() {
+		defer cancel()
+		items, err := c.List(ctx, root, p)
+		a.post(func() {
+			if a.closed || a.br != b || b.gen != gen || sv.Token != c.Token || sv.Addr != c.Addr {
+				return
+			}
+			b.quiet = false
+			if errors.Is(err, fileindex.ErrAuth) {
+				a.signedOut(sv)
+				return
+			}
+			if err != nil {
+				return
+			}
+			a.cacheDirectories(b.server, b.root.ID, b.path, items)
+			sortEntries(&b.sort, items, nil)
+			kept := map[string]bool{}
+			for p := range b.sel.All() {
+				kept[p] = true
+			}
+			at := ""
+			if b.cursor >= 0 && b.cursor < len(b.items) {
+				at = b.items[b.cursor].Path
+			}
+			b.items = items
+			b.sel.Clear()
+			b.cursor = -1
+			for i, e := range items {
+				if kept[e.Path] {
+					b.sel.Add(e.Path)
+				}
+				if e.Path == at {
+					b.cursor = i
+				}
 			}
 		})
 	}()
@@ -206,9 +268,9 @@ func (a *app) reloadKeeping() {
 		kept[p] = true
 	}
 	p := b.path
-	root, live := b.root.ID, b.live
+	root := b.root.ID
 	a.load(func(ctx context.Context, c *fileindex.Client) ([]fileindex.Entry, int, error) {
-		items, err := c.List(ctx, root, p, live)
+		items, err := c.List(ctx, root, p)
 		return items, len(items), err
 	})
 	b.keepSelection = kept
@@ -310,10 +372,6 @@ func (a *app) browserView(c *ui.Context) {
 	}, func() {
 		viewToggle(c, "view-toggle", &b.grid)
 		moreMenu(c, "more", func(m *ui.Menu) {
-			if m.Item("实时读取硬盘").Checked(b.live).Chosen() {
-				b.live = !b.live
-				a.refresh()
-			}
 			if m.Item("刷新").Shortcut(0, ui.KeyF5).Chosen() {
 				a.refresh()
 			}

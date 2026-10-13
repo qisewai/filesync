@@ -24,7 +24,7 @@ func TestBrowse(t *testing.T) {
 	c := New(f.Addr(), "tok")
 	ctx := context.Background()
 
-	list, err := c.List(ctx, 1, "照片", false)
+	list, err := c.List(ctx, 1, "照片")
 	if err != nil || len(list) != 2 || list[0].Path != "照片/a.jpg" || list[0].Size != 4 || list[0].Ext != "jpg" {
 		t.Fatalf("list %+v, %v", list, err)
 	}

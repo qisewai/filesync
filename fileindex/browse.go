@@ -35,10 +35,10 @@ type Entry struct {
 // ModTime is the entry's modification time.
 func (e Entry) ModTime() time.Time { return time.Unix(e.MTime, 0) }
 
-// List lists the directory dir of a root, directories first, then by
-// name: from the index, or from the disk with live, which wakes sleeping
-// disks but is up to date.
-func (c *Client) List(ctx context.Context, root int64, dir string, live bool) ([]Entry, error) {
+// List lists the directory dir of a root as it is on disk, directories
+// first, then by name. Servers list from the disk; older ones did so only
+// when asked with live, from the index else, which it asks of them.
+func (c *Client) List(ctx context.Context, root int64, dir string) ([]Entry, error) {
 	const size = 1000
 	var out []Entry
 	for page := 1; ; page++ {
@@ -46,10 +46,7 @@ func (c *Client) List(ctx context.Context, root int64, dir string, live bool) ([
 			Items []Entry `json:"items"`
 			Total int     `json:"total"`
 		}
-		q := url.Values{"path": {dir}, "size": {strconv.Itoa(size)}, "page": {strconv.Itoa(page)}}
-		if live {
-			q.Set("live", "1")
-		}
+		q := url.Values{"path": {dir}, "live": {"1"}, "size": {strconv.Itoa(size)}, "page": {strconv.Itoa(page)}}
 		if err := c.do(ctx, "GET", fmt.Sprintf("/api/roots/%d/list", root), q, nil, &res); err != nil {
 			return nil, err
 		}
