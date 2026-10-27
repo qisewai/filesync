@@ -45,7 +45,8 @@ type nasBrowser struct {
 	local func()
 	// localDir, when set, takes a folder of this computer chosen among the
 	// favorites.
-	localDir func(dir string)
+	localDir   func(dir string)
+	lockServer string // a disk-local operation cannot choose another NAS
 
 	server *config.Server // the one in use
 	client *fileindex.Client
@@ -107,6 +108,7 @@ type serverProbe struct {
 // openServers opens the dialog to manage the servers.
 func (a *app) openServers() {
 	a.nas = nasBrowser{open: true}
+	a.startDiscovery()
 }
 
 // openPicker opens the dialog to choose a target directory, at the one
@@ -372,6 +374,8 @@ func (a *app) nasStartEdit(sv *config.Server) {
 	b.name, b.addr = "", ""
 	if sv != nil {
 		b.name, b.addr = sv.Name, sv.Addr
+	} else if a.lan == nil {
+		a.startDiscovery()
 	}
 }
 
@@ -433,6 +437,7 @@ func (a *app) nasSaveServer() {
 func (a *app) nasView(c *ui.Context) {
 	b := &a.nas
 	if !b.open {
+		a.stopDiscovery()
 		return
 	}
 	t := c.Theme()
@@ -480,7 +485,11 @@ func (a *app) nasView(c *ui.Context) {
 		}
 		if root := a.nasRootInView(); b.pick != nil && b.busy == "" && root != nil && root.ReadOnly {
 			ui.Row(c).Gap(10).Padding(10, 12).Radius(t.Radius*2).Background(t.Warning.Alpha(0.1)).Border(1, t.Warning.Alpha(0.4)).Children(func() {
-				ui.Text(c, "“"+root.Name+"”在 fileindex 中设为只读，不能备份到这里。请在 fileindex 的“索引目录”页面编辑它，关闭“只读”，再回来选择。").Grow(1).Shrink(1)
+				message := "“" + root.Name + "”在 fileindex 中设为只读，不能备份到这里。请在 fileindex 的“索引目录”页面编辑它，关闭“只读”，再回来选择。"
+				if b.lockServer != "" {
+					message = "此目录只读，请返回选择服务器上的其他可写目录。"
+				}
+				ui.Text(c, message).Grow(1).Shrink(1)
 				if ui.Button(c, "打开 fileindex 设置").Clicked() {
 					a.openURL("http://" + b.server.Addr + "/roots")
 				}
@@ -510,6 +519,7 @@ func (a *app) nasServers(c *ui.Context) {
 		ui.Text(c, "选择一个服务器：").TextColor(t.TextMuted)
 	}
 	ui.Scroll(c).Grow(1).Border(1, t.Border).Radius(t.Radius * 2).Children(func() {
+		a.discoveredServers(c)
 		if b.pick != nil && b.local != nil {
 			ui.Row(c.Key("local")).Gap(10).Padding(10, 12).AlignItems(ui.Center).Children(func() {
 				ui.Column(c).Grow(1).Shrink(1).Gap(2).Children(func() {
@@ -527,6 +537,9 @@ func (a *app) nasServers(c *ui.Context) {
 			ui.Text(c, "还没有服务器。点“添加服务器”，输入 NAS 上 fileindex 的地址。").TextColor(t.TextMuted).Padding(12)
 		}
 		for _, sv := range a.store.Servers {
+			if b.lockServer != "" && sv.ID != b.lockServer {
+				continue
+			}
 			row := ui.Row(c.Key(sv.ID)).Gap(10).Padding(10, 12).Children(func() {
 				ui.Column(c).Grow(1).Shrink(1).Gap(2).Children(func() {
 					ui.Text(c, sv.Title()).Bold().SingleLine()
@@ -645,6 +658,9 @@ func (a *app) nasEdit(c *ui.Context) {
 				b.err, b.screen = "", screenServers
 			}
 		})
+		if b.editing == nil {
+			ui.Scroll(c).Grow(1).MinHeight(0).Children(func() { a.discoveredServers(c) })
+		}
 	})
 }
 
@@ -775,7 +791,7 @@ func (a *app) nasDirs(c *ui.Context) {
 	list := ui.List(c.Key("nas-dirs:"+b.path), &b.dirsList, len(b.dirs)).Grow(1).Border(1, t.Border).Radius(t.Radius * 2).Clip().Label("子目录").
 		Rows(func(row ui.ListRow) {
 			ui.Row(c).Gap(8).Padding(7, 12).Children(func() {
-				ui.Icon(c, iconFolder).FontSize(16).TextColor(ui.Hex("#d99a2b"))
+				ui.Icon(c, iconFolder).FontSize(16).TextColor(folderColor)
 				ui.Text(c, b.dirs[row.Index]).Grow(1).Shrink(1).SingleLine()
 			})
 		})
@@ -854,6 +870,9 @@ func (a *app) pickerFavorites(c *ui.Context) {
 	t := c.Theme()
 	var favs []*config.Favorite
 	for _, f := range a.store.Favorites {
+		if b.lockServer != "" && f.Server != b.lockServer {
+			continue
+		}
 		if f.Local != "" && b.localDir != nil || f.Local == "" && a.store.Server(f.Server) != nil {
 			favs = append(favs, f)
 		}

@@ -5,7 +5,6 @@ import (
 	"errors"
 	"fmt"
 	"os"
-	"path"
 	"path/filepath"
 	"slices"
 	"strings"
@@ -148,52 +147,6 @@ func (a *app) downloadInto(f *nasFiles, move bool, es []fileindex.Entry, dest st
 		return
 	}
 	a.ask("替换本机同名的项？", fmt.Sprintf("%s 中已经有 %s 等 %d 项与下载的同名。文件会被替换，文件夹会合并。", dest, strings.Join(taken[:min(3, len(taken))], "、"), len(taken)), "替换", start)
-}
-
-// transferIn asks for a directory, then copies or moves the entries
-// there: on the same server as a task of the server, on another through
-// this computer.
-func (a *app) transferIn(f *nasFiles, move bool, es []fileindex.Entry) {
-	server := f.server
-	c, ok := a.serverClient(server)
-	if !ok || len(es) == 0 {
-		return
-	}
-	kind := "复制"
-	if move {
-		kind = "移动"
-	}
-	a.openPickerIn(server, f.root, f.dir, func(sv string, root int64, rootName, dir string) {
-		title := es[0].Name
-		if len(es) > 1 {
-			title = fmt.Sprintf("%s 等 %d 项", title, len(es))
-		}
-		if sv != server {
-			a.relayIn(f, move, es, sv, root, dir, kind, title+" → "+a.target(sv, rootName, dir))
-			return
-		}
-		tr := a.addTransfer(kind, title+" → "+path.Join(rootName, dir))
-		tr.server = server
-		srcRoot := es[0].Root
-		ctx, cancel := context.WithTimeout(context.Background(), requestTimeout)
-		tr.cancel = cancel
-		go func() {
-			defer cancel()
-			task, err := c.Transfer(ctx, move, srcRoot, paths(es), root, dir)
-			a.post(func() {
-				if err != nil {
-					a.finishTransfer(tr, err, nil)
-					return
-				}
-				tr.task = task.ID
-				tr.after = func() { f.changed("") }
-				a.trackServerTask(c, tr, task)
-			})
-		}()
-	})
-	a.nas.title = kind + "到"
-	a.nas.local = func() { a.downloadTo(f, move, es, kind+"到本机") }
-	a.nas.localDir = func(dir string) { a.downloadInto(f, move, es, dir) }
 }
 
 // relayIn copies or moves the entries into dir of a root of another

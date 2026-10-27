@@ -200,8 +200,10 @@ func (a *app) pathEditor(c *ui.Context, e *pathEdit, label string) {
 	was := e.focused
 	within := false // the focus is in the bar: its input or buttons
 	ui.Row(c.Key(e.key + "/editing")).Gap(6).AlignItems(ui.Center).Grow(1).Shrink(1).MinWidth(0).Children(func() {
-		options, problem := a.pathOptions(e.text)
 		cb := ui.ComboboxBase(c.Key(fmt.Sprintf("input/%d", e.gen)), &e.text)
+		// After the input: it writes what was typed into e.text as it is
+		// built, which the options must match in the same pass.
+		options, problem := a.pathOptions(e.text)
 		border := t.Accent
 		if problem != "" {
 			border = t.Danger
@@ -223,7 +225,7 @@ func (a *app) pathEditor(c *ui.Context, e *pathEdit, label string) {
 						muted = t.AccentText.Alpha(0.8)
 					}
 					item.Children(func() {
-						color := ui.Hex("#d99a2b")
+						color := folderColor
 						if o.svg != iconFolder {
 							color = muted
 						}

@@ -779,7 +779,8 @@ func (a *app) searchPage(c *ui.Context) {
 		a.searchScopes(c)
 	}
 	a.indexNotice(c)
-	commandBar(c, n, filesSize(es), func() { s.sel.Clear() }, func() {
+	// The filters, over the results.
+	ui.Row(c.Key("search-filters")).Gap(6).AlignItems(ui.Center).MinHeight(34).Children(func() {
 		filterBar(c, "global", &s.filter, func(wait bool) {
 			if wait {
 				a.runSearch(300 * time.Millisecond)
@@ -787,24 +788,6 @@ func (a *app) searchPage(c *ui.Context) {
 				a.runSearch(0)
 			}
 		})
-	}, func() {
-		if n == 1 {
-			iconButton(c, "hit-reveal", iconFolder, "打开所在位置", "打开所在位置", false, func() { a.openHit(chosen[0], true) })
-		}
-		switch {
-		case acts.files != nil:
-			toolButton(c, "hit-download", iconSave, "下载…", "下载到本机", false, func() { a.downloadIn(acts.files, es) })
-			toolButton(c, "hit-copy", iconCopy, "复制到…", "复制到这台或其他服务器上", false, func() { a.transferIn(acts.files, false, es) })
-			toolButton(c, "hit-move", iconMove, "移动到…", "", !acts.writable, func() { a.transferIn(acts.files, true, es) })
-			if n == 1 {
-				toolButton(c, "hit-rename", iconRename, "重命名", "重命名（F2）", !acts.writable, func() { a.renameIn(acts.files, es[0]) })
-			}
-			toolButton(c, "hit-delete", iconTrash, "删除", "移到回收站（Delete），或彻底删除（Shift+Delete）", !acts.writable, func() { a.askDeleteIn(acts.files, es, false) })
-		case acts.local:
-			toolButton(c, "hit-backup", iconBackup, "创建备份任务…", "把选中的项备份到 NAS", false, func() { a.backupLocal("", es) })
-		}
-	}, func() {
-		viewToggle(c, "search-view-toggle", &s.grid)
 	})
 	loading := false
 	for _, g := range s.groups {
@@ -853,18 +836,22 @@ func (a *app) searchPage(c *ui.Context) {
 			if m.Item("打开所在位置").Chosen() {
 				a.openHit(chosen[0], true)
 			}
+			if h := chosen[0]; m.Item("在新标签页中打开").Disabled(len(a.tabs) >= maxTabs).Chosen() {
+				a.newTab(hitLocation(h))
+			}
+			m.Separator()
+		}
+		if n > 0 {
+			a.clipItems(c, m, es)
 			m.Separator()
 		}
 		switch {
 		case acts.files != nil:
-			if m.Item("下载…").Chosen() {
+			if m.Item("下载到…").Chosen() {
 				a.downloadIn(acts.files, es)
 			}
-			if m.Item("复制到…").Chosen() {
-				a.transferIn(acts.files, false, es)
-			}
-			if m.Item("移动到…").Disabled(!acts.writable).Chosen() {
-				a.transferIn(acts.files, true, es)
+			if m.Item("压缩到…").Chosen() {
+				a.compressIn(acts.files, es)
 			}
 			if n == 1 && m.Item("重命名…").Disabled(!acts.writable).Chosen() {
 				a.renameIn(acts.files, es[0])
@@ -877,11 +864,27 @@ func (a *app) searchPage(c *ui.Context) {
 				a.askDeleteIn(acts.files, es, true)
 			}
 		case acts.local:
+			if n == 1 && m.Item("重命名…").Chosen() {
+				a.localRename(es[0].Path)
+			}
+			if m.Item("删除…").Chosen() {
+				a.localDelete(entryPaths(es), false)
+			}
 			if m.Item("创建备份任务…").Chosen() {
 				a.backupLocal("", es)
 			}
 			if n == 1 && m.Item("在文件管理器中显示").Chosen() {
 				a.openPath(filepath.Dir(es[0].Path))
+			}
+		}
+		if n == 1 {
+			m.Separator()
+			if m.Item("属性").Chosen() {
+				if h := chosen[0]; h.source == localPlace {
+					a.showLocalProps(h.e.Path)
+				} else {
+					a.showServerProps(h.source, h.e)
+				}
 			}
 		}
 	})
@@ -1087,4 +1090,19 @@ func (a *app) searchStatus(c *ui.Context) {
 		ui.Text(c, s.opLabel).FontSize(12).TextColor(c.Theme().Accent)
 	}
 	statusText(c, text)
+}
+
+// hitLocation is the location of a result: its folder for a file, which
+// shows it, itself for a folder.
+func hitLocation(h searchHit) string {
+	e := h.e
+	switch {
+	case h.source == localPlace && e.IsDir:
+		return localLocation(e.Path)
+	case h.source == localPlace:
+		return localLocation(filepath.Dir(e.Path))
+	case e.IsDir:
+		return nasLocation(h.source, e.Root, e.Path)
+	}
+	return nasLocation(h.source, e.Root, e.Parent)
 }

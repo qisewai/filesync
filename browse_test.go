@@ -67,12 +67,13 @@ func TestNativeBrowserTreeSearchAndFileOperations(t *testing.T) {
 	h := browserHarness(t, f)
 	h.click("文件夹 项目")
 	h.want("报告.txt")
-	h.click("新建文件夹")
+	h.more("新建文件夹…")
 	h.tt.Type("新目录")
 	h.click("创建")
 	h.want("文件夹 新目录")
 	h.click("报告.txt")
-	h.click("重命名")
+	h.tt.Key(0, ui.KeyF2)
+	h.settle()
 	h.tt.Key(ui.Ctrl, ui.KeyA)
 	h.tt.Type("计划.txt")
 	h.tt.Key(0, ui.KeyEnter)
@@ -89,7 +90,7 @@ func TestNativeBrowserTreeSearchAndFileOperations(t *testing.T) {
 	}
 	h.tt.Frame()
 	h.click("计划.txt")
-	h.click("删除")
+	h.tt.Key(0, ui.KeyDelete)
 	h.click("移到回收站")
 	if _, err := os.Stat(filepath.Join(f.Trash, "项目", "计划.txt")); err != nil {
 		t.Fatal(err)
@@ -119,7 +120,7 @@ func TestNativeBrowserUploadDownloadAndTasks(t *testing.T) {
 	h.clickPage("照片")
 	dest := t.TempDir()
 	h.a.pickDir = func(string, string) (string, error) { return dest, nil }
-	h.click("下载…")
+	h.menu("照片", "下载到…")
 	// The file dialog itself runs off the UI thread.
 	deadline := time.After(5 * time.Second)
 	for len(h.a.transfers) < 2 {
@@ -135,16 +136,13 @@ func TestNativeBrowserUploadDownloadAndTasks(t *testing.T) {
 	if b, err := os.ReadFile(filepath.Join(dest, "照片", "a.jpg")); err != nil || string(b) != "photo" {
 		t.Fatalf("download %q, %v", b, err)
 	}
+	// Copied, and pasted in another folder of the server.
 	h.click("笔记.txt")
-	h.click("复制到…")
-	h.click("打开")
-	for i, name := range h.a.nas.dirs {
-		if name == "目标" {
-			h.a.nas.sel = i
-		}
-	}
-	h.tt.Frame()
-	h.click("选择“目标”")
+	h.tt.Key(ui.Ctrl, ui.KeyC)
+	h.click("文件夹 目标")
+	h.settle()
+	h.tt.Key(ui.Ctrl, ui.KeyV)
+	h.waitStarted(3)
 	h.waitTransfers()
 	if b, err := os.ReadFile(filepath.Join(f.Root, "目标", "笔记.txt")); err != nil || string(b) != "notes" {
 		t.Fatalf("copy %q, %v", b, err)
@@ -272,7 +270,8 @@ func TestNativeBrowserReadOnlyAndRendering(t *testing.T) {
 	if len(h.a.transfers) != 0 {
 		t.Fatal("read-only root accepted an upload")
 	}
-	h.click("新建文件夹")
+	h.tt.Key(ui.Ctrl|ui.Shift, ui.KeyN)
+	h.settle()
 	if h.a.br.naming {
 		t.Fatal("read-only root enabled mkdir")
 	}
@@ -328,6 +327,8 @@ func TestCloseDoesNotWaitForeverWhenServerCannotCancel(t *testing.T) {
 	}
 }
 
+// Copied on one server, pasted on another: its export passes through this
+// computer; cut, the source then goes to its trash.
 func TestCopyAndMoveToAnotherServer(t *testing.T) {
 	f, f2 := fitest.New(t), fitest.New(t)
 	os.MkdirAll(filepath.Join(f.Root, "照片"), 0755)
@@ -339,32 +340,17 @@ func TestCopyAndMoveToAnotherServer(t *testing.T) {
 	store.AddServer(&config.Server{Name: "公司", Addr: f2.Addr(), Token: "tok"})
 	h := newHarness(t, store)
 	h.settle()
-	h.a.goPlace(rootPlace(store.Servers[0].ID, 1))
+	home := rootPlace(store.Servers[0].ID, 1)
+	h.a.goPlace(home)
 	h.settle()
-	// pick chooses, in the picker opened in this server, a directory of
-	// the other.
-	pick := func(dir string) {
-		h.t.Helper()
-		h.a.nasUse(store.Servers[1])
-		h.settle()
-		h.a.nas.sel = 0
-		h.click("打开")
-		label := "选择当前目录“nas”"
-		if dir != "" {
-			for i, name := range h.a.nas.dirs {
-				if name == dir {
-					h.a.nas.sel = i
-				}
-			}
-			h.tt.Frame()
-			label = "选择“" + dir + "”"
-		}
-		h.click(label)
-	}
 
 	h.click("笔记.txt")
-	h.click("复制到…")
-	pick("收")
+	h.tt.Key(ui.Ctrl, ui.KeyC)
+	h.want("已复制 1 项")
+	h.a.goLocation(nasLocation(store.Servers[1].ID, 1, "收"))
+	h.settle()
+	h.tt.Key(ui.Ctrl, ui.KeyV)
+	h.settle()
 	h.want("替换目标中同名的项？")
 	h.click("替换")
 	h.waitTransfers()
@@ -374,10 +360,18 @@ func TestCopyAndMoveToAnotherServer(t *testing.T) {
 	if _, err := os.Stat(filepath.Join(f.Root, "笔记.txt")); err != nil {
 		t.Fatal("copy removed the source")
 	}
+	if h.a.clip == nil {
+		t.Fatal("a copy pasted leaves the clipboard")
+	}
 
+	h.a.goPlace(home)
+	h.settle()
 	h.clickPage("照片")
-	h.click("移动到…")
-	pick("")
+	h.tt.Key(ui.Ctrl, ui.KeyX)
+	h.want("已剪切 1 项")
+	h.a.goLocation(nasLocation(store.Servers[1].ID, 1, ""))
+	h.settle()
+	h.tt.Key(ui.Ctrl, ui.KeyV)
 	h.waitStarted(2)
 	h.waitTransfers()
 	if b, _ := os.ReadFile(filepath.Join(f2.Root, "照片", "a.jpg")); string(b) != "photo" {
@@ -386,12 +380,13 @@ func TestCopyAndMoveToAnotherServer(t *testing.T) {
 	if _, err := os.Stat(filepath.Join(f.Trash, "照片", "a.jpg")); err != nil {
 		t.Fatal("moved source not in the trash:", err)
 	}
-	h.want("笔记.txt")
-	if h.tt.HasText("照片") {
-		t.Error("moved folder still listed")
+	if h.a.clip != nil {
+		t.Error("a cut pasted stays on the clipboard")
 	}
 }
 
+// Between this computer and a server, and among the folders of this
+// computer, files go as they are copied, or cut, and pasted.
 func TestCopyAndMoveBetweenComputerAndServer(t *testing.T) {
 	t.Setenv("XDG_DATA_HOME", t.TempDir())
 	f := fitest.New(t)
@@ -399,42 +394,32 @@ func TestCopyAndMoveBetweenComputerAndServer(t *testing.T) {
 	os.WriteFile(filepath.Join(f.Root, "照片", "a.jpg"), []byte("photo"), 0644)
 	os.WriteFile(filepath.Join(f.Root, "笔记.txt"), []byte("notes"), 0644)
 	h := browserHarness(t, f)
+	server := h.a.store.Servers[0].ID
 	dest := t.TempDir()
 	os.WriteFile(filepath.Join(dest, "笔记.txt"), []byte("old"), 0644)
-	h.a.pickDir = func(string, string) (string, error) { return dest, nil }
-	// toLocal chooses this computer in the picker opened in the server.
-	toLocal := func() {
+	paste := func(loc string) {
 		h.t.Helper()
-		n := len(h.a.transfers)
-		h.a.nas.screen = screenServers
-		h.tt.Frame()
-		h.click("选择本机文件夹…")
-		// The folder dialog runs off the UI thread.
-		deadline := time.After(5 * time.Second)
-		for !h.tt.HasText("替换本机同名的项？") && len(h.a.transfers) == n {
-			select {
-			case fn := <-h.queue:
-				fn()
-				h.tt.Frame()
-			case <-deadline:
-				h.t.Fatal("nothing started")
-			}
-		}
+		h.a.goLocation(loc)
+		h.settle()
+		h.tt.Key(ui.Ctrl, ui.KeyV)
+		h.settle()
 	}
 
 	// Server → computer.
 	h.clickPage("笔记.txt")
-	h.click("复制到…")
-	h.want("复制到")
-	toLocal()
+	h.tt.Key(ui.Ctrl, ui.KeyC)
+	paste(localLocation(dest))
+	h.want("替换本机同名的项？")
 	h.click("替换")
 	h.waitTransfers()
 	if b, _ := os.ReadFile(filepath.Join(dest, "笔记.txt")); string(b) != "notes" {
 		t.Fatalf("copy to computer %q", b)
 	}
+	h.a.goLocation(nasLocation(server, 1, ""))
+	h.settle()
 	h.clickPage("照片")
-	h.click("移动到…")
-	toLocal()
+	h.tt.Key(ui.Ctrl, ui.KeyX)
+	paste(localLocation(dest))
 	h.waitTransfers()
 	if b, _ := os.ReadFile(filepath.Join(dest, "照片", "a.jpg")); string(b) != "photo" {
 		t.Fatalf("move to computer %q", b)
@@ -448,13 +433,8 @@ func TestCopyAndMoveBetweenComputerAndServer(t *testing.T) {
 	h.a.openLocal(dest)
 	h.settle()
 	h.clickPage("新.txt")
-	h.click("复制到服务器…")
-	h.want("复制到服务器")
-	h.click("浏览")
-	h.a.nas.sel = 0
-	h.click("打开")
-	h.click("选择当前目录“nas”")
-	h.waitStarted(3)
+	h.tt.Key(ui.Ctrl, ui.KeyC)
+	paste(nasLocation(server, 1, ""))
 	h.waitTransfers()
 	if b, _ := os.ReadFile(filepath.Join(f.Root, "新.txt")); string(b) != "new" {
 		t.Fatalf("copy to server %q", b)
@@ -462,13 +442,11 @@ func TestCopyAndMoveBetweenComputerAndServer(t *testing.T) {
 	if _, err := os.Stat(filepath.Join(dest, "新.txt")); err != nil {
 		t.Fatal("copy removed the local file")
 	}
+	h.a.goLocation(localLocation(dest))
+	h.settle()
 	h.clickPage("照片")
-	h.click("移动到服务器…")
-	h.click("浏览")
-	h.a.nas.sel = 0
-	h.click("打开")
-	h.click("选择当前目录“nas”")
-	h.waitStarted(4)
+	h.tt.Key(ui.Ctrl, ui.KeyX)
+	paste(nasLocation(server, 1, ""))
 	h.waitTransfers()
 	if b, _ := os.ReadFile(filepath.Join(f.Root, "照片", "a.jpg")); string(b) != "photo" {
 		t.Fatalf("move to server %q", b)
@@ -479,7 +457,157 @@ func TestCopyAndMoveBetweenComputerAndServer(t *testing.T) {
 	if b, _ := os.ReadFile(filepath.Join(os.Getenv("XDG_DATA_HOME"), "Trash", "files", "照片", "a.jpg")); string(b) != "photo" {
 		t.Fatalf("local trash has %q", b)
 	}
-	if h.tt.HasText("照片") {
-		t.Error("moved folder still listed")
+}
+
+// Among the folders of this computer: a copy into its own folder takes a
+// numbered name, a cut moves, a folder pasted into itself is refused.
+func TestLocalCopyAndMove(t *testing.T) {
+	dir := t.TempDir()
+	os.MkdirAll(filepath.Join(dir, "子", "孙"), 0o755)
+	os.WriteFile(filepath.Join(dir, "a.txt"), []byte("a"), 0o644)
+	h := newHarness(t, &config.Store{Dir: t.TempDir()})
+	h.a.openLocal(dir)
+	h.settle()
+
+	h.clickPage("a.txt")
+	h.tt.Key(ui.Ctrl, ui.KeyC)
+	h.tt.Key(ui.Ctrl, ui.KeyV)
+	h.waitTransfers()
+	h.settle()
+	if b, _ := os.ReadFile(filepath.Join(dir, "a (2).txt")); string(b) != "a" {
+		t.Fatalf("copy in place %q", b)
 	}
+	h.want("a (2).txt")
+
+	// Cut, pasted into a folder chosen, from its menu.
+	h.clickPage("a (2).txt")
+	h.tt.Key(ui.Ctrl, ui.KeyX)
+	h.clickPage("子")
+	h.menu("子", "粘贴到此文件夹")
+	h.waitTransfers()
+	h.settle()
+	if _, err := os.Stat(filepath.Join(dir, "子", "a (2).txt")); err != nil {
+		t.Fatal("not moved:", err)
+	}
+	if _, err := os.Stat(filepath.Join(dir, "a (2).txt")); !os.IsNotExist(err) {
+		t.Fatal("still where it was")
+	}
+
+	// A folder into itself.
+	h.clickPage("子")
+	h.tt.Key(ui.Ctrl, ui.KeyC)
+	h.a.openLocal(filepath.Join(dir, "子", "孙"))
+	h.settle()
+	h.tt.Key(ui.Ctrl, ui.KeyV)
+	h.settle()
+	if !strings.Contains(h.a.errorMsg, "到它自己里面") {
+		t.Fatalf("pasted into itself: %q", h.a.errorMsg)
+	}
+}
+
+// New folders, renaming and deleting, on this computer as on a server.
+func TestLocalFileOperations(t *testing.T) {
+	t.Setenv("XDG_DATA_HOME", t.TempDir())
+	dir := t.TempDir()
+	os.WriteFile(filepath.Join(dir, "a.txt"), []byte("a"), 0o644)
+	h := newHarness(t, &config.Store{Dir: t.TempDir()})
+	h.a.openLocal(dir)
+	h.settle()
+	h.tt.Key(ui.Ctrl|ui.Shift, ui.KeyN)
+	h.settle()
+	h.tt.Key(ui.Ctrl, ui.KeyA)
+	h.tt.Type("新目录")
+	h.tt.Key(0, ui.KeyEnter)
+	h.settle()
+	if fi, err := os.Stat(filepath.Join(dir, "新目录")); err != nil || !fi.IsDir() {
+		t.Fatal("no folder:", err)
+	}
+	h.clickPage("a.txt")
+	h.tt.Key(0, ui.KeyF2)
+	h.settle()
+	h.tt.Key(ui.Ctrl, ui.KeyA)
+	h.tt.Type("b.txt")
+	h.tt.Key(0, ui.KeyEnter)
+	h.settle()
+	if _, err := os.Stat(filepath.Join(dir, "b.txt")); err != nil {
+		t.Fatal("not renamed:", err)
+	}
+	h.clickPage("b.txt")
+	h.tt.Key(0, ui.KeyDelete)
+	h.click("移到回收站")
+	h.settle()
+	if _, err := os.Stat(filepath.Join(dir, "b.txt")); !os.IsNotExist(err) {
+		t.Fatal("not deleted")
+	}
+	if b, _ := os.ReadFile(filepath.Join(os.Getenv("XDG_DATA_HOME"), "Trash", "files", "b.txt")); string(b) != "a" {
+		t.Fatalf("trash has %q", b)
+	}
+}
+
+// Files another app copied, or cut, paste here; files of this computer
+// copied here paste there.
+func TestSystemClipboard(t *testing.T) {
+	f := fitest.New(t)
+	h := browserHarness(t, f)
+	src := t.TempDir()
+	os.WriteFile(filepath.Join(src, "外部.txt"), []byte("ext"), 0o644)
+	data, _ := systemFiles([]string{filepath.Join(src, "外部.txt")}, false)
+	h.tt.SetClipboardData(data)
+	h.tt.Key(ui.Ctrl, ui.KeyV)
+	h.waitStarted(1)
+	h.waitTransfers()
+	if b, _ := os.ReadFile(filepath.Join(f.Root, "外部.txt")); string(b) != "ext" {
+		t.Fatalf("pasted %q", b)
+	}
+
+	// Copied here: on the system's clipboard as a file manager reads it.
+	h.a.openLocal(src)
+	h.settle()
+	h.clickPage("外部.txt")
+	h.tt.Key(ui.Ctrl, ui.KeyC)
+	files, err := h.tt.ClipboardData().Files()
+	if err != nil || len(files) != 1 || files[0] != filepath.Join(src, "外部.txt") {
+		t.Fatalf("system clipboard %v, %v", files, err)
+	}
+}
+
+// The properties of an entry of a server come from it; of a folder, with
+// what its index holds.
+func TestServerProps(t *testing.T) {
+	f := fitest.New(t)
+	os.MkdirAll(filepath.Join(f.Root, "项目", "子目录"), 0755)
+	os.WriteFile(filepath.Join(f.Root, "项目", "报告.txt"), []byte("report"), 0644)
+	os.WriteFile(filepath.Join(f.Root, "项目", "子目录", "b.bin"), make([]byte, 2048), 0644)
+	h := browserHarness(t, f)
+	h.menu("文件夹 项目", "属性")
+	h.settle()
+	h.want("项目 的属性")
+	h.want("2,054 字节")
+	h.want("2 个文件，1 个文件夹")
+	h.want("nas:users（1000:1000）")
+	h.click("关闭")
+	if h.a.props != nil {
+		t.Fatal("props stayed open")
+	}
+	h.click("文件夹 项目")
+	h.click("报告.txt")
+	h.menu("报告.txt", "属性")
+	h.settle()
+	h.want("TXT 文件")
+	h.want("6 字节")
+	h.click("关闭")
+
+	// the folder shown
+	h.more("文件夹属性")
+	h.settle()
+	h.want("项目 的属性")
+	h.want("2 个文件，1 个文件夹")
+	h.click("关闭")
+
+	// an older server: what the list told
+	f.Props404.Store(true)
+	h.menu("报告.txt", "属性")
+	h.settle()
+	h.want("服务器版本较旧，只显示基本信息")
+	h.want("6 字节")
 }

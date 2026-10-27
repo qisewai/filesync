@@ -295,8 +295,6 @@ func statsEmpty(c *ui.Context) {
 	ui.Text(c, "没有数据").FontSize(12).TextColor(c.Theme().TextMuted).Padding(8, 0)
 }
 
-var folderColor = ui.Hex("#d99a2b")
-
 // usageRow is a share of the space in one row: what, how many files, how
 // big, and a bar. With action, it opens, the key naming it.
 func usageRow(c *ui.Context, key string, svg *ui.SVG, color ui.Color, label string, size, total, count int64, action func()) {

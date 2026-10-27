@@ -4,6 +4,7 @@ import (
 	"os"
 	"path/filepath"
 	"slices"
+	"strings"
 	"testing"
 
 	"filesync/config"
@@ -205,8 +206,7 @@ func TestSearchResultOperations(t *testing.T) {
 		h.tt.Frame()
 	}
 	choose("年度报告.pdf")
-	h.want("下载…")
-	h.click("重命名")
+	h.menu("年度报告.pdf", "重命名…")
 	h.tt.Key(ui.Ctrl, ui.KeyA) // the name, which has the focus
 	h.tt.Type("年度报告-终稿.pdf")
 	h.tt.Key(0, ui.KeyEnter)
@@ -230,7 +230,8 @@ func TestSearchResultOperations(t *testing.T) {
 	// Of two roots, or of a server and this computer: only where they are.
 	h.click("搜索范围 全部位置")
 	choose("旧报告.pdf", "本机报告.pdf")
-	if h.tt.HasText("下载…") || h.tt.HasText("创建备份任务…") {
-		t.Fatal("acts on results of several places at once")
+	h.tt.Key(ui.Ctrl, ui.KeyC)
+	if !strings.Contains(h.a.errorMsg, "来自不同位置") {
+		t.Fatalf("copied results of several places at once: %q", h.a.errorMsg)
 	}
 }

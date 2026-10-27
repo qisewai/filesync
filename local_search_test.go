@@ -372,3 +372,53 @@ func TestExplicitLocalMountScope(t *testing.T) {
 		t.Fatalf("explicit disk or temporary scope rejected: %q", skips)
 	}
 }
+
+// A folder of this computer is counted when asked, off the main thread:
+// from the index where it holds the folder, else by walking it.
+func TestLocalFolderSizeFromIndex(t *testing.T) {
+	root := t.TempDir()
+	localWrite(t, root, "文档/a.txt", 3)
+	localWrite(t, root, "文档/深/b.txt", 5)
+	h := localSearchHarness(t, root)
+	h.indexMenu("更新索引")
+	h.settle()
+	h.tt = ui.NewTester(h.a.view, 1400, 800)
+	h.a.openLocal(filepath.Join(root, "文档"))
+	h.settle()
+	h.want("当前文件夹")
+	h.want("未统计")
+	if h.tt.HasText("8 字节") {
+		t.Fatal("counted before asked")
+	}
+	count := func() {
+		h.t.Helper()
+		h.click("统计大小")
+		for h.a.detailProps != nil && h.a.detailProps.loading {
+			h.settle()
+		}
+		h.tt.Frame()
+	}
+	count()
+	h.want("8 字节")
+	h.want("2 个文件，1 个文件夹")
+	h.want("2 项")
+	from := ""
+	for _, row := range h.a.detailProps.rows() {
+		if row[0] == "统计来自" {
+			from = row[1]
+		}
+	}
+	if !strings.HasPrefix(from, "本机索引") {
+		t.Errorf("from %q", from)
+	}
+
+	// Outside the index: walked.
+	other := t.TempDir()
+	localWrite(t, other, "x.txt", 4)
+	h.a.openLocal(other)
+	h.settle()
+	h.want("未统计")
+	count()
+	h.want("4 字节")
+	h.want("1 个文件，0 个文件夹")
+}

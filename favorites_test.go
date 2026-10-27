@@ -218,7 +218,9 @@ func TestPathBar(t *testing.T) {
 	}
 }
 
-func TestPickerOffersFavorites(t *testing.T) {
+// A favorite, of a server or of this computer, is a folder to paste into
+// from the sidebar.
+func TestPasteIntoFavorites(t *testing.T) {
 	f := fitest.New(t)
 	os.MkdirAll(filepath.Join(f.Root, "目标", "深处"), 0755)
 	os.WriteFile(filepath.Join(f.Root, "笔记.txt"), []byte("notes"), 0644)
@@ -230,20 +232,20 @@ func TestPickerOffersFavorites(t *testing.T) {
 	h.settle()
 	h.a.goPlace(rootPlace(store.Servers[0].ID, 1))
 	h.settle()
-
-	// A favorite of the server opens there, to be chosen.
 	h.clickPage("笔记.txt")
-	h.click("复制到…")
-	h.click("前往收藏 深处")
-	h.click("选择“深处”")
+	h.tt.Key(ui.Ctrl, ui.KeyC)
+
+	h.click("收藏 深处")
+	h.settle()
+	h.tt.Key(ui.Ctrl, ui.KeyV)
+	h.waitStarted(1)
 	h.waitTransfers()
 	if b, _ := os.ReadFile(filepath.Join(f.Root, "目标", "深处", "笔记.txt")); string(b) != "notes" {
 		t.Fatalf("copied %q", b)
 	}
-
-	// One of this computer is chosen at once.
-	h.click("复制到…")
-	h.click("前往收藏 本机下载")
+	h.click("收藏 本机下载")
+	h.settle()
+	h.tt.Key(ui.Ctrl, ui.KeyV)
 	h.waitStarted(2)
 	h.waitTransfers()
 	if b, _ := os.ReadFile(filepath.Join(dest, "笔记.txt")); string(b) != "notes" {
@@ -315,8 +317,9 @@ func TestSidebarClicksOpen(t *testing.T) {
 		t.Fatalf("opened %q", h.a.local.dir)
 	}
 	h.want("本机文件夹 代码")
-	h.click("服务器")
-	if *h.a.sectionOpen("servers") || h.tt.HasText("家里") {
-		t.Fatal("服务器 did not close")
+	// A server is a section of its own, closed by a click.
+	h.click("家里")
+	if *h.a.sectionOpen("server/"+h.a.store.Servers[0].ID) || h.tt.HasText("文件夹 照片") {
+		t.Fatal("the server's section did not close")
 	}
 }

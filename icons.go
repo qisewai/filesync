@@ -14,6 +14,8 @@ func icon(paths string) *ui.SVG {
 }
 
 var (
+	iconCount       = icon(`<path d="M21 12A9 9 0 1 1 12 3v9z"/><path d="M15.5 3.7A9 9 0 0 1 20.3 8.5H15.5z"/>`)
+	iconDetails     = icon(`<rect x="3" y="4" width="18" height="16" rx="2"/><path d="M15 4v16"/>`)
 	iconFolder      = icon(`<path d="M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/>`)
 	iconFile        = icon(`<path d="M14 3H7a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2V8z"/><path d="M14 3v5h5"/>`)
 	iconDoc         = icon(`<path d="M14 3H7a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2V8z"/><path d="M14 3v5h5"/><path d="M9 13h6"/><path d="M9 17h6"/>`)
@@ -28,6 +30,7 @@ var (
 	iconBackup      = icon(`<path d="M7 18a5 5 0 1 1 .9-9.9A6 6 0 0 1 19 10a4 4 0 0 1 0 8"/><path d="M12 12v9"/><path d="M8.5 15.5 12 12l3.5 3.5"/>`)
 	iconLaptop      = icon(`<rect x="4" y="5" width="16" height="11" rx="2"/><path d="M2 20h20"/>`)
 	iconHome        = icon(`<path d="M3 11 12 4l9 7"/><path d="M5 10v10h14V10"/><path d="M10 20v-6h4v6"/>`)
+	iconSidebar     = icon(`<rect x="3" y="4" width="18" height="16" rx="2"/><path d="M9 4v16"/>`)
 	iconDisk        = icon(`<rect x="3" y="13" width="18" height="7" rx="2"/><path d="M5 13 7.5 5h9L19 13"/><path d="M16 16.5h.01"/>`)
 	iconNetwork     = icon(`<rect x="9" y="3" width="6" height="5" rx="1"/><rect x="3" y="16" width="6" height="5" rx="1"/><rect x="15" y="16" width="6" height="5" rx="1"/><path d="M12 8v4"/><path d="M6 16v-2h12v2"/>`)
 	iconTasks       = icon(`<path d="M9 6h11"/><path d="M9 12h11"/><path d="M9 18h11"/><path d="m3 6 1.5 1.5L7 5"/><path d="m3 12 1.5 1.5L7 11"/><path d="m3 18 1.5 1.5L7 17"/>`)
@@ -98,7 +101,7 @@ func fileIcon(c *ui.Context, e fileindex.Entry, size float32) ui.Element {
 	svg, color := iconFile, c.Theme().TextMuted
 	switch fileKind(e) {
 	case "dir":
-		svg, color = iconFolder, ui.Hex("#d99a2b")
+		svg, color = iconFolder, folderColor
 	case "image":
 		svg, color = iconImage, ui.Hex("#2f9e6b")
 	case "video":
@@ -119,7 +122,7 @@ func fileIcon(c *ui.Context, e fileindex.Entry, size float32) ui.Element {
 
 // labeled builds an icon then a label, in a row of what holds them.
 func labeled(c *ui.Context, svg *ui.SVG, label string, color ui.Color) {
-	ui.Icon(c, svg).FontSize(15).TextColor(color)
+	ui.Icon(c, svg).FontSize(16).TextColor(color).Margin(0, 4, 0, 0)
 	ui.Text(c, label).SingleLine().Grow(1).Shrink(1).MinWidth(0)
 }
 

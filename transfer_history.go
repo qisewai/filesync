@@ -3,6 +3,7 @@ package main
 import (
 	"encoding/json"
 	"errors"
+	"filesync/fileindex"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -13,35 +14,48 @@ import (
 
 // History contains data only: never callbacks, session tokens or proxy URLs.
 type transferRecord struct {
-	Kind        string    `json:"kind"`
-	Title       string    `json:"title"`
-	State       string    `json:"state"`
-	Error       string    `json:"error,omitempty"`
-	Note        string    `json:"note,omitempty"`
-	Errors      []string  `json:"errors,omitempty"`
-	Started     time.Time `json:"started"`
-	Finished    time.Time `json:"finished,omitempty"`
-	Done        int64     `json:"done,omitempty"`
-	Total       int64     `json:"total,omitempty"`
-	Files       int       `json:"files,omitempty"`
-	Directory   string    `json:"directory,omitempty"`
-	File        string    `json:"file,omitempty"`
-	FolderReady bool      `json:"folder_ready,omitempty"`
-	Server      string    `json:"server,omitempty"`
-	Peer        string    `json:"peer,omitempty"`
-	Task        int64     `json:"task,omitempty"`
-	ScanRoot    int64     `json:"scan_root,omitempty"`
-	ScanJob     int64     `json:"scan_job,omitempty"`
+	Kind          string                   `json:"kind"`
+	Title         string                   `json:"title"`
+	State         string                   `json:"state"`
+	Error         string                   `json:"error,omitempty"`
+	Note          string                   `json:"note,omitempty"`
+	Errors        []string                 `json:"errors,omitempty"`
+	Started       time.Time                `json:"started"`
+	Finished      time.Time                `json:"finished,omitempty"`
+	Done          int64                    `json:"done,omitempty"`
+	Total         int64                    `json:"total,omitempty"`
+	Files         int                      `json:"files,omitempty"`
+	Directory     string                   `json:"directory,omitempty"`
+	File          string                   `json:"file,omitempty"`
+	FolderReady   bool                     `json:"folder_ready,omitempty"`
+	Server        string                   `json:"server,omitempty"`
+	Peer          string                   `json:"peer,omitempty"`
+	Task          int64                    `json:"task,omitempty"`
+	ScanRoot      int64                    `json:"scan_root,omitempty"`
+	ScanJob       int64                    `json:"scan_job,omitempty"`
+	Download      *downloadResume          `json:"download,omitempty"`
+	TaskCreated   int64                    `json:"task_created,omitempty"`
+	ArchiveResult *fileindex.ArchiveResult `json:"archive_result,omitempty"`
 }
 type transferHistoryFile struct {
-	Version int              `json:"version"`
-	Items   []transferRecord `json:"items"`
+	Version              int                   `json:"version"`
+	Items                []transferRecord      `json:"items"`
+	DismissedCompression []compressionIdentity `json:"dismissed_compression,omitempty"`
 }
 
 func (a *app) transferRecords() []transferRecord {
 	records := make([]transferRecord, 0, len(a.transfers))
 	for _, tr := range a.transfers {
 		records = append(records, transferRecord{Kind: tr.kind, Title: tr.title, State: tr.state, Error: tr.err, Note: tr.note, Errors: slices.Clone(tr.errors), Started: tr.started, Finished: tr.finished, Done: tr.done, Total: tr.total, Files: tr.files, Directory: tr.localDir, File: tr.localFile, FolderReady: tr.folderReady, Server: tr.server, Peer: tr.peer, Task: tr.task, ScanRoot: tr.scanRoot, ScanJob: tr.scanJob})
+		if tr.download != nil {
+			copy := *tr.download
+			records[len(records)-1].Download = &copy
+		}
+		records[len(records)-1].TaskCreated = tr.taskCreated
+		if tr.archiveResult != nil {
+			r := *tr.archiveResult
+			records[len(records)-1].ArchiveResult = &r
+		}
 	}
 	return records
 }
@@ -76,6 +90,8 @@ func (a *app) loadTransferHistory() {
 	for _, r := range data.Items {
 		a.transferSeq++
 		tr := &transfer{id: a.transferSeq, kind: r.Kind, title: r.Title, state: r.State, err: r.Error, note: r.Note, errors: r.Errors, started: r.Started, finished: r.Finished, done: r.Done, total: r.Total, files: r.Files, localDir: r.Directory, localFile: r.File, folderReady: r.FolderReady, server: r.Server, peer: r.Peer, task: r.Task, scanRoot: r.ScanRoot, scanJob: r.ScanJob}
+		tr.download = r.Download
+		tr.taskCreated, tr.archiveResult = r.TaskCreated, r.ArchiveResult
 		switch tr.state {
 		case "done", "failed", "canceled", "interrupted":
 		default:
@@ -87,6 +103,12 @@ func (a *app) loadTransferHistory() {
 		}
 		a.transfers = append(a.transfers, tr)
 	}
+	for _, id := range data.DismissedCompression {
+		if a.dismissedCompression == nil {
+			a.dismissedCompression = map[compressionIdentity]bool{}
+		}
+		a.dismissedCompression[id] = true
+	}
 	a.transferHistory = newTransferHistoryWriter(filename)
 }
 func (a *app) saveTransferHistory() {
@@ -96,19 +118,24 @@ func (a *app) saveTransferHistory() {
 	// Capture an immutable snapshot and the initialized UI dispatcher. The
 	// writer never touches app state or a live transfer from its goroutine.
 	post := a.post
+	hidden := make([]compressionIdentity, 0, len(a.dismissedCompression))
+	for id := range a.dismissedCompression {
+		hidden = append(hidden, id)
+	}
 	a.transferHistory.enqueue(a.transferRecords(), func(err error) {
 		post(func() {
 			if !a.closed {
 				a.errorMsg = "无法保存传输记录：" + err.Error()
 			}
 		})
-	})
+	}, hidden)
 }
 
 type historySnapshot struct {
 	records    []transferRecord
 	generation uint64
 	report     func(error)
+	hidden     []compressionIdentity
 }
 type transferHistoryWriter struct {
 	filename          string
@@ -127,7 +154,7 @@ func newTransferHistoryWriter(filename string) *transferHistoryWriter {
 	go w.run()
 	return w
 }
-func (w *transferHistoryWriter) enqueue(records []transferRecord, report func(error)) {
+func (w *transferHistoryWriter) enqueue(records []transferRecord, report func(error), hidden ...[]compressionIdentity) {
 	w.mu.Lock()
 	defer w.mu.Unlock()
 	if w.closed {
@@ -135,6 +162,9 @@ func (w *transferHistoryWriter) enqueue(records []transferRecord, report func(er
 	}
 	w.generation++
 	w.pending = &historySnapshot{records: records, generation: w.generation, report: report}
+	if len(hidden) > 0 {
+		w.pending.hidden = slices.Clone(hidden[0])
+	}
 	w.cond.Signal()
 }
 func (w *transferHistoryWriter) run() {
@@ -151,7 +181,7 @@ func (w *transferHistoryWriter) run() {
 		snapshot := w.pending
 		w.pending = nil
 		w.mu.Unlock()
-		err := writeTransferHistory(w.filename, snapshot.records)
+		err := writeTransferHistory(w.filename, snapshot.records, snapshot.hidden)
 		w.mu.Lock()
 		w.saved, w.err = snapshot.generation, err
 		w.cond.Broadcast()
@@ -186,11 +216,15 @@ func (w *transferHistoryWriter) wait() error {
 	defer w.mu.Unlock()
 	return w.err
 }
-func writeTransferHistory(filename string, records []transferRecord) error {
+func writeTransferHistory(filename string, records []transferRecord, hidden ...[]compressionIdentity) error {
 	if records == nil {
 		records = []transferRecord{}
 	}
-	b, err := json.MarshalIndent(transferHistoryFile{Version: 1, Items: records}, "", "  ")
+	data := transferHistoryFile{Version: 1, Items: records}
+	if len(hidden) > 0 {
+		data.DismissedCompression = hidden[0]
+	}
+	b, err := json.MarshalIndent(data, "", "  ")
 	if err != nil {
 		return err
 	}

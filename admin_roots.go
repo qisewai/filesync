@@ -277,7 +277,7 @@ func (a *app) serverPickerView(c *ui.Context, m *adminPage, d *rootDraft) {
 		ui.List(c.Key("server-directories"), &p.list, len(p.dirs)).Grow(1).MinHeight(0).Label("服务器目录列表").Rows(func(row ui.ListRow) {
 			dir := p.dirs[row.Index]
 			ui.Button(c.Key(dir.Path), "").Label(dir.Name).Margin(3, 0).Justify(ui.Start).Disabled(p.loading).Children(func() {
-				ui.Icon(c, iconFolder).FontSize(15).TextColor(ui.Hex("#d99a2b"))
+				ui.Icon(c, iconFolder).FontSize(15).TextColor(folderColor)
 				ui.Text(c, dir.Name).SingleLine()
 			}).OnClick(func() { a.loadServerPicker(m, d, dir.Path) })
 		})

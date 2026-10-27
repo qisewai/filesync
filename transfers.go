@@ -4,8 +4,10 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
+	"strings"
 	"time"
 
 	"filesync/config"
@@ -29,17 +31,21 @@ type transfer struct {
 	finished time.Time
 
 	done, total int64 // bytes, total 0 when unknown
+	resumed     int64 // bytes already present at the start of this attempt
 	files       int
 	current     string
-	localFile   string // one complete downloaded file, available to reopen
-	localDir    string // download destination or the system-open cache directory
-	folderReady bool   // the worker has created the cache directory, or the user picked it
+	localFile   string          // one complete downloaded file, available to reopen
+	localDir    string          // download destination or the system-open cache directory
+	folderReady bool            // the worker has created the cache directory, or the user picked it
+	download    *downloadResume // ordinary single-file downloads only
 
 	// A task of the server, followed by its events.
 	server            string
 	peer              string // the other server of a copy between two
 	task              int64
 	scanRoot, scanJob int64
+	taskCreated       int64
+	archiveResult     *fileindex.ArchiveResult
 	// after runs on the main thread once it ends well, as a refresh.
 	after func()
 	stop  context.CancelFunc
@@ -68,6 +74,9 @@ func (a *app) finishTransfer(t *transfer, err error, failed []string) {
 		t.state = "canceled"
 	case err != nil:
 		t.state, t.err = "failed", err.Error()
+		if t.download != nil && errors.Is(err, io.ErrUnexpectedEOF) {
+			t.err = "连接中断，未完成的数据已保留"
+		}
 	case len(failed) > 0:
 		t.state, t.err = "failed", fmt.Sprintf("%d 项没有成功", len(failed))
 	default:
@@ -88,11 +97,27 @@ func (a *app) applyTask(tr *transfer, task *fileindex.Task) {
 	if !tr.running() {
 		return
 	}
+	if tr.kind == "压缩" && (task.Kind != "compress" || tr.taskCreated != 0 && task.CreatedAt != tr.taskCreated) {
+		a.finishTransfer(tr, errors.New("服务器任务记录已失效，无法确认压缩结果，请检查目标目录"), nil)
+		return
+	}
+	tr.taskCreated = task.CreatedAt
 	tr.done, tr.total, tr.current = task.DoneBytes, task.TotalBytes, task.Current
 	if !task.Finished() {
 		return
 	}
 	tr.note = task.Message
+	if task.Result != nil {
+		r := *task.Result
+		tr.archiveResult = &r
+		tr.note = "已保存：" + r.Path
+		if r.Skipped {
+			tr.note = "目标已存在，已跳过：" + r.Path
+		}
+		if task.Message != "" && !r.Skipped {
+			tr.note += " · " + task.Message
+		}
+	}
 	var err error
 	switch task.Status {
 	case "failed":
@@ -103,6 +128,9 @@ func (a *app) applyTask(tr *transfer, task *fileindex.Task) {
 		err = errors.New(message)
 	case "canceled":
 		err = context.Canceled
+	}
+	if task.Kind == "compress" && task.Status == "done" && task.Result == nil {
+		err = errors.New("服务器未提供压缩结果，无法确认是否成功")
 	}
 	a.finishTransfer(tr, err, nil)
 }
@@ -130,7 +158,7 @@ func (a *app) trackServerTask(c *fileindex.Client, tr *transfer, task *fileindex
 			})
 		}()
 	}
-	if a.quitWhenDone {
+	if a.quitWhenDone && tr.kind != "压缩" {
 		tr.cancel()
 	}
 	// Events provide immediate progress; snapshots also cover events dropped
@@ -150,6 +178,9 @@ func (a *app) trackServerTask(c *fileindex.Client, tr *transfer, task *fileindex
 							a.applyTask(tr, &tasks[i])
 							return
 						}
+					}
+					if tr.kind == "压缩" && tr.running() {
+						a.finishTransfer(tr, errors.New("服务器任务记录已失效，无法确认压缩结果，请检查目标目录"), nil)
 					}
 				})
 			} else if errors.Is(err, fileindex.ErrAuth) {
@@ -173,6 +204,16 @@ func (a *app) activeTransfers() int {
 	n := 0
 	for _, t := range a.transfers {
 		if t.running() {
+			n++
+		}
+	}
+	return n
+}
+
+func (a *app) blockingTransfers() int {
+	n := 0
+	for _, tr := range a.transfers {
+		if tr.running() && tr.kind != "压缩" {
 			n++
 		}
 	}
@@ -215,8 +256,8 @@ func (a *app) transferRow(c *ui.Context, tr *transfer) {
 				if tr.total > 0 {
 					info += " / " + formatBytes(tr.total)
 				}
-				if s := time.Since(tr.started).Seconds(); s > 1 && tr.done > 0 {
-					info += " · " + formatBytes(int64(float64(tr.done)/s)) + "/s"
+				if s := time.Since(tr.started).Seconds(); s > 1 && tr.done > tr.resumed {
+					info += " · " + formatBytes(int64(float64(tr.done-tr.resumed)/s)) + "/s"
 				}
 				if tr.current != "" {
 					info += " · " + tr.current
@@ -231,7 +272,9 @@ func (a *app) transferRow(c *ui.Context, tr *transfer) {
 				color := t.Success
 				if tr.note != "" {
 					message += " · " + tr.note
-					color = t.Warning
+					if tr.archiveResult == nil || strings.Contains(tr.note, "跳过") {
+						color = t.Warning
+					}
 				}
 				ui.Text(c, message).FontSize(12).TextColor(color).MaxLines(2).Tooltip(message)
 			case "canceled":
@@ -245,8 +288,17 @@ func (a *app) transferRow(c *ui.Context, tr *transfer) {
 				}
 				ui.Text(c, msg+" · "+tr.started.Local().Format("2006-01-02 15:04")).FontSize(12).TextColor(t.Danger).MaxLines(2).Tooltip(msg)
 			}
+			if tr.download != nil && !tr.running() && tr.state != "done" && tr.done > 0 {
+				ui.Text(c, "已下载 "+formatBytes(tr.done)+" / "+formatBytes(tr.total)+"，可继续下载").FontSize(12).TextColor(t.TextMuted)
+			}
 		})
 		ui.Row(c.Key("actions")).Shrink(0).Gap(4).AlignItems(ui.Center).Children(func() {
+			if tr.archiveResult != nil && tr.state == "done" {
+				iconButton(c, "locate-archive", iconArchive, "打开压缩包所在位置", tr.archiveResult.Path, false, func() { a.locateCompressed(tr) }).Size(30, 30)
+			}
+			if tr.download != nil && !tr.running() && tr.state != "done" {
+				iconButton(c, "resume", iconRetry, "继续下载", "继续未完成的下载；源文件变化时重新下载", false, func() { a.resumeDownload(tr) }).Size(30, 30)
+			}
 			if tr.localFile != "" && tr.state == "done" {
 				iconButton(c, "open-file", iconOpenOut, "打开下载文件", "用系统程序打开："+tr.localFile, false, func() { a.openTransferFile(tr) }).Size(30, 30)
 			}
@@ -283,7 +335,7 @@ func transferIcon(kind string) *ui.SVG {
 		return iconCopy
 	case "移动":
 		return iconMove
-	case "解压":
+	case "解压", "压缩":
 		return iconArchive
 	case "删除", "彻底删除":
 		return iconTrash
@@ -306,6 +358,10 @@ func (a *app) removeTransfer(tr *transfer) {
 	}
 	for i, item := range a.transfers {
 		if item == tr {
+			a.dismissCompression(tr)
+			if tr.download != nil {
+				fileindex.RemoveDownloadPartial(tr.localFile, tr.download.Partial)
+			}
 			copy(a.transfers[i:], a.transfers[i+1:])
 			a.transfers[len(a.transfers)-1] = nil
 			a.transfers = a.transfers[:len(a.transfers)-1]
@@ -320,6 +376,11 @@ func (a *app) clearTransfers() {
 	for _, tr := range a.transfers {
 		if tr.running() {
 			kept = append(kept, tr)
+		} else {
+			a.dismissCompression(tr)
+			if tr.download != nil {
+				fileindex.RemoveDownloadPartial(tr.localFile, tr.download.Partial)
+			}
 		}
 	}
 	for i := len(kept); i < len(a.transfers); i++ {
@@ -337,6 +398,7 @@ func (a *app) watch(sv *config.Server) {
 	}
 	ctx, cancel := context.WithCancel(context.Background())
 	a.watching[sv.ID] = cancel
+	a.refreshCompressionTasks(sv.ID)
 	c := fileindex.New(sv.Addr, sv.Token)
 	id := sv.ID
 	go func() {
@@ -356,6 +418,13 @@ func (a *app) watch(sv *config.Server) {
 					}
 				})
 				return
+			}
+			if ctx.Err() == nil {
+				a.post(func() {
+					if !a.closed {
+						a.refreshCompressionTasks(id)
+					}
+				})
 			}
 			if time.Since(start) > time.Minute {
 				delay = time.Second // it ran a while: the server is back

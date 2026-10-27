@@ -66,7 +66,7 @@ func TestTransferHistoryRestartOpenDeleteAndClear(t *testing.T) {
 		t.Fatalf("restored %+v", saved)
 	}
 	// This entry is available on the welcome page without choosing a directory.
-	restarted.click("传输记录")
+	restarted.click("传输任务")
 	restarted.want("季度报告.txt")
 	opened := ""
 	restarted.a.openPath = func(p string) { opened = p }
@@ -99,7 +99,7 @@ func TestTransferHistoryRestartOpenDeleteAndClear(t *testing.T) {
 	restarted.a.transferHistory.wait()
 	again := newHarness(t, &config.Store{Dir: dir})
 	again.settle()
-	again.click("传输记录")
+	again.click("传输任务")
 	again.want("暂无传输记录")
 	body, err := os.ReadFile(file)
 	if err != nil || string(body) != "report" {
@@ -128,7 +128,7 @@ func TestTransferHistoryRestoresUnfinishedWithoutRunningOrOpening(t *testing.T) 
 	if restored.cancel != nil || restored.after != nil || restored.done != 10 {
 		t.Fatalf("restored %+v", restored)
 	}
-	h.click("传输记录")
+	h.click("传输任务")
 	h.want("上次未完成")
 	if h.tt.HasText("打开下载文件") {
 		t.Fatal("partial file can be opened as complete")
@@ -145,7 +145,7 @@ func TestTransferHistoryRestoresUnfinishedWithoutRunningOrOpening(t *testing.T) 
 func TestTransferHistoryEmptyEntryAndMissingFile(t *testing.T) {
 	h := newHarness(t, &config.Store{Dir: t.TempDir()})
 	h.settle()
-	h.click("传输记录")
+	h.click("传输任务")
 	h.want("暂无传输记录")
 	h.a.showTransfers = false
 	tr := h.a.addTransfer("下载", "已被移走的文件")
@@ -266,7 +266,7 @@ func TestTransferHistoryRestoredPanelSnapshot(t *testing.T) {
 	}
 	h := newHarness(t, &config.Store{Dir: dir})
 	h.settle()
-	h.click("传输记录")
+	h.click("传输任务")
 	h.tt.Frame()
 	if out := os.Getenv("FILESYNC_HISTORY_SNAPSHOT"); out != "" {
 		f, err := os.Create(out)

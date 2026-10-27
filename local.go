@@ -365,33 +365,21 @@ func (a *app) localView(c *ui.Context) {
 	if c.Shortcut(0, ui.KeyF5) {
 		a.openLocal(b.dir)
 	}
-	// Backing up and showing in the file manager are in the menu of the
-	// files.
-	commandBar(c, n, filesSize(es), func() { b.sel.Clear() }, func() {}, func() {
-		toolButton(c, "local-copy-to", iconCopy, "复制到服务器…", "上传到服务器上的文件夹", false, func() { a.sendLocal(false, es) })
-		toolButton(c, "local-move-to", iconMove, "移动到服务器…", "上传到服务器后，把本机的移入回收站", false, func() { a.sendLocal(true, es) })
-	}, func() {
-		viewToggle(c, "local-view-toggle", &b.grid)
-		moreMenu(c, "local-more", func(m *ui.Menu) {
-			if m.Item("显示隐藏文件").Checked(b.hidden).Chosen() {
-				b.hidden = !b.hidden
-				a.invalidateLocalTree()
-				a.openLocal(b.dir)
-			}
-			if m.Item("刷新").Shortcut(0, ui.KeyF5).Chosen() {
-				a.openLocal(b.dir)
-			}
-			if idx := a.localIdx; idx != nil {
-				m.Separator()
-				if m.Item("更新本机索引").Disabled(idx.running || idx.loading).Chosen() {
-					a.startLocalScan()
-				}
-				if m.Item("本机索引范围…").Disabled(idx.running || idx.loading).Chosen() {
-					a.editLocalIndex()
-				}
-			}
-		})
-	})
+	// The keys of a file manager: Delete moves what is chosen to the
+	// trash, Shift+Delete deletes it for good, F2 renames it, Ctrl+Shift+N
+	// makes a folder; not while typing.
+	if !busy && !a.searchTyping && a.naming == nil && a.asking == nil {
+		switch {
+		case n > 0 && c.Shortcut(ui.Shift, ui.KeyDelete):
+			a.localDelete(entryPaths(es), true)
+		case n > 0 && c.Shortcut(0, ui.KeyDelete):
+			a.localDelete(entryPaths(es), false)
+		case n == 1 && c.Shortcut(0, ui.KeyF2):
+			a.localRename(es[0].Path)
+		case c.Shortcut(ui.Ctrl|ui.Shift, ui.KeyN):
+			a.localMkdir(b.dir)
+		}
+	}
 	if b.err != "" {
 		notice(c, t.Danger, b.err)
 	}
@@ -409,6 +397,7 @@ func (a *app) localView(c *ui.Context) {
 		loading:  b.loading,
 		thumb:    a.localThumb,
 		open:     open,
+		cut:      a.clipCut(),
 		resort:   func() { sortEntries(&b.sort, b.items, &b.cursor) },
 		gridLast: &b.gridLast,
 		empty: func() {
@@ -422,43 +411,91 @@ func (a *app) localView(c *ui.Context) {
 		if busy {
 			es = nil
 		}
-		if len(es) == 1 {
-			if archiveEntry(es[0]) {
-				if m.Item("打开压缩包").Chosen() {
-					a.openLocalEntry(es[0])
-				}
-				if m.Item("解压到…").Chosen() {
-					a.extractArchive(localPlace, nil, es[0])
-				}
-			}
-			if m.Item("打开").Chosen() {
-				open(es[0])
-			}
-			if es[0].IsDir {
-				a.favoriteMenuItem(m, &config.Favorite{Name: es[0].Name, Local: es[0].Path})
-			}
-			m.Separator()
+		a.localMenu(c, m, es)
+	})
+}
+
+// localMenu is the menu of the files of this computer chosen, or of the
+// folder shown without any.
+func (a *app) localMenu(c *ui.Context, m *ui.Menu, es []fileindex.Entry) {
+	b := a.local
+	busy := b.loading
+	if len(es) == 0 {
+		a.clipItems(c, m, nil)
+		m.Separator()
+		if m.Item("新建文件夹…").Shortcut(ui.Ctrl|ui.Shift, ui.KeyN).Disabled(busy || b.err != "").Chosen() {
+			a.localMkdir(b.dir)
 		}
-		if len(es) > 0 {
-			if m.Item("复制到服务器…").Chosen() {
-				a.sendLocal(false, es)
-			}
-			if m.Item("移动到服务器…").Chosen() {
-				a.sendLocal(true, es)
-			}
-			m.Separator()
+		if m.Item("显示隐藏文件").Checked(b.hidden).Chosen() {
+			b.hidden = !b.hidden
+			a.invalidateLocalTree()
+			a.openLocal(b.dir)
 		}
-		label := "备份当前文件夹…"
-		if len(es) > 0 {
-			label = "创建备份任务…"
+		if m.Item("刷新").Shortcut(0, ui.KeyF5).Chosen() {
+			a.openLocal(b.dir)
 		}
-		if m.Item(label).Disabled(busy || b.err != "").Chosen() {
-			a.backupLocal(b.dir, es)
+		m.Separator()
+		if m.Item("备份当前文件夹…").Disabled(busy || b.err != "").Chosen() {
+			a.backupLocal(b.dir, nil)
 		}
 		if m.Item("在文件管理器中显示").Disabled(busy).Chosen() {
 			a.openPath(b.dir)
 		}
-	})
+		if m.Item("文件夹属性").Disabled(busy || b.err != "").Chosen() {
+			a.showLocalProps(b.dir)
+		}
+		return
+	}
+	if len(es) == 1 {
+		if archiveEntry(es[0]) {
+			if m.Item("打开压缩包").Chosen() {
+				a.openLocalEntry(es[0])
+			}
+			if m.Item("解压到…").Chosen() {
+				a.extractArchive(localPlace, nil, es[0])
+			}
+		}
+		if m.Item("打开").Chosen() {
+			a.openLocalEntry(es[0])
+		}
+		if es[0].IsDir && m.Item("在新标签页中打开").Disabled(len(a.tabs) >= maxTabs).Chosen() {
+			a.openLocalInNewTab(es[0].Path)
+		}
+	}
+	m.Separator()
+	a.clipItems(c, m, es)
+	m.Separator()
+	if m.Item("重命名…").Shortcut(0, ui.KeyF2).Disabled(len(es) != 1).Chosen() {
+		a.localRename(es[0].Path)
+	}
+	if m.Item("删除…").Shortcut(0, ui.KeyDelete).Chosen() {
+		a.localDelete(entryPaths(es), false)
+	}
+	if m.Item("彻底删除…").Shortcut(ui.Shift, ui.KeyDelete).Chosen() {
+		a.localDelete(entryPaths(es), true)
+	}
+	m.Separator()
+	if len(es) == 1 && es[0].IsDir {
+		a.favoriteMenuItem(m, &config.Favorite{Name: es[0].Name, Local: es[0].Path})
+	}
+	if m.Item("创建备份任务…").Chosen() {
+		a.backupLocal(b.dir, es)
+	}
+	if m.Item("在文件管理器中显示").Chosen() {
+		a.openPath(b.dir)
+	}
+	if len(es) == 1 && m.Item("属性").Chosen() {
+		a.showLocalProps(es[0].Path)
+	}
+}
+
+// entryPaths are the paths of entries of this computer.
+func entryPaths(es []fileindex.Entry) []string {
+	out := make([]string, len(es))
+	for i, e := range es {
+		out[i] = e.Path
+	}
+	return out
 }
 
 // localStatus is, in the status bar, what the page shows and has chosen.
@@ -649,7 +686,7 @@ func (a *app) localDirectoryView(c *ui.Context, top, dir, name string, svg *ui.S
 		}
 	}))
 	chosen := a.place == localPlace && a.local != nil && a.local.dir == dir && a.localTop(dir) == top
-	color := ui.Hex("#d99a2b")
+	color := folderColor
 	if svg != iconFolder {
 		color = c.Theme().TextMuted
 	}
@@ -661,6 +698,12 @@ func (a *app) localDirectoryView(c *ui.Context, top, dir, name string, svg *ui.S
 		if m.Item("打开").Chosen() {
 			a.openLocal(dir)
 		}
+		if m.Item("在新标签页中打开").Disabled(len(a.tabs) >= maxTabs).Chosen() {
+			a.openLocalInNewTab(dir)
+		}
+		if m.Item("粘贴到此文件夹").Disabled(!a.hasPaste(c.Services())).Chosen() {
+			a.paste(c.Services(), pasteTarget{local: dir})
+		}
 		a.favoriteMenuItem(m, &config.Favorite{Name: name, Local: dir})
 		m.Separator()
 		if m.Item("创建备份任务…").Chosen() {
@@ -668,6 +711,9 @@ func (a *app) localDirectoryView(c *ui.Context, top, dir, name string, svg *ui.S
 		}
 		if m.Item("在文件管理器中显示").Chosen() {
 			a.openPath(dir)
+		}
+		if m.Item("属性").Chosen() {
+			a.showLocalProps(dir)
 		}
 		m.Separator()
 		if m.Item("刷新").Chosen() {
@@ -714,29 +760,33 @@ func (a *app) localItems(c *ui.Context) {
 		a.localRoots = localRoots()
 	}
 	for _, r := range a.localRoots {
-		svg := iconFolder
-		switch {
-		case r.name == "主目录":
-			svg = iconHome
-		case r.name == "文件系统" || strings.HasSuffix(r.name, " 盘"):
-			svg = iconDisk
-		case r.name == "网络位置（KDE）":
-			svg = iconNetwork
-		case r.name == "桌面":
-			svg = iconLaptop
-		case r.name == "文档":
-			svg = iconDoc
-		case r.name == "下载":
-			svg = iconSave
-		case r.name == "图片":
-			svg = iconImage
-		case r.name == "音乐":
-			svg = iconAudio
-		case r.name == "视频":
-			svg = iconVideo
-		}
-		a.localDirectoryView(c, r.dir, r.dir, r.name, svg)
+		a.localDirectoryView(c, r.dir, r.dir, r.name, localRootIcon(r.name))
 	}
+}
+
+// localRootIcon is the icon of a place of the computer, by its name.
+func localRootIcon(name string) *ui.SVG {
+	switch {
+	case name == "主目录":
+		return iconHome
+	case name == "文件系统" || strings.HasSuffix(name, " 盘"):
+		return iconDisk
+	case name == "网络位置（KDE）":
+		return iconNetwork
+	case name == "桌面":
+		return iconLaptop
+	case name == "文档":
+		return iconDoc
+	case name == "下载":
+		return iconSave
+	case name == "图片":
+		return iconImage
+	case name == "音乐":
+		return iconAudio
+	case name == "视频":
+		return iconVideo
+	}
+	return iconFolder
 }
 
 // startLocal is the directory the page of the computer opens at.
@@ -750,68 +800,9 @@ func (a *app) startLocal() string {
 	return string(filepath.Separator)
 }
 
-// sendLocal asks for a directory of a server, then copies or moves files
-// of this computer there, asking first to replace what has their names.
-func (a *app) sendLocal(move bool, es []fileindex.Entry) {
-	if len(es) == 0 {
-		return
-	}
-	kind := "复制"
-	if move {
-		kind = "移动"
-	}
-	files := make([]string, len(es))
-	for i, e := range es {
-		files[i] = e.Path
-	}
-	server := ""
-	if a.br != nil {
-		server = a.br.server
-	}
-	a.openPicker(server, 0, "", func(sv string, root int64, rootName, dir string) {
-		c, ok := a.serverClient(sv)
-		if !ok {
-			return
-		}
-		go func() {
-			ctx, cancel := context.WithTimeout(context.Background(), requestTimeout)
-			defer cancel()
-			there, err := c.List(ctx, root, dir)
-			a.post(func() {
-				if a.closed {
-					return
-				}
-				if err != nil {
-					if a.local != nil {
-						a.local.err = "无法读取目标目录：" + err.Error()
-					}
-					return
-				}
-				have := map[string]bool{}
-				for _, e := range there {
-					have[e.Name] = true
-				}
-				var taken []string
-				for _, f := range files {
-					if have[filepath.Base(f)] {
-						taken = append(taken, filepath.Base(f))
-					}
-				}
-				start := func() { a.startUploadTo(sv, root, a.target(sv, rootName, dir), dir, files, move, nil) }
-				if len(taken) == 0 {
-					start()
-					return
-				}
-				a.ask("替换目标中同名的项？", fmt.Sprintf("目标目录中已经有 %s 等 %d 项与%s的同名。文件会被替换，文件夹会合并。", strings.Join(taken[:min(3, len(taken))], "、"), len(taken), kind), "替换", start)
-			})
-		}()
-	})
-	a.nas.title = kind + "到服务器"
-}
-
 // localChanged lists dir again, if the page shows it.
-func (a *app) localChanged(dir string) {
+func (a *app) localChanged(dir string, choose ...string) {
 	if a.place == localPlace && a.local != nil && a.local.dir == dir {
-		a.openLocal(dir)
+		a.openLocal(dir, choose...)
 	}
 }

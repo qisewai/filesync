@@ -270,6 +270,9 @@ func TestArchiveNASDownloadPickerUsesArchiveSource(t *testing.T) {
 	h.a.pickDir = func(string, string) (string, error) { return dest, nil }
 	h.a.downloadTo(h.a.archiveFiles(), false, h.a.arc.items, "解压到本机")
 	h.settle()
+	// The directory picker posts task creation from a goroutine. Wait for
+	// that post before checking whether the transfer has finished.
+	h.waitStarted(1)
 	h.waitTransfers()
 	body, err := os.ReadFile(filepath.Join(dest, "照片", "说明.txt"))
 	if err != nil || string(body) != "压缩包内的文本" {

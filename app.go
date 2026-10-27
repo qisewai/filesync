@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"fmt"
 	"path"
 	"strings"
@@ -15,8 +16,10 @@ import (
 
 // app is the window's state.
 type app struct {
-	store *config.Store
-	favs  favorites
+	lan      *lanDiscovery
+	discover func(context.Context, func([]fileindex.DiscoveredServer)) error
+	store    *config.Store
+	favs     favorites
 	// hiddenTitleBar is whether the window started without the system's
 	// title bar: the toolbar takes its place, beside the window controls,
 	// which it draws itself with ownControls. maximized is whether the
@@ -67,6 +70,19 @@ type app struct {
 	deleting *deleteAsk
 	renaming *renameAsk
 	asking   *confirmAsk
+	props    *propsDialog
+	// detailProps are the properties the details panel shows, of
+	// detailKey.
+	detailProps *propsDialog
+	// naming asks for a name, as of a new folder of this computer.
+	naming *nameAsk
+	// clip is what was copied or cut (clip.go); clipSys the files of this
+	// computer it put on the system's clipboard, to tell them from what
+	// another app puts there.
+	clip        *fileClip
+	clipSys     string
+	detailKey   string
+	compressing *compressionDialog
 	// taskShown is the task whose details and history show in place of
 	// the tasks, "" for none.
 	taskShown string
@@ -87,6 +103,11 @@ type app struct {
 	// of the place it shows (see nav.go).
 	nav      *ui.Router
 	navShown string
+	// tabs are the tabs over the pages, tab the one shown, whose state the
+	// fields above are (see tabs.go); tabSeq names them.
+	tabs   []*tabState
+	tab    int
+	tabSeq int
 	// gsearch is the search of every place; searchFocus the field of the
 	// toolbar, which focusSearch gives the keyboard in the next frame, and
 	// searchTyping says has it.
@@ -99,8 +120,15 @@ type app struct {
 	searchStart string
 	// sidebarW is the sidebar's width; sidebarMoved says it was dragged
 	// since the settings were saved.
-	sidebarW     float32
-	sidebarMoved bool
+	sidebarW      float32
+	sidebarMoved  bool
+	sidebarHidden bool
+	// sidebarFilter is what the filter at the sidebar's foot looks for.
+	sidebarFilter string
+	// detailsW and detailsHidden are the details panel's width, and
+	// whether it is hidden.
+	detailsW      float32
+	detailsHidden bool
 	// plainText leaves the desktop's text scale out (see x11TextScale).
 	plainText bool
 	open      map[string]*bool // the sidebar's sections shown open, by server
@@ -129,13 +157,14 @@ type app struct {
 	docLoad func(url string)
 	docErr  string
 
-	transferHistory *transferHistoryWriter
-	transfers       []*transfer
-	transferSeq     int
-	showTransfers   bool
-	watching        map[string]func() // stops following a server's events
-	noEvents        bool              // tests: no events followed
-	closed          bool
+	transferHistory      *transferHistoryWriter
+	transfers            []*transfer
+	transferSeq          int
+	dismissedCompression map[compressionIdentity]bool
+	showTransfers        bool
+	watching             map[string]func() // stops following a server's events
+	noEvents             bool              // tests: no events followed
+	closed               bool
 
 	thumbs     map[string]*thumbOf
 	thumbSlots chan struct{}
@@ -187,9 +216,10 @@ func newApp(store *config.Store) *app {
 		thumbs:       map[string]*thumbOf{},
 		thumbSlots:   make(chan struct{}, 4),
 		thumbExts:    map[string]map[string]bool{},
-		nav:          ui.NewRouter("/"),
+		nav:          newRouter(),
+		navShown:     "/",
 	}
-	a.nav.Transition = ui.TransitionFade
+	a.initTabs()
 	if len(store.Servers) == 0 && len(store.Tasks) > 0 {
 		a.place = "backup"
 	}
@@ -197,6 +227,11 @@ func newApp(store *config.Store) *app {
 		a.selected = 0
 	}
 	a.sidebarW = defaultSidebar
+	a.sidebarHidden = store.SidebarHidden
+	a.detailsW, a.detailsHidden = defaultDetails, store.DetailsHidden
+	if w := store.DetailsWidth; w > 0 {
+		a.detailsW = min(max(w, minDetails), maxDetails)
+	}
 	if w := store.SidebarWidth; w > 0 {
 		a.sidebarW = min(max(w, minSidebar), maxSidebar)
 	}
@@ -420,7 +455,7 @@ func (a *app) editorFields(c *ui.Context, d *draft) {
 			if len(d.items) > 0 {
 				svg = iconFile
 			}
-			ui.Icon(c, svg).FontSize(16).TextColor(ui.Hex("#d99a2b"))
+			ui.Icon(c, svg).FontSize(16).TextColor(folderColor)
 			what := config.Contents(d.source, d.items)
 			ui.Text(c, what).Grow(1).Shrink(1).MaxLines(2).Selectable().Tooltip(what)
 		})
@@ -590,7 +625,7 @@ func (a *app) removeTask() {
 // requestClose is called as the window is about to close, and reports
 // whether it may.
 func (a *app) requestClose() bool {
-	if a.job != nil && a.job.state == jobRunning || a.activeTransfers() > 0 {
+	if a.job != nil && a.job.state == jobRunning || a.blockingTransfers() > 0 {
 		a.askQuit = true
 		return false
 	}
@@ -608,7 +643,7 @@ func (a *app) quit() {
 		a.job.cancel()
 	}
 	for _, tr := range a.transfers {
-		if tr.running() && tr.cancel != nil {
+		if tr.running() && tr.cancel != nil && tr.kind != "压缩" {
 			tr.cancel()
 		}
 	}
@@ -616,13 +651,14 @@ func (a *app) quit() {
 }
 
 func (a *app) maybeClose() {
-	if a.quitWhenDone && !a.busy() && a.activeTransfers() == 0 {
+	if a.quitWhenDone && !a.busy() && a.blockingTransfers() == 0 {
 		a.stopBackground()
 		a.closeWindow()
 	}
 }
 
 func (a *app) stopBackground() {
+	a.stopDiscovery()
 	if !a.closed {
 		a.saveTransferHistory()
 		if a.transferHistory != nil {

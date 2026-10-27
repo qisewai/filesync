@@ -516,8 +516,7 @@ func TestViewerZoomAnimates(t *testing.T) {
 	}
 	h.a.preview.zoomBy(2)
 	h.tt.Frame()
-	time.Sleep(400 * time.Millisecond)
-	h.tt.Frame()
+	h.tt.Advance(400 * time.Millisecond)
 	if w := width(); w <= 300.5 || w >= 590 {
 		t.Fatalf("not on its way: %v", w)
 	}
@@ -528,8 +527,7 @@ func TestViewerZoomAnimates(t *testing.T) {
 		if time.Now().After(deadline) {
 			t.Fatalf("zoomed to %v", width())
 		}
-		time.Sleep(20 * time.Millisecond)
-		h.tt.Frame()
+		h.tt.Advance(20 * time.Millisecond)
 	}
 }
 

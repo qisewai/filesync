@@ -56,25 +56,22 @@ func TestLocalGridThumbnails(t *testing.T) {
 	}
 }
 
-// With files chosen, the bar over them shows what to do with them, in
-// place of the page's commands, and Escape lets go of them.
-func TestSelectionBar(t *testing.T) {
+// Files chosen show no bar of commands over them, as in a file manager:
+// the status bar counts them, the menu acts on them, Escape lets go.
+func TestSelectionWithoutBar(t *testing.T) {
 	dir := t.TempDir()
 	os.WriteFile(filepath.Join(dir, "a.txt"), []byte("abc"), 0o644)
 	h := newHarness(t, &config.Store{Dir: t.TempDir()})
 	h.a.openLocal(dir)
 	h.settle()
-	if h.tt.HasText("取消选择") || h.tt.HasText("创建备份任务…") {
-		t.Fatal("the commands of the files show over them")
-	}
 	h.clickPage("a.txt")
-	h.want("已选 1 项 · 3 B")
-	if h.tt.HasText("创建备份任务…") {
-		t.Fatal("backing up shows in the bar, not in the menu")
+	h.want("1 项 · 已选 1 项，文件共 3 B")
+	if h.tt.HasText("取消选择") || h.tt.HasText("创建备份任务…") {
+		t.Fatal("a bar of commands shows over the files")
 	}
 	h.tt.Key(0, ui.KeyEscape)
 	h.settle()
-	if h.a.local.sel.Len() != 0 || h.tt.HasText("取消选择") {
+	if h.a.local.sel.Len() != 0 {
 		t.Fatal("Escape kept the selection")
 	}
 }

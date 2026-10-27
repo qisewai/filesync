@@ -43,20 +43,28 @@ func (a *app) location() string {
 	case a.place == "search" && a.gsearch != nil:
 		return "/search?q=" + url.QueryEscape(a.gsearch.query) + "&in=" + url.QueryEscape(a.gsearch.scope)
 	case a.place == localPlace && a.local != nil:
-		return "/local?dir=" + url.QueryEscape(a.local.dir)
+		return localLocation(a.local.dir)
 	case a.admin != nil && a.place == adminPlace(a.admin.server, a.admin.tab):
 		return "/admin/" + url.PathEscape(a.admin.server) + "/" + a.admin.tab
 	case a.recycle != nil && a.place == trashPlace(a.recycle.server):
 		return "/trash/" + url.PathEscape(a.recycle.server)
 	case a.br != nil && a.place == rootPlace(a.br.server, a.br.root.ID):
-		loc := "/nas/" + url.PathEscape(a.br.server) + "/" + strconv.FormatInt(a.br.root.ID, 10)
-		if a.br.path != "" {
-			loc += "?path=" + url.QueryEscape(a.br.path)
-		}
-		return loc
+		return nasLocation(a.br.server, a.br.root.ID, a.br.path)
 	}
 	return "/"
 }
+
+// nasLocation is the location of a directory of a root of a server.
+func nasLocation(server string, root int64, dir string) string {
+	loc := "/nas/" + url.PathEscape(server) + "/" + strconv.FormatInt(root, 10)
+	if dir != "" {
+		loc += "?path=" + url.QueryEscape(dir)
+	}
+	return loc
+}
+
+// localLocation is the location of a directory of this computer.
+func localLocation(dir string) string { return "/local?dir=" + url.QueryEscape(dir) }
 
 // goLocation shows the place at a location of the history.
 func (a *app) goLocation(loc string) {
@@ -107,7 +115,7 @@ func (a *app) goLocation(loc string) {
 			}
 		}
 	default:
-		a.place = ""
+		a.place = "home"
 	}
 }
 
@@ -169,7 +177,7 @@ func (a *app) pageTitle() string {
 	case a.br != nil && a.place == rootPlace(a.br.server, a.br.root.ID):
 		return a.br.root.Name
 	}
-	return "FileSync"
+	return "首页"
 }
 
 // onLocal and onRoot report whether the page shown is a directory of this
@@ -183,20 +191,15 @@ func (a *app) onRoot() bool {
 	return a.br != nil && a.place == rootPlace(a.br.server, a.br.root.ID)
 }
 
-// topBar is the toolbar over the pages: back and forward, up, then the
-// search, all along.
+// topBar is the toolbar over the page: back and forward, up, where the
+// page is, then the search.
 func (a *app) topBar(c *ui.Context) {
 	if up := a.upward(); up != nil {
 		c.OnShortcut(ui.Alt, ui.KeyUp, up)
 	}
 	t := c.Theme()
-	// Without the system's title bar, it is the title bar: it moves the
-	// window, keeping clear of the window controls.
-	bar := ui.Row(c).Padding(8, 16+c.TitleBar().Right, 8, 10).Gap(8).AlignItems(ui.Center).MinHeight(a.toolbarHeight(c)).BorderWidth(0, 0, 1, 0).BorderColor(t.Border)
-	if a.hiddenTitleBar {
-		bar.DragWindow()
-	}
-	bar.Children(func() {
+	ui.Row(c.Key("top-bar")).Padding(6, 12, 6, 8).Gap(8).AlignItems(ui.Center).MinHeight(46).Shrink(0).
+		BorderWidth(0, 0, 1, 0).BorderColor(t.Border).Children(func() {
 		ui.Toolbar(c, func() {
 			ui.BackButton(c, a.nav).Tooltip("后退（Alt+←）")
 			ui.ForwardButton(c, a.nav).Tooltip("前进（Alt+→）")
@@ -206,22 +209,42 @@ func (a *app) topBar(c *ui.Context) {
 					up()
 				}
 			})
-		}).Width(3*36 + 8).Shrink(0).Label("导航")
-		switch {
-		case a.onArchive():
-			ui.Text(c, "压缩包内容只读 · 搜索不包含包内文件").TextColor(t.TextMuted).Shrink(1)
-		case a.onLocal():
-			a.fileSearch(c, localPlace)
-		case a.onRoot():
-			a.fileSearch(c, a.br.server)
-		case a.onSearch():
-			a.searchHeader(c)
-		default:
-			a.anywhereSearch(c)
+		}).Width(3*34 + 8).Shrink(0).Label("导航")
+		// Where the page is, or its title.
+		ui.Row(c.Key("location")).Gap(8).AlignItems(ui.Center).Grow(1).Shrink(1).MinWidth(0).Children(func() {
+			switch {
+			case a.onArchive():
+				a.archivePath(c)
+			case a.onLocal():
+				a.localPath(c)
+			case a.onRoot():
+				a.browserPath(c)
+			case a.onAdmin():
+				a.adminHeader(c)
+			case a.onSearch():
+				a.searchHeader(c)
+			default:
+				ui.Text(c, a.pageTitle()).FontSize(15).Bold().SingleLine().Shrink(1)
+			}
+		})
+		search := ui.Row(c.Key("search-area")).Width(300).Shrink(1).MinWidth(200).AlignItems(ui.Center)
+		search.Children(func() {
+			switch {
+			case a.onArchive():
+				ui.Text(c, "压缩包内容只读 · 搜索不包含包内文件").FontSize(12).TextColor(t.TextMuted).Shrink(1)
+			case a.onLocal():
+				a.fileSearch(c, localPlace)
+			case a.onRoot():
+				a.fileSearch(c, a.br.server)
+			case a.onSearch():
+			default:
+				a.anywhereSearch(c)
+			}
+		})
+		if a.onSearch() {
+			search.Width(0).MinWidth(0)
 		}
-		if a.ownControls {
-			a.windowControls(c)
-		}
+		a.pageTools(c)
 	})
 }
 
@@ -263,25 +286,6 @@ const toolbarHeight = 52
 
 func (a *app) toolbarHeight(c *ui.Context) float32 {
 	return max(c.TitleBar().Height, toolbarHeight)
-}
-
-// locationBar is the row under the toolbar: where the page is, or its
-// title; the management's tabs.
-func (a *app) locationBar(c *ui.Context) {
-	ui.Row(c).Padding(10, 24, 0, 24).Gap(8).AlignItems(ui.Center).MinHeight(40).Children(func() {
-		switch {
-		case a.onArchive():
-			a.archivePath(c)
-		case a.onLocal():
-			a.localPath(c)
-		case a.onRoot():
-			a.browserPath(c)
-		case a.onAdmin():
-			a.adminHeader(c)
-		default:
-			ui.Text(c, a.pageTitle()).FontSize(16).Bold().SingleLine().Shrink(1)
-		}
-	})
 }
 
 // anywhereSearch is the field of the toolbar of the pages without files,
@@ -347,6 +351,7 @@ func (a *app) statusBar(c *ui.Context) {
 			a.searchStatus(c)
 		}
 		ui.Spacer(c)
+		a.clipIndicator(c)
 		a.transferIndicator(c)
 		if a.onLocal() {
 			a.localIndexStatus(c)
@@ -401,7 +406,11 @@ func (a *app) transferIndicator(c *ui.Context) {
 		rolling(ui.Text(c, text).FontSize(12).SingleLine().FontFeatures("tnum").TextColor(color))
 	})
 	if anchor.Clicked() {
-		a.showTransfers = !a.showTransfers
+		if a.showTransfers {
+			a.showTransfers = false
+		} else {
+			a.openTransfers()
+		}
 	}
 	ui.PopoverBase(c, anchor, &a.showTransfers, func(panel ui.Element) {
 		_, h := c.Size()

@@ -184,6 +184,12 @@ type Store struct {
 	// SidebarWidth is the width the user dragged the sidebar to, 0 for
 	// the default.
 	SidebarWidth float32
+	// SidebarHidden keeps the navigation sidebar collapsed between starts.
+	SidebarHidden bool
+	// DetailsWidth is the width the user dragged the details panel to, 0
+	// for the default; DetailsHidden keeps it hidden.
+	DetailsWidth  float32
+	DetailsHidden bool
 	// QuitOnClose quits as the window closes, rather than keeping the app
 	// in the tray.
 	QuitOnClose bool
@@ -289,13 +295,16 @@ type fileData struct {
 	Tasks   []*Task   `json:"tasks"`
 	// Sessions are the logins of version 0.1, by address, which become
 	// servers.
-	Sessions     map[string]string   `json:"sessions,omitempty"`
-	SidebarWidth float32             `json:"sidebarWidth,omitempty"`
-	QuitOnClose  bool                `json:"quitOnClose,omitempty"`
-	SystemTitle  bool                `json:"systemTitleBar,omitempty"`
-	LocalIndex   *LocalIndexSettings `json:"localIndex,omitempty"`
-	Recent       []string            `json:"recentSearches,omitempty"`
-	Favorites    []*Favorite         `json:"favorites,omitempty"`
+	Sessions      map[string]string   `json:"sessions,omitempty"`
+	SidebarWidth  float32             `json:"sidebarWidth,omitempty"`
+	SidebarHidden bool                `json:"sidebarHidden,omitempty"`
+	DetailsWidth  float32             `json:"detailsWidth,omitempty"`
+	DetailsHidden bool                `json:"detailsHidden,omitempty"`
+	QuitOnClose   bool                `json:"quitOnClose,omitempty"`
+	SystemTitle   bool                `json:"systemTitleBar,omitempty"`
+	LocalIndex    *LocalIndexSettings `json:"localIndex,omitempty"`
+	Recent        []string            `json:"recentSearches,omitempty"`
+	Favorites     []*Favorite         `json:"favorites,omitempty"`
 }
 
 // Load reads the store in dir; a directory without it has nothing.
@@ -314,6 +323,8 @@ func Load(dir string) (*Store, error) {
 	}
 	s.Servers = data.Servers
 	s.SidebarWidth, s.QuitOnClose, s.SystemTitleBar = data.SidebarWidth, data.QuitOnClose, data.SystemTitle
+	s.SidebarHidden = data.SidebarHidden
+	s.DetailsWidth, s.DetailsHidden = data.DetailsWidth, data.DetailsHidden
 	s.LocalIndex = data.LocalIndex
 	s.RecentSearches = data.Recent
 	s.Favorites = data.Favorites
@@ -343,7 +354,7 @@ func (s *Store) Save() error {
 	if err := os.MkdirAll(s.Dir, 0o755); err != nil {
 		return err
 	}
-	data := fileData{Servers: s.Servers, Tasks: s.Tasks, SidebarWidth: s.SidebarWidth, QuitOnClose: s.QuitOnClose, SystemTitle: s.SystemTitleBar, LocalIndex: s.LocalIndex, Recent: s.RecentSearches, Favorites: s.Favorites}
+	data := fileData{Servers: s.Servers, Tasks: s.Tasks, SidebarWidth: s.SidebarWidth, SidebarHidden: s.SidebarHidden, DetailsWidth: s.DetailsWidth, DetailsHidden: s.DetailsHidden, QuitOnClose: s.QuitOnClose, SystemTitle: s.SystemTitleBar, LocalIndex: s.LocalIndex, Recent: s.RecentSearches, Favorites: s.Favorites}
 	if data.Servers == nil {
 		data.Servers = []*Server{}
 	}

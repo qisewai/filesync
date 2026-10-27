@@ -88,6 +88,10 @@ func (c *Client) do(ctx context.Context, method, path string, q url.Values, body
 
 // send sends a request and returns the answer when it succeeded.
 func (c *Client) send(ctx context.Context, method, path string, q url.Values, body io.Reader) (*http.Response, error) {
+	return c.sendHeaders(ctx, method, path, q, body, nil)
+}
+
+func (c *Client) sendHeaders(ctx context.Context, method, path string, q url.Values, body io.Reader, headers http.Header) (*http.Response, error) {
 	if c.InArchive() && method != "GET" && method != "HEAD" {
 		return nil, errors.New("压缩包内容只读")
 	}
@@ -96,6 +100,9 @@ func (c *Client) send(ctx context.Context, method, path string, q url.Values, bo
 		return nil, err
 	}
 	req.Header.Set(csrfHeader, csrfValue)
+	for key, values := range headers {
+		req.Header[key] = values
+	}
 	if body != nil {
 		req.Header.Set("Content-Type", "application/json")
 	}

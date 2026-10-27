@@ -63,7 +63,7 @@ func setUpTray(a *app, win *mygo.Window, quitting *bool) bool {
 			{Label: "备份任务", Submenu: tasks},
 			{Label: "传输任务", Click: func(*mygo.MenuItem, *mygo.Window) {
 				show()
-				do(func() { a.showTransfers = true })
+				do(a.openTransfers)
 			}},
 			mygo.Separator(),
 			{Label: "关闭窗口时最小化到托盘", Type: mygo.MenuItemCheckbox, Checked: !m.QuitOnClose, Click: func(item *mygo.MenuItem, _ *mygo.Window) {

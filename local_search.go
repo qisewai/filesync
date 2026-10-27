@@ -320,7 +320,7 @@ func (a *app) localIndexDialog(c *ui.Context) {
 					}
 					for i, root := range d.roots {
 						ui.Row(c.Key("root/"+root)).Gap(8).Padding(6, 6, 6, 12).AlignItems(ui.Center).BorderWidth(float32(min(i, 1)), 0, 0, 0).BorderColor(t.Border).Children(func() {
-							ui.Icon(c, iconFolder).FontSize(15).TextColor(ui.Hex("#d99a2b"))
+							ui.Icon(c, iconFolder).FontSize(15).TextColor(folderColor)
 							ui.Text(c, homeTilde(root)).SingleLine().Grow(1).Shrink(1).MinWidth(0).Tooltip(root)
 							ui.ButtonBase(c.Key("remove/"+root)).Size(26, 26).Radius(t.Radius).Label("移除 " + root).Tooltip("移除").OnClick(func() {
 								d.roots = slices.DeleteFunc(d.roots, func(r string) bool { return r == root })

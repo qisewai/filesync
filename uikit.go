@@ -10,10 +10,7 @@ import (
 // iconButton is a square button showing an icon, named label, its tip
 // tip.
 func iconButton(c *ui.Context, key string, svg *ui.SVG, label, tip string, disabled bool, click func()) ui.Element {
-	t := c.Theme()
-	return ui.Button(c.Key(key), "").Padding(t.Space(1.5)).Label(label).Tooltip(tip).Disabled(disabled).OnClick(click).Children(func() {
-		ui.Icon(c, svg).FontSize(16)
-	})
+	return flatIcon(c, key, svg, label, tip, disabled, click)
 }
 
 // toolButton is a button of a toolbar: an icon, then a short label.

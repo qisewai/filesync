@@ -20,15 +20,20 @@ func TestHiddenTitleBarKeepsClearOfControls(t *testing.T) {
 	h.a.goPlace(rootPlace(h.a.store.Servers[0].ID, 1))
 	h.settle()
 	h.want("FileSync")
-	search, ok := h.tt.Find("搜索文件")
+	// The tab bar is the title bar: its last button keeps clear of the
+	// controls, in the bar as high as them.
+	toggle, ok := h.tt.Find("显示详情")
 	if !ok {
-		t.Fatalf("no search in %q", h.tt.Texts())
+		toggle, ok = h.tt.Find("隐藏详情")
 	}
-	if right := search.X + search.W; right > 980-120 {
-		t.Errorf("search reaches %v, under the controls", right)
+	if !ok {
+		t.Fatalf("no details toggle in %q", h.tt.Texts())
 	}
-	if search.Y+search.H > 60 || search.Y < 0 {
-		t.Errorf("search at %+v, not in the bar as high as the controls", search)
+	if right := toggle.X + toggle.W; right > 980-120 {
+		t.Errorf("toggle reaches %v, under the controls", right)
+	}
+	if toggle.Y+toggle.H > 60 || toggle.Y < 0 {
+		t.Errorf("toggle at %+v, not in the bar as high as the controls", toggle)
 	}
 
 	h.tt.SetTitleBar(ui.TitleBar{Height: 52, Left: 90})

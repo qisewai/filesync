@@ -230,7 +230,7 @@ func (a *app) favoriteItems(c *ui.Context) {
 			if f.Local == "" {
 				svg = iconServer
 			}
-			color := ui.Hex("#d99a2b")
+			color := folderColor
 			switch {
 			case chosen:
 				color = t.AccentText
@@ -250,6 +250,9 @@ func (a *app) favoriteItems(c *ui.Context) {
 		item.ContextMenu(func(m *ui.Menu) {
 			if m.Item("打开").Chosen() {
 				a.openFavorite(f)
+			}
+			if m.Item("在新标签页中打开").Disabled(len(a.tabs) >= maxTabs).Chosen() {
+				a.newTab(favoriteLocation(f))
 			}
 			if m.Item("重命名…").Chosen() {
 				a.favs.renaming, a.favs.newName = f, f.Name

@@ -57,6 +57,50 @@ func (c *Client) List(ctx context.Context, root int64, dir string) ([]Entry, err
 	}
 }
 
+// Props are the properties of an entry of a root: the entry as it is on
+// the server's disk and, of a folder, what the index holds below it.
+type Props struct {
+	RootID     int64       `json:"root_id"`
+	RootName   string      `json:"root_name"`
+	Path       string      `json:"path"`
+	Name       string      `json:"name"`
+	Abs        string      `json:"abs"` // where it is on the server
+	IsDir      bool        `json:"is_dir"`
+	Link       bool        `json:"link"`
+	LinkTarget string      `json:"link_target"`
+	Size       int64       `json:"size"`
+	MTime      int64       `json:"mtime"` // unix seconds
+	ATime      int64       `json:"atime"`
+	CTime      int64       `json:"ctime"`
+	Mode       string      `json:"mode"`
+	Perm       string      `json:"perm"`
+	UID        int64       `json:"uid"`
+	GID        int64       `json:"gid"`
+	Owner      string      `json:"owner"`
+	Group      string      `json:"group"`
+	ReadOnly   bool        `json:"readonly"`
+	Children   int64       `json:"children"` // of a folder, the entries directly in it; -1 unreadable
+	Index      *PropsIndex `json:"index"`    // of a folder, nil when the root was never indexed
+}
+
+// PropsIndex is what the index holds below a folder.
+type PropsIndex struct {
+	Files     int64 `json:"files"`
+	Dirs      int64 `json:"dirs"`
+	Size      int64 `json:"size"`
+	ScannedAt int64 `json:"scanned_at"`
+	Missing   bool  `json:"missing"` // the folder is not in the index yet
+}
+
+// Props reads the properties of an entry of a root ("" for the root).
+func (c *Client) Props(ctx context.Context, root int64, p string) (*Props, error) {
+	var out Props
+	if err := c.do(ctx, "GET", fmt.Sprintf("/api/roots/%d/props", root), url.Values{"path": {p}}, nil, &out); err != nil {
+		return nil, err
+	}
+	return &out, nil
+}
+
 // SearchOptions narrow and order a search, and choose a page of it.
 type SearchOptions struct {
 	// Root is the root searched, 0 for all, and Dir the directory below
@@ -160,17 +204,19 @@ func (c *Client) Rename(ctx context.Context, root int64, p, name string) error {
 // Task is an operation the server runs in the background: a copy or a
 // move.
 type Task struct {
-	ID         int64  `json:"id"`
-	Kind       string `json:"kind"` // copy | move | delete | purge | extract
-	Title      string `json:"title"`
-	Status     string `json:"status"` // queued | running | done | failed | canceled
-	TotalBytes int64  `json:"total_bytes"`
-	DoneBytes  int64  `json:"done_bytes"`
-	TotalItems int64  `json:"total_items"`
-	DoneItems  int64  `json:"done_items"`
-	Current    string `json:"current"`
-	Message    string `json:"message"`
-	FinishedAt int64  `json:"finished_at"`
+	ID         int64          `json:"id"`
+	Kind       string         `json:"kind"` // copy | move | delete | purge | extract
+	Title      string         `json:"title"`
+	Status     string         `json:"status"` // queued | running | done | failed | canceled
+	TotalBytes int64          `json:"total_bytes"`
+	DoneBytes  int64          `json:"done_bytes"`
+	TotalItems int64          `json:"total_items"`
+	DoneItems  int64          `json:"done_items"`
+	Current    string         `json:"current"`
+	Message    string         `json:"message"`
+	FinishedAt int64          `json:"finished_at"`
+	CreatedAt  int64          `json:"created_at"`
+	Result     *ArchiveResult `json:"result,omitempty"`
 }
 
 // Finished reports whether the task has ended.

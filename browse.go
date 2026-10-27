@@ -342,42 +342,9 @@ func (a *app) browserView(c *ui.Context) {
 	if c.Shortcut(0, ui.KeyF5) {
 		a.refresh()
 	}
-	commandBar(c, n, filesSize(es), func() { b.sel.Clear() }, func() {
-		toolButton(c, "new-folder", iconNewDir, "新建文件夹", "", !writable, func() {
-			b.naming, b.newName = true, ""
-		})
-		up := toolButton(c, "upload", iconUpload, "上传", "上传文件或文件夹；也可以把它们拖进窗口", !writable, func() {})
-		up.Menu(func(m *ui.Menu) {
-			if m.Item("上传文件…").Chosen() {
-				a.pickUpload(false)
-			}
-			if m.Item("上传文件夹…").Chosen() {
-				a.pickUpload(true)
-			}
-		})
-	}, func() {
-		tip := func(s string) string {
-			if !oneRoot {
-				return "选中的项来自不同的索引目录，请分别操作"
-			}
-			return s
-		}
-		toolButton(c, "download", iconSave, "下载…", tip("下载到本机"), !oneRoot, func() { a.download(es) })
-		toolButton(c, "copy-to", iconCopy, "复制到…", tip("复制到这台或其他服务器上"), !oneRoot, func() { a.transferTo(false, es) })
-		toolButton(c, "move-to", iconMove, "移动到…", tip(""), !writable || !oneRoot, func() { a.transferTo(true, es) })
-		if n == 1 {
-			toolButton(c, "rename", iconRename, "重命名", "重命名（F2）", !writable, func() { a.startRename(es[0]) })
-		}
-		toolButton(c, "delete", iconTrash, "删除", tip("移到回收站（Delete），或彻底删除（Shift+Delete）"), !writable || !oneRoot, func() { a.askDelete(es, false) })
-	}, func() {
-		viewToggle(c, "view-toggle", &b.grid)
-		moreMenu(c, "more", func(m *ui.Menu) {
-			if m.Item("刷新").Shortcut(0, ui.KeyF5).Chosen() {
-				a.refresh()
-			}
-		})
-	})
-
+	if !typing && writable && c.Shortcut(ui.Ctrl|ui.Shift, ui.KeyN) {
+		b.naming, b.newName = true, ""
+	}
 	if b.err != "" {
 		notice(c, t.Danger, b.err)
 	}
@@ -390,6 +357,7 @@ func (a *app) browserView(c *ui.Context) {
 		where:    func(e fileindex.Entry) string { return path.Join(e.RootName, e.Parent) },
 		thumb:    a.thumb,
 		open:     a.openEntry,
+		cut:      a.clipCut(),
 		resort:   func() { sortEntries(&b.sort, b.items, &b.cursor) },
 		gridLast: &b.gridLast,
 		empty: func() {
@@ -409,7 +377,7 @@ func (a *app) browserView(c *ui.Context) {
 			zone.Border(2, t.Accent)
 		}
 	}
-	zone.ContextMenu(func(m *ui.Menu) { a.entryMenu(m, b.chosen(), writable) })
+	zone.ContextMenu(func(m *ui.Menu) { a.entryMenu(c, m, b.chosen(), writable) })
 
 	a.browserDialogs(c)
 }
@@ -449,56 +417,98 @@ func (a *app) browserStatus(c *ui.Context) {
 	statusText(c, status)
 }
 
-func (a *app) entryMenu(m *ui.Menu, es []fileindex.Entry, writable bool) {
+func (a *app) entryMenu(c *ui.Context, m *ui.Menu, es []fileindex.Entry, writable bool) {
 	n := len(es)
+	b := a.br
+	if n == 0 {
+		// The folder shown, as its blank space.
+		a.clipItems(c, m, nil)
+		m.Separator()
+		if m.Item("新建文件夹…").Shortcut(ui.Ctrl|ui.Shift, ui.KeyN).Disabled(!writable).Chosen() {
+			b.naming, b.newName = true, ""
+		}
+		if m.Item("上传文件…").Disabled(!writable).Chosen() {
+			a.pickUpload(false)
+		}
+		if m.Item("上传文件夹…").Disabled(!writable).Chosen() {
+			a.pickUpload(true)
+		}
+		m.Separator()
+		if m.Item("刷新").Shortcut(0, ui.KeyF5).Chosen() {
+			a.refresh()
+		}
+		if m.Item("文件夹属性").Chosen() {
+			a.showFolderProps()
+		}
+		return
+	}
 	if n == 1 && archiveEntry(es[0]) {
 		if m.Item("打开压缩包").Chosen() {
 			a.openEntry(es[0])
 		}
 		if m.Item("解压到…").Chosen() {
-			if c, sv := a.brClient(); c != nil {
-				a.extractArchive(sv.ID, c, es[0])
+			if cl, sv := a.brClient(); cl != nil {
+				a.extractArchive(sv.ID, cl, es[0])
 			}
 		}
 	}
 	if n == 1 && m.Item("打开").Chosen() {
 		a.openEntry(es[0])
 	}
-	if n == 1 && es[0].IsDir && a.br != nil {
-		a.favoriteMenuItem(m, favoriteOf(a.br.server, a.br.root, es[0].Path))
+	if n == 1 && es[0].IsDir && m.Item("在新标签页中打开").Disabled(len(a.tabs) >= maxTabs).Chosen() {
+		a.openFolderInNewTab(b.server, es[0].Root, es[0].Path)
 	}
 	if n == 1 && !es[0].IsDir {
 		if m.Item("系统程序打开").Chosen() {
-			if c, sv := a.brClient(); c != nil {
-				a.systemOpenSource(sv.ID, c, es[0], false)
+			if cl, sv := a.brClient(); cl != nil {
+				a.systemOpenSource(sv.ID, cl, es[0], false)
 			}
 		}
 		if mediaFile(es[0]) && m.Item("下载后打开").Chosen() {
-			if c, sv := a.brClient(); c != nil {
-				a.systemOpenSource(sv.ID, c, es[0], true)
+			if cl, sv := a.brClient(); cl != nil {
+				a.systemOpenSource(sv.ID, cl, es[0], true)
 			}
 		}
 	}
-	if m.Item("下载…").Disabled(n == 0).Chosen() {
+	m.Separator()
+	a.clipItems(c, m, es)
+	m.Separator()
+	if m.Item("下载到…").Chosen() {
 		a.download(es)
 	}
+	if m.Item("压缩到…").Chosen() {
+		a.compressIn(a.brFiles(), es)
+	}
 	m.Separator()
-	if m.Item("复制到…").Disabled(n == 0).Chosen() {
-		a.transferTo(false, es)
-	}
-	if m.Item("移动到…").Disabled(n == 0 || !writable).Chosen() {
-		a.transferTo(true, es)
-	}
-	if m.Item("重命名").Disabled(n != 1 || !writable).Chosen() {
+	if m.Item("重命名…").Shortcut(0, ui.KeyF2).Disabled(n != 1 || !writable).Chosen() {
 		a.startRename(es[0])
 	}
-	m.Separator()
-	if m.Item("删除…").Disabled(n == 0 || !writable).Chosen() {
+	if m.Item("删除…").Shortcut(0, ui.KeyDelete).Disabled(!writable).Chosen() {
 		a.askDelete(es, false)
 	}
-	if m.Item("彻底删除…").Disabled(n == 0 || !writable).Chosen() {
+	if m.Item("彻底删除…").Shortcut(ui.Shift, ui.KeyDelete).Disabled(!writable).Chosen() {
 		a.askDelete(es, true)
 	}
+	m.Separator()
+	if n == 1 && es[0].IsDir {
+		a.favoriteMenuItem(m, favoriteOf(b.server, b.root, es[0].Path))
+	}
+	if n == 1 && m.Item("属性").Chosen() {
+		a.showServerProps(b.server, es[0])
+	}
+}
+
+// showFolderProps shows the properties of the folder of a server shown.
+func (a *app) showFolderProps() {
+	b := a.br
+	if b == nil {
+		return
+	}
+	name := path.Base(b.path)
+	if b.path == "" {
+		name = b.root.Name
+	}
+	a.showServerProps(b.server, fileindex.Entry{Root: b.root.ID, RootName: b.root.Name, Name: name, Path: b.path, Parent: parentDir(b.path), IsDir: true})
 }
 
 // fileColumns are the columns of a table of files, each sorting it.
@@ -747,6 +757,10 @@ func (a *app) startDownloadFrom(c *fileindex.Client, f *nasFiles, es []fileindex
 	if move {
 		kind = "移动"
 	}
+	if !move && !c.InArchive() && len(es) == 1 && !es[0].IsDir {
+		a.startResumableDownload(c, f.server, es[0], dest)
+		return
+	}
 	tr := a.addTransfer(kind, title+" → "+dest)
 	tr.server = f.server
 	tr.localDir, tr.folderReady = dest, true
@@ -797,8 +811,6 @@ func (a *app) startDownloadFrom(c *fileindex.Client, f *nasFiles, es []fileindex
 
 // transferTo asks for a directory of the same server, then copies or moves
 // the entries there, as a task of the server.
-func (a *app) transferTo(move bool, es []fileindex.Entry) { a.transferIn(a.brFiles(), move, es) }
-
 func (a *app) startRename(e fileindex.Entry) { a.renameIn(a.brFiles(), e) }
 
 // op runs a quick operation of the server, then lists the directory again.

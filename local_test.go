@@ -230,3 +230,50 @@ XDG_VIDEOS_DIR="$HOME/媒体"
 		t.Fatalf("user dirs %+v", got)
 	}
 }
+
+// The properties of a file of this computer, and of a folder, what it
+// holds counted as they show.
+func TestLocalProps(t *testing.T) {
+	home := t.TempDir()
+	os.MkdirAll(filepath.Join(home, "文档", "合同", "旧"), 0o755)
+	os.WriteFile(filepath.Join(home, "文档", "a.txt"), []byte("abc"), 0o640)
+	os.WriteFile(filepath.Join(home, "文档", "合同", "b.pdf"), make([]byte, 3000), 0o644)
+	h := newHarness(t, &config.Store{Dir: t.TempDir()})
+	h.a.localRoots = []localRoot{{"主目录", home}}
+	h.tt.Frame()
+	h.click("本机文件夹 主目录")
+	choose := func(name string) {
+		h.settle()
+		b := h.a.local
+		b.sel.Clear()
+		b.sel.Add(filepath.Join(b.dir, name))
+		h.tt.Frame()
+	}
+	choose("文档")
+	h.localMenu("属性")
+	for h.a.props != nil && h.a.props.loading {
+		h.settle()
+	}
+	h.tt.Frame()
+	h.want("文档 的属性")
+	h.want("2 个文件，2 个文件夹")
+	h.want("2.93 KB（3,003 字节）")
+	h.click("关闭")
+
+	h.a.openLocal(filepath.Join(home, "文档"))
+	choose("a.txt")
+	h.localMenu("属性")
+	h.want("TXT 文件")
+	h.want("3 字节")
+	h.want("-rw-r-----（0640）")
+	h.click("关闭")
+
+	// the folder shown, from the menu of the page
+	h.more("文件夹属性")
+	for h.a.props != nil && h.a.props.loading {
+		h.settle()
+	}
+	h.tt.Frame()
+	h.want("文档 的属性")
+	h.want("2 个文件，2 个文件夹")
+}

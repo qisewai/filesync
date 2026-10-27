@@ -72,6 +72,11 @@ func main() {
 	if err := mygo.Protocol.Handle(docScheme, &a.docs); err != nil {
 		log.Printf("文档预览不可用：%v", err)
 	}
+	// Before the window: the compositor finds its icon by the entry as it
+	// maps it.
+	if err := registerDesktopEntry(); err != nil {
+		log.Printf("登记桌面条目失败：%v", err)
+	}
 	mygo.App.WhenReady(func() {
 		var win *mygo.Window
 		opts := mygo.WindowOptions{
@@ -99,6 +104,9 @@ func main() {
 			}
 		}
 		win = mygo.NewWindow(opts)
+		if err := win.SetIcon(appIcon); err != nil {
+			log.Printf("设置窗口图标失败：%v", err)
+		}
 		// The buttons of the toolbar act once the frame they are clicked in
 		// is drawn: MyGo's OpenGL drawing aborts the process when the window
 		// hides while it draws a frame.

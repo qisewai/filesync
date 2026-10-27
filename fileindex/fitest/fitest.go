@@ -43,9 +43,10 @@ type Server struct {
 	// Trash receives what is deleted, at its path from the root.
 	Trash string
 	// Expired makes the server refuse sessions until the next login.
-	Expired          atomic.Bool
-	HoldArchiveLists atomic.Bool
-	ArchiveExtracts  atomic.Int64
+	Expired           atomic.Bool
+	HoldArchiveLists  atomic.Bool
+	ArchiveExtracts   atomic.Int64
+	CompressionBodies chan []byte
 	// Writable makes root 2 writable, as when its read-only setting is
 	// turned off.
 	Writable atomic.Bool
@@ -58,6 +59,8 @@ type Server struct {
 	// OldServer answers as fileindex did before telling whether the
 	// directories listed hold directories.
 	OldServer atomic.Bool
+	// Props404 answers properties as fileindex did before it had them.
+	Props404 atomic.Bool
 	// Streams counts the tar streams received, and Searches the pages of
 	// searches answered.
 	Streams        atomic.Int32
@@ -148,6 +151,7 @@ func New(t testing.TB) *Server {
 	api.Handle("GET /api/archive/file", archives)
 	api.Handle("GET /api/archive/export", archives)
 	api.HandleFunc("POST /api/archive/extract", s.extractArchive)
+	api.HandleFunc("POST /api/archive/compress", s.compressArchive)
 	api.HandleFunc("GET /api/backup/export", s.export)
 	api.HandleFunc("POST /api/fs/rename", s.rename)
 	api.HandleFunc("POST /api/fs/transfer", s.transfer)
@@ -163,14 +167,19 @@ func New(t testing.TB) *Server {
 	})
 	api.HandleFunc("POST /api/tasks/{id}/cancel", func(w http.ResponseWriter, r *http.Request) {
 		id, _ := strconv.ParseInt(r.PathValue("id"), 10, 64)
-		task := map[string]any{"id": id, "status": "canceled", "finished_at": time.Now().Unix()}
 		s.mu.Lock()
+		task := map[string]any{}
+		for key, value := range s.taskRecords[id] {
+			task[key] = value
+		}
+		task["id"], task["status"], task["finished_at"] = id, "canceled", time.Now().Unix()
 		s.taskRecords[id] = task
 		s.mu.Unlock()
 		s.publish(map[string]any{"type": "task", "task": task})
 		fmt.Fprint(w, `{}`)
 	})
 	api.HandleFunc("GET /api/roots/{id}/list", s.list)
+	api.HandleFunc("GET /api/roots/{id}/props", s.props)
 	api.HandleFunc("POST /api/fs/mkdir", s.mkdir)
 	api.HandleFunc("GET /api/backup/manifest", s.manifest)
 	api.HandleFunc("POST /api/backup/tar", s.tar)
@@ -242,6 +251,51 @@ func (s *Server) rootDir(id string) (string, bool) {
 }
 func (s *Server) roots(w http.ResponseWriter, r *http.Request) {
 	json.NewEncoder(w).Encode(map[string]any{"roots": s.managedRoots(), "data_roots": []string{"/data"}})
+}
+
+// props answers as fileindex does, a folder's index counted from the disk.
+func (s *Server) props(w http.ResponseWriter, r *http.Request) {
+	if s.Props404.Load() {
+		s.fail(w, 404, "not found")
+		return
+	}
+	dir, ok := s.rootDir(r.PathValue("id"))
+	if !ok {
+		s.fail(w, 404, "不存在")
+		return
+	}
+	rel := r.URL.Query().Get("path")
+	abs := filepath.Join(dir, filepath.FromSlash(rel))
+	info, err := os.Lstat(abs)
+	if err != nil {
+		s.fail(w, 404, "文件不存在："+rel)
+		return
+	}
+	out := map[string]any{
+		"path": rel, "name": path.Base(rel), "abs": abs, "is_dir": info.IsDir(), "size": info.Size(),
+		"mtime": info.ModTime().Unix(), "mode": info.Mode().String(), "perm": fmt.Sprintf("0%o", info.Mode().Perm()),
+		"uid": 1000, "gid": 1000, "owner": "nas", "group": "users", "children": -1,
+	}
+	if info.IsDir() {
+		out["size"] = 0
+		ents, _ := os.ReadDir(abs)
+		out["children"] = len(ents)
+		var files, dirs, size int64
+		filepath.WalkDir(abs, func(p string, d os.DirEntry, err error) error {
+			if err != nil || p == abs {
+				return nil
+			}
+			if d.IsDir() {
+				dirs++
+			} else if fi, err := d.Info(); err == nil {
+				files++
+				size += fi.Size()
+			}
+			return nil
+		})
+		out["index"] = map[string]any{"files": files, "dirs": dirs, "size": size, "scanned_at": 1700000000}
+	}
+	json.NewEncoder(w).Encode(out)
 }
 
 func (s *Server) list(w http.ResponseWriter, r *http.Request) {

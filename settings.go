@@ -114,7 +114,7 @@ func (a *app) localIndexCard(c *ui.Context) {
 			}
 			for _, root := range m.settings.Roots {
 				ui.Row(c).Gap(6).AlignItems(ui.Center).Children(func() {
-					ui.Icon(c, iconFolder).FontSize(14).TextColor(ui.Hex("#d99a2b"))
+					ui.Icon(c, iconFolder).FontSize(14).TextColor(folderColor)
 					ui.Text(c, homeTilde(root)).FontSize(13).SingleLine().Tooltip(root)
 				})
 			}

@@ -132,12 +132,12 @@ func (a *app) directoryView(c *ui.Context, sv *config.Server, root fileindex.Roo
 		}
 	}))
 	chosen := a.br != nil && a.place == rootPlace(sv.ID, root.ID) && a.br.server == sv.ID && a.br.root.ID == root.ID && a.br.path == dir
-	color := ui.Hex("#d99a2b")
+	color := folderColor
 	if chosen {
 		color = c.Theme().AccentText
 	}
 	item.Children(func() { labeled(c, iconFolder, name, color) }).Label("文件夹 " + name)
-	item.ContextMenu(func(m *ui.Menu) { a.directoryMenu(m, sv, root, dir, name) })
+	item.ContextMenu(func(m *ui.Menu) { a.directoryMenu(c, m, sv, root, dir, name) })
 	item.Selected(a.br != nil && a.place == rootPlace(sv.ID, root.ID) && a.br.server == sv.ID && a.br.root.ID == root.ID && a.br.path == dir).
 		OnClick(func() {
 			a.goPlace(rootPlace(sv.ID, root.ID))
@@ -224,7 +224,7 @@ func (a *app) showDirectory(server string, root fileindex.Root, dir string, choo
 
 // directoryMenu is the menu of a directory of the sidebar: what the files
 // page does with it, shown there first.
-func (a *app) directoryMenu(m *ui.Menu, sv *config.Server, root fileindex.Root, dir, name string) {
+func (a *app) directoryMenu(c *ui.Context, m *ui.Menu, sv *config.Server, root fileindex.Root, dir, name string) {
 	busy := a.br != nil && (a.br.operating || a.br.loading) && a.br.server == sv.ID && a.br.root.ID == root.ID
 	writable := !root.ReadOnly && !busy
 	// Of the directory itself, inside it.
@@ -239,6 +239,9 @@ func (a *app) directoryMenu(m *ui.Menu, sv *config.Server, root fileindex.Root, 
 	if m.Item("打开").Chosen() {
 		a.showDirectory(sv.ID, root, dir)
 	}
+	if m.Item("在新标签页中打开").Disabled(len(a.tabs) >= maxTabs).Chosen() {
+		a.openFolderInNewTab(sv.ID, root.ID, dir)
+	}
 	a.favoriteMenuItem(m, favoriteOf(sv.ID, root, dir))
 	m.Separator()
 	if m.Item("新建文件夹…").Disabled(!writable).Chosen() {
@@ -250,6 +253,10 @@ func (a *app) directoryMenu(m *ui.Menu, sv *config.Server, root fileindex.Root, 
 	if m.Item("上传文件夹到这里…").Disabled(!writable).Chosen() {
 		inside(func() { a.pickUpload(true) })()
 	}
+	here := pasteTarget{server: sv.ID, root: root.ID, rootName: root.Name, dir: dir}
+	if m.Item("粘贴到此文件夹").Disabled(root.ReadOnly || !a.hasPaste(c.Services())).Chosen() {
+		a.paste(c.Services(), here)
+	}
 	if dir == "" {
 		// The root itself: managed with the roots.
 		m.Separator()
@@ -258,6 +265,9 @@ func (a *app) directoryMenu(m *ui.Menu, sv *config.Server, root fileindex.Root, 
 		}
 		if m.Item("目录管理…").Chosen() {
 			a.openAdmin(sv.ID, "roots")
+		}
+		if m.Item("属性").Chosen() {
+			a.showServerProps(sv.ID, fileindex.Entry{Root: root.ID, RootName: root.Name, Name: root.Name, IsDir: true})
 		}
 		return
 	}
@@ -270,14 +280,14 @@ func (a *app) directoryMenu(m *ui.Menu, sv *config.Server, root fileindex.Root, 
 		}
 	}
 	m.Separator()
-	if m.Item("下载…").Disabled(busy).Chosen() {
+	if m.Item("剪切").Disabled(root.ReadOnly).Chosen() {
+		a.setClip(c.Services(), &fileClip{move: true, files: a.nasFilesAt(sv.ID, root, e.Parent), es: []fileindex.Entry{e}, from: a.nasWhere(sv.ID, root.ID, e.Parent)})
+	}
+	if m.Item("复制").Chosen() {
+		a.setClip(c.Services(), &fileClip{files: a.nasFilesAt(sv.ID, root, e.Parent), es: []fileindex.Entry{e}, from: a.nasWhere(sv.ID, root.ID, e.Parent)})
+	}
+	if m.Item("下载到…").Disabled(busy).Chosen() {
 		as(func(e fileindex.Entry) { a.download([]fileindex.Entry{e}) })
-	}
-	if m.Item("复制到…").Disabled(busy).Chosen() {
-		as(func(e fileindex.Entry) { a.transferTo(false, []fileindex.Entry{e}) })
-	}
-	if m.Item("移动到…").Disabled(!writable).Chosen() {
-		as(func(e fileindex.Entry) { a.transferTo(true, []fileindex.Entry{e}) })
 	}
 	if m.Item("重命名…").Disabled(!writable).Chosen() {
 		as(a.startRename)
@@ -292,6 +302,9 @@ func (a *app) directoryMenu(m *ui.Menu, sv *config.Server, root fileindex.Root, 
 	m.Separator()
 	if m.Item("刷新").Chosen() {
 		a.refreshDirectory(sv, root, dir)
+	}
+	if m.Item("属性").Chosen() {
+		a.showServerProps(sv.ID, e)
 	}
 }
 

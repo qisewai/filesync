@@ -211,30 +211,12 @@ func (a *app) archivePath(c *ui.Context) {
 }
 func (a *app) archiveView(c *ui.Context) {
 	b := a.arc
-	es := b.chosen()
-	if b.loading {
-		es = nil
-	}
-	n := len(es)
 	if c.Shortcut(0, ui.KeyF5) {
 		a.archiveBrowse(b.path)
 	}
 	if !a.searchTyping && c.Shortcut(0, ui.KeyEscape) {
 		b.sel.Clear()
 	}
-	commandBar(c, n, filesSize(es), func() { b.sel.Clear() }, func() {
-		toolButton(c, "archive-extract-all", iconSave, "解压到…", "选择本机或服务器", b.loading || len(b.items) == 0, func() { a.archiveExtract(b.items) })
-	}, func() {
-		toolButton(c, "archive-extract", iconSave, "解压到…", "选择本机、这台或其他服务器", false, func() { a.archiveExtract(es) })
-		toolButton(c, "archive-download", iconSave, "下载…", "解压选中项到本机", false, func() { a.downloadTo(a.archiveFiles(), false, es, "解压到本机") })
-		if n == 1 && !es[0].IsDir {
-			toolButton(c, "archive-preview", iconSearch, "预览", "", es[0].Link || es[0].Encrypted || previewKind(es[0]) == "", func() { a.archiveOpen(es[0]) })
-			toolButton(c, "archive-open", iconFile, "系统程序打开", "下载到缓存后打开", es[0].Link || es[0].Encrypted, func() { a.systemOpenSource(b.server, b.client, es[0], true) })
-		}
-	}, func() {
-		viewToggle(c, "archive-view", &b.grid)
-		toolButton(c, "archive-refresh", iconRetry, "刷新", "", b.loading, func() { a.archiveBrowse(b.path) })
-	})
 	if b.err != "" {
 		notice(c, c.Theme().Danger, b.err)
 	}
@@ -267,12 +249,7 @@ func (a *app) archiveView(c *ui.Context) {
 				a.systemOpenSource(b.server, b.client, e, true)
 			}
 		}
-		if m.Item("解压到…").Disabled(len(chosen) == 0).Chosen() {
-			a.archiveExtract(chosen)
-		}
-		if m.Item("下载…").Disabled(len(chosen) == 0).Chosen() {
-			a.downloadTo(a.archiveFiles(), false, chosen, "解压到本机")
-		}
+		a.archiveMenu(c, m, chosen)
 	})
 }
 func (a *app) archiveStatus(c *ui.Context) {
@@ -372,4 +349,29 @@ func (a *app) archiveLocation() string {
 	}
 	u := url.URL{Path: p, RawQuery: url.Values{"archive": {b.file}, "dir": {b.path}}.Encode()}
 	return u.String()
+}
+
+// archiveMenu is the menu of the members of an archive chosen, or of the
+// folder shown of it without any.
+func (a *app) archiveMenu(c *ui.Context, m *ui.Menu, chosen []fileindex.Entry) {
+	b := a.arc
+	if len(chosen) == 0 {
+		if m.Item("全部解压到…").Disabled(b.loading || len(b.items) == 0).Chosen() {
+			a.archiveExtract(b.items)
+		}
+		if m.Item("刷新").Shortcut(0, ui.KeyF5).Disabled(b.loading).Chosen() {
+			a.archiveBrowse(b.path)
+		}
+		return
+	}
+	m.Separator()
+	if m.Item("复制").Shortcut(ui.Ctrl, ui.KeyC).Chosen() {
+		a.copyChosen(c, false)
+	}
+	if m.Item("解压到…").Chosen() {
+		a.archiveExtract(chosen)
+	}
+	if m.Item("下载到…").Chosen() {
+		a.downloadTo(a.archiveFiles(), false, chosen, "解压到本机")
+	}
 }

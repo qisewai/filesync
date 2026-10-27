@@ -13,46 +13,41 @@ import (
 )
 
 func (a *app) view(c *ui.Context) {
+	theme := appTheme(c.Theme())
 	if s := c.Preferences().TextScale; a.plainText && s > 0 && s != 1 {
-		t := *c.Theme()
-		t.FontSize /= s
-		c.SetTheme(&t)
+		theme.FontSize /= s
 	}
+	c.SetTheme(theme)
 	a.followHistory()
 	a.searchShortcuts(c)
-	// The sidebar, then the page under its toolbar: the divider between
-	// them drags.
-	split := ui.Split(c.Key("main-split"), &a.sidebarW, func() { a.sidebar(c) }, func() {
-		ui.Column(c).Grow(1).Shrink(1).MinWidth(0).Fill().Children(func() {
-			a.topBar(c)
-			a.locationBar(c)
-			a.nav.View(c, func(r *ui.Route) {
-				r.Title(a.pageTitle())
-				ui.Column(c).Grow(1).MinHeight(0).Padding(10, 24, 16, 24).Gap(12).Children(func() {
-					if a.errorMsg != "" && a.place != "backup" {
-						closableNotice(c, c.Theme().Danger, a.errorMsg, func() { a.errorMsg = "" })
-					}
-					a.page(c)
-				})
-			})
-			a.statusBar(c)
-		})
-	}).Fill()
+	a.tabShortcuts(c)
+	a.clipShortcuts(c)
+	c.OnShortcut(ui.Ctrl, ui.KeyB, a.toggleSidebar)
+	c.OnShortcut(ui.Ctrl, ui.KeyI, a.toggleDetails)
+	// Keep the window outline and viewer backdrop the same with either
+	// layout. A collapsed sidebar takes no room and has no resize handle.
+	content := ui.Box(c.Key("main-content")).Fill().Children(func() {
+		if a.sidebarHidden {
+			a.mainPane(c)
+			return
+		}
+		split := ui.Split(c.Key("main-split"), &a.sidebarW, func() { a.sidebar(c) }, func() { a.mainPane(c) }).Fill()
+		if split.Changed() {
+			a.sidebarW = min(max(a.sidebarW, minSidebar), maxSidebar)
+			a.store.SidebarWidth = a.sidebarW
+			a.sidebarMoved = true
+		}
+	})
 	// A frameless window has no shadow on Wayland: an outline tells it
 	// from what is behind it.
 	if a.ownControls && !a.maximized {
-		split.Border(1, c.Theme().Border)
+		content.Border(1, c.Theme().Border)
 	}
 	if a.viewerCovers() {
 		// Under the viewer's opaque backdrop, the page is built, keeping
 		// its state, but not drawn: drawn, its rounded clips would be
 		// masked on the CPU while the picture is scaled, a second at once.
-		split.Opacity(0)
-	}
-	if split.Changed() {
-		a.sidebarW = min(max(a.sidebarW, minSidebar), maxSidebar)
-		a.store.SidebarWidth = a.sidebarW
-		a.sidebarMoved = true
+		content.Opacity(0)
 	}
 	if a.askQuit {
 		switch ui.AlertDialog(c, &a.askQuit, "任务正在进行，要停止并退出吗？",
@@ -65,6 +60,9 @@ func (a *app) view(c *ui.Context) {
 	a.recordHistory()
 	a.filePreviewView(c)
 	a.fileDialogs(c)
+	a.propsView(c)
+	a.nameDialog(c)
+	a.compressionView(c)
 	a.favoriteDialogs(c)
 	a.taskDialog(c)
 	a.nasView(c)
@@ -77,6 +75,29 @@ func (a *app) view(c *ui.Context) {
 			}
 		}
 	}
+}
+
+func (a *app) pagePane(c *ui.Context) {
+	ui.Column(c.Key("page-pane")).Grow(1).Shrink(1).MinWidth(0).Fill().Children(func() {
+		a.tabBar(c)
+		a.topBar(c)
+		a.nav.View(c, func(r *ui.Route) {
+			r.Title(a.pageTitle())
+			ui.Column(c).Grow(1).MinHeight(0).Padding(12, 16, 12, 16).Gap(10).Children(func() {
+				if a.errorMsg != "" && a.place != "backup" {
+					closableNotice(c, c.Theme().Danger, a.errorMsg, func() { a.errorMsg = "" })
+				}
+				a.page(c)
+			})
+		})
+		a.statusBar(c)
+	})
+}
+
+func (a *app) toggleSidebar() {
+	a.sidebarHidden = !a.sidebarHidden
+	a.store.SidebarHidden = a.sidebarHidden
+	a.save()
 }
 
 // page builds the page of the place shown.
@@ -99,7 +120,7 @@ func (a *app) page(c *ui.Context) {
 	case a.onRoot():
 		a.browserView(c)
 	default:
-		a.welcome(c)
+		a.homePage(c)
 	}
 }
 
@@ -112,34 +133,33 @@ const (
 
 func rootPlace(server string, root int64) string { return fmt.Sprintf("root/%s/%d", server, root) }
 
-// welcome is shown while nothing is chosen.
-func (a *app) welcome(c *ui.Context) {
-	t := c.Theme()
-	ui.Column(c).Grow(1).Center().Gap(12).Children(func() {
-		if len(a.store.Servers) == 0 {
-			ui.Text(c, "欢迎使用 FileSync").FontSize(18).Bold()
-			ui.Text(c, "FileSync 是 NAS 上 fileindex 的客户端：浏览、搜索、上传下载 NAS 上的文件，并把本机目录备份过去。先添加 fileindex 服务器的地址。").TextColor(t.TextMuted)
-			if ui.PrimaryButton(c, "添加服务器…").Clicked() {
-				a.openServers()
-				a.nasStartEdit(nil)
-			}
-			return
-		}
-		ui.Text(c, "从左侧选择 NAS 上的目录，或在“本机”中选择要备份的文件。").TextColor(t.TextMuted)
-		if ui.Button(c, "浏览本机文件").Clicked() {
-			a.openLocal(a.startLocal())
-		}
-	})
-}
-
 func (a *app) sidebar(c *ui.Context) {
 	t := c.Theme()
 	ui.Column(c).Fill().Background(t.Surface).Children(func() {
-		if a.hiddenTitleBar {
-			a.sidebarHead(c)
-		}
-		ui.Scroll(c).Grow(1).MinHeight(0).Padding(10, 8).Children(func() {
+		a.sidebarHead(c)
+		ui.Scroll(c).Grow(1).MinHeight(0).Padding(8, 8).Children(func() {
+			if strings.TrimSpace(a.sidebarFilter) != "" {
+				a.sidebarFilterResults(c)
+				return
+			}
+			// Rows as roomy as a source list's.
+			prev := c.Theme()
+			roomy := *prev
+			roomy.Spacing = 5
+			c.SetTheme(&roomy)
+			grayChoice(c, func() { a.sidebarTree(c) })
+			c.SetTheme(prev)
+		})
+		a.sidebarFoot(c)
+	})
+}
+
+// sidebarTree is the tree of the places, in the sidebar.
+func (a *app) sidebarTree(c *ui.Context) {
+	{
+		{
 			ui.Tree(c.Key("servers-tree"), func() {
+				a.navItem(c, "home", iconHome, "首页", func() { a.place = "home" })
 				a.navItem(c, "search", iconSearch, "搜索", func() {
 					query := ""
 					if a.gsearch != nil {
@@ -151,45 +171,20 @@ func (a *app) sidebar(c *ui.Context) {
 				favs := ui.TreeItem(c.Key("favorites"), "", a.sectionOpen("favorites"), func() { a.favoriteItems(c) })
 				// The sections, and the servers, have no page: a click opens
 				// or closes them, as their arrows do.
-				favs.Children(func() { labeled(c, iconStar, "收藏", t.Text) }).Label("收藏").OnClick(a.toggleSection("favorites"))
+				favs.Children(func() { sectionTitle(c, "收藏") }).Label("收藏").OnClick(a.toggleSection("favorites"))
 				local := ui.TreeItem(c.Key("local"), "", a.sectionOpen("local"), func() { a.localItems(c) })
-				local.Children(func() { labeled(c, iconLaptop, "本机", t.Text) }).Label("本机").OnClick(a.toggleSection("local"))
-				servers := ui.TreeItem(c.Key("servers"), "", a.sectionOpen("servers"), func() { a.serverList(c) })
-				servers.Children(func() { labeled(c, iconRoots, "服务器", t.Text) }).Label("服务器").OnClick(a.toggleSection("servers"))
+				local.Children(func() { sectionTitle(c, "本机") }).Label("本机").OnClick(a.toggleSection("local"))
+				a.serverList(c)
 				bk := a.navItem(c, "backup", iconBackup, "备份任务", func() { a.place = "backup" })
 				a.backupMark(c, bk)
-				a.navItem(c, "transfer-history", iconTasks, "传输记录", func() { a.showTransfers = true })
 			}).Label("位置")
-		})
-		ui.Row(c).Padding(8).Gap(6).AlignItems(ui.Center).BorderWidth(1, 0, 0, 0).BorderColor(t.Border).Children(func() {
-			settings := toolButton(c, "settings", iconGear, "设置", "服务器、本机索引与其他设置", false, func() { a.place = "settings" })
-			if a.place == "settings" {
-				settings.Background(c.Theme().SurfaceHover)
-			}
-			ui.Spacer(c)
-			iconButton(c, "add-server", iconPlus, "添加服务器", "添加 fileindex 服务器", false, func() {
-				a.openServers()
-				a.nasStartEdit(nil)
-			})
-		})
-	})
+		}
+	}
 }
 
-// sidebarHead is the head of the sidebar in a window without the system's
-// title bar: the app's name, as high as the toolbar beside it, moving the
-// window, clear of window controls on the left.
-func (a *app) sidebarHead(c *ui.Context) {
-	t := c.Theme()
-	ui.Row(c.Key("sidebar-head")).Height(a.toolbarHeight(c)).Padding(0, 12, 0, 16+c.TitleBar().Left).Gap(8).AlignItems(ui.Center).
-		BorderWidth(0, 0, 1, 0).BorderColor(t.Border).DragWindow().Children(func() {
-		ui.Icon(c, iconBackup).FontSize(18).TextColor(t.Accent)
-		ui.Text(c, "FileSync").Bold().SingleLine().Shrink(1).MinWidth(0)
-	})
-}
-
-// serverList is the servers in the sidebar, each with its directories.
+// serverList is the servers in the sidebar, each a section of its
+// directories.
 func (a *app) serverList(c *ui.Context) {
-	t := c.Theme()
 	if len(a.store.Servers) == 0 {
 		a.navItem(c, "add-server", iconPlus, "添加服务器…", func() {
 			a.openServers()
@@ -203,14 +198,10 @@ func (a *app) serverList(c *ui.Context) {
 		})
 		tip := sv.Addr
 		node.Children(func() {
+			// A section of its own, as the computer's.
+			sectionTitle(c, sv.Title())
 			if a.unreachable(sv) {
-				// Grayed, as what cannot be used now.
-				dim := t.TextMuted.Alpha(0.55)
-				ui.Icon(c, iconServer).FontSize(15).TextColor(dim)
-				ui.Text(c, sv.Title()).SingleLine().Grow(1).Shrink(1).MinWidth(0).TextColor(dim)
 				tip = sv.Addr + " · 无法连接，点右侧图标或右键重新连接"
-			} else {
-				labeled(c, iconServer, sv.Title(), t.Text)
 			}
 			a.serverMark(c, sv)
 		}).Label(sv.Title()).Tooltip(tip)
@@ -270,13 +261,14 @@ func (a *app) sectionOpen(key string) *bool {
 // navItem is a leaf of the sidebar going to place, highlighted there.
 func (a *app) navItem(c *ui.Context, place string, svg *ui.SVG, label string, action func()) ui.Element {
 	t := c.Theme()
+	selected := a.place == place || place == "home" && a.place == ""
 	color := t.TextMuted
-	if a.place == place {
+	if selected {
 		color = t.AccentText // on the accent of the item chosen
 	}
 	item := ui.TreeItem(c.Key("nav/"+place), "", nil, nil)
 	item.Children(func() { labeled(c, svg, label, color) }).Label(label)
-	return item.Selected(a.place == place).OnClick(action)
+	return item.Selected(selected).OnClick(action)
 }
 
 // serverItems are the roots of a server, then its trash and its
@@ -476,6 +468,29 @@ func (a *app) loadRoots(sv *config.Server) {
 // serverChanged forgets what was read of a server, after its session or
 // address changed or it was removed.
 func (a *app) serverChanged(id string) {
+	if a.proxy != nil {
+		a.proxy.Revoke(id)
+	}
+	if a.preview != nil && a.preview.server == id {
+		a.closePreview()
+	}
+	delete(a.roots, id)
+	delete(a.rootsLoading, id)
+	delete(a.serverErr, id)
+	a.unwatch(id)
+	delete(a.thumbExts, id)
+	for key := range a.tree {
+		if strings.HasPrefix(key, "root/"+id+"/") {
+			delete(a.tree, key)
+		}
+	}
+	// What every tab shows of it.
+	a.eachTab(func() { a.leaveServer(id) })
+}
+
+// leaveServer lets go of what the tab shown shows of a server whose
+// session or address changed, or which was removed.
+func (a *app) leaveServer(id string) {
 	if a.arc != nil && a.arc.server == id {
 		if a.arc.cancel != nil {
 			a.arc.cancel()
@@ -492,12 +507,6 @@ func (a *app) serverChanged(id string) {
 			a.place = ""
 		}
 	}
-	if a.proxy != nil {
-		a.proxy.Revoke(id)
-	}
-	if a.preview != nil && a.preview.server == id {
-		a.closePreview()
-	}
 	if a.recycle != nil && a.recycle.server == id {
 		if a.recycle.cancel != nil {
 			a.recycle.cancel()
@@ -505,16 +514,6 @@ func (a *app) serverChanged(id string) {
 		a.recycle = nil
 		if strings.HasPrefix(a.place, "trash/") {
 			a.place = ""
-		}
-	}
-	delete(a.roots, id)
-	delete(a.rootsLoading, id)
-	delete(a.serverErr, id)
-	a.unwatch(id)
-	delete(a.thumbExts, id)
-	for key := range a.tree {
-		if strings.HasPrefix(key, "root/"+id+"/") {
-			delete(a.tree, key)
 		}
 	}
 	if a.br != nil && a.br.server == id {

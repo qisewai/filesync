@@ -45,6 +45,9 @@ type fileView struct {
 	gridLast *int
 	// empty is what shows without items, once read.
 	empty func()
+	// cut reports the files cut to the clipboard, shown faded; nil for
+	// none.
+	cut func(e fileindex.Entry) bool
 }
 
 // fileList shows the files of a page in a table or a grid, in a bordered
@@ -56,11 +59,13 @@ func (a *app) fileList(c *ui.Context, v *fileView) ui.Element {
 			ui.Column(c).Grow(1).Center().Children(func() { ui.Spinner(c).FontSize(22).Label("正在读取") })
 			return
 		}
-		if v.grid {
-			a.fileGrid(c, v)
-		} else {
-			a.fileTable(c, v)
-		}
+		grayChoice(c, func() {
+			if v.grid {
+				a.fileGrid(c, v)
+			} else {
+				a.fileTable(c, v)
+			}
+		})
 	})
 }
 
@@ -81,7 +86,11 @@ func (a *app) fileTable(c *ui.Context, v *fileView) {
 		}
 		switch col {
 		case 0:
-			ui.Row(c).Gap(8).AlignItems(ui.Center).Children(func() {
+			name := ui.Row(c).Gap(8).AlignItems(ui.Center)
+			if v.cut != nil && v.cut(e) {
+				name.Opacity(0.45)
+			}
+			name.Children(func() {
 				fileIcon(c, e, 16)
 				ui.Text(c, e.Name).SingleLine().Grow(1).Shrink(1)
 				if e.Encrypted {
@@ -119,7 +128,11 @@ func (a *app) fileGrid(c *ui.Context, v *fileView) {
 	grid := ui.GridView(c.Key(v.key+"-grid"), v.gridSt, len(v.items), gridCell, 132, func(i int) {
 		e := v.items[i]
 		last = max(last, i)
-		ui.Column(c).Grow(1).Padding(6).Gap(4).AlignItems(ui.Center).Children(func() {
+		cell := ui.Column(c).Grow(1).Padding(6).Gap(4).AlignItems(ui.Center)
+		if v.cut != nil && v.cut(e) {
+			cell.Opacity(0.45)
+		}
+		cell.Children(func() {
 			if bmp := v.thumb(e); bmp != nil {
 				ui.Image(c, bmp).Size(96, 84).Fit(ui.Contain).Radius(4)
 			} else {
@@ -200,7 +213,7 @@ func commandBar(c *ui.Context, n int, size int64, clear func(), commands, action
 	ui.Row(c).Gap(6).AlignItems(ui.Center).Height(38).Children(func() {
 		if n > 0 {
 			ui.Row(c.Key("selection-bar")).Gap(4).AlignItems(ui.Center).Height(38).Padding(0, 4, 0, 2).Radius(t.Radius*1.5).
-				Background(t.Accent.Alpha(0.08)).Border(1, t.Accent.Alpha(0.25)).Grow(1).Shrink(1).MinWidth(0).Children(func() {
+				Background(t.Surface).Border(1, t.Border).Grow(1).Shrink(1).MinWidth(0).Children(func() {
 				iconButton(c, "clear-selection", iconClose, "取消选择", "取消选择（Esc）", false, clear)
 				text := fmt.Sprintf("已选 %d 项", n)
 				if size > 0 {
