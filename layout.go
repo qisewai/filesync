@@ -120,7 +120,9 @@ func (a *app) page(c *ui.Context) {
 	case a.onRoot():
 		a.browserView(c)
 	default:
-		a.homePage(c)
+		// Nothing else to show: the search, the first page, from the next
+		// frame (the toolbar of this one has a field of its own).
+		a.openSearch("")
 	}
 }
 
@@ -159,7 +161,6 @@ func (a *app) sidebarTree(c *ui.Context) {
 	{
 		{
 			ui.Tree(c.Key("servers-tree"), func() {
-				a.navItem(c, "home", iconHome, "首页", func() { a.place = "home" })
 				a.navItem(c, "search", iconSearch, "搜索", func() {
 					query := ""
 					if a.gsearch != nil {
@@ -261,7 +262,7 @@ func (a *app) sectionOpen(key string) *bool {
 // navItem is a leaf of the sidebar going to place, highlighted there.
 func (a *app) navItem(c *ui.Context, place string, svg *ui.SVG, label string, action func()) ui.Element {
 	t := c.Theme()
-	selected := a.place == place || place == "home" && a.place == ""
+	selected := a.place == place
 	color := t.TextMuted
 	if selected {
 		color = t.AccentText // on the accent of the item chosen
@@ -456,10 +457,6 @@ func (a *app) loadRoots(sv *config.Server) {
 				delete(a.serverErr, sv.ID)
 				a.applyRoots(sv.ID, roots)
 				a.watch(sv)
-				// Nothing chosen yet: the first root shows.
-				if a.place == "" && len(roots) > 0 {
-					a.goPlace(rootPlace(sv.ID, roots[0].ID))
-				}
 			}
 		})
 	}()

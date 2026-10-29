@@ -111,10 +111,12 @@ type app struct {
 	// gsearch is the search of every place; searchFocus the field of the
 	// toolbar, which focusSearch gives the keyboard in the next frame, and
 	// searchTyping says has it.
-	gsearch      *globalSearch
-	searchFocus  ui.Handle
-	focusSearch  bool
-	searchTyping bool
+	gsearch         *globalSearch
+	searchFocus     ui.Handle
+	searchPageFocus ui.Handle
+	focusSearch     bool
+	focusTries      int
+	searchTyping    bool
 	// searchStart is the scope the field of the pages of files searches,
 	// "" for the place shown, "folder" or "all".
 	searchStart string
@@ -220,9 +222,9 @@ func newApp(store *config.Store) *app {
 		navShown:     "/",
 	}
 	a.initTabs()
-	if len(store.Servers) == 0 && len(store.Tasks) > 0 {
-		a.place = "backup"
-	}
+	// The search is the first page, its field ready for typing.
+	a.openSearch("")
+	a.focusSearch = true
 	if len(store.Tasks) > 0 {
 		a.selected = 0
 	}

@@ -87,7 +87,7 @@ func (a *app) mainWidth(c *ui.Context) float32 {
 // detailsShown reports whether the details show: not hidden, and room for
 // them.
 func (a *app) detailsShown(c *ui.Context) bool {
-	return !a.detailsHidden && a.mainWidth(c)-a.detailsW >= minPageWidth
+	return !a.detailsHidden && !a.searchLanding() && a.mainWidth(c)-a.detailsW >= minPageWidth
 }
 
 func (a *app) toggleDetails() {
@@ -145,7 +145,10 @@ func (a *app) tabBar(c *ui.Context) {
 		ui.Spacer(c).MinWidth(16)
 		if !shown {
 			// Hidden for want of room: the button widens the window's share.
-			flatIcon(c, "toggle-details", iconDetails, "显示详情", "显示详情面板（Ctrl+I）", !a.detailsHidden, a.toggleDetails)
+			// The page of the search without one has nothing to detail.
+			if !a.searchLanding() {
+				flatIcon(c, "toggle-details", iconDetails, "显示详情", "显示详情面板（Ctrl+I）", !a.detailsHidden, a.toggleDetails)
+			}
 			if a.ownControls {
 				a.windowControls(c)
 			}
@@ -291,7 +294,7 @@ func (a *app) pageTools(c *ui.Context) {
 				}
 			}
 		})
-	case a.onSearch():
+	case a.onSearch() && !a.searchLanding():
 		viewToggle(c, "search-view-toggle", &a.gsearch.grid)
 	case a.onArchive():
 		viewToggle(c, "archive-view", &a.arc.grid)

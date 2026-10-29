@@ -48,8 +48,13 @@ func TestShots(t *testing.T) {
 		defer out.Close()
 		png.Encode(out, h.tt.Image())
 	}
-	h.click("首页")
-	shot("0-home")
+	h.a.store.RecentSearches = []string{"报告", "照片 2025", "合同"}
+	h.a.focusSearch = true
+	shot("0-search")
+	h.tt.Type("报告")
+	shot("0b-search-results")
+	h.click("清除搜索")
+	h.click("文件夹 nas")
 	h.click("文件夹 项目")
 	shot("1-nas-list")
 	h.clickPage("报告.txt")

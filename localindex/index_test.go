@@ -362,6 +362,23 @@ func syntheticIndex(n int) *Index {
 	return x
 }
 
+func TestBroadSearchMemoryBound(t *testing.T) {
+	x := syntheticIndex(100_003)
+	var before, after runtime.MemStats
+	runtime.ReadMemStats(&before)
+	r := search(t, x, Query{Text: "报告"})
+	es := page(t, r, 10, 20)
+	runtime.ReadMemStats(&after)
+	if r.Total() != 100_003 || len(es) != 20 {
+		t.Fatalf("lost matches: total=%d page=%d", r.Total(), len(es))
+	}
+	// Allow ample runtime/worker overhead but catch growing per-hit lists.
+	if allocated := after.TotalAlloc - before.TotalAlloc; allocated > 1<<20 {
+		t.Fatalf("search and first page allocated %d bytes; budget is 1 MiB", allocated)
+	}
+	runtime.KeepAlive(r)
+}
+
 func BenchmarkMillion(b *testing.B) {
 	x := syntheticIndex(1_000_000)
 	ctx := context.Background()

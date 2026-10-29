@@ -216,7 +216,7 @@ func (x *Index) LoadSnapshot(ctx context.Context, filename string, opts ScanOpti
 		}
 		seenRoots[rd.path] = true
 		rd.dirStamp = make([]int64, len(rd.dirs))
-		r.array(rd.dirStamp)
+		readSnapshotArray(&r, rd.dirStamp)
 		rd.dirReady = r.raw(len(rd.dirs))
 		for _, ready := range rd.dirReady {
 			if ready > 1 {
@@ -224,7 +224,7 @@ func (x *Index) LoadSnapshot(ctx context.Context, filename string, opts ScanOpti
 				break
 			}
 		}
-		rd.foldDirs = make([][]byte, len(rd.dirs))
+		rd.foldDirs = make([]string, len(rd.dirs))
 		for i, p := range rd.dirs {
 			if i%256 == 0 && ctx.Err() != nil {
 				return SnapshotMeta{}, ctx.Err()
@@ -233,7 +233,7 @@ func (x *Index) LoadSnapshot(ctx context.Context, filename string, opts ScanOpti
 				r.err = ErrSnapshotFormat
 				break
 			}
-			rd.foldDirs[i] = []byte(strings.ToLower(p))
+			rd.foldDirs[i] = strings.ToLower(p)
 		}
 		parts := r.u32()
 		if uint64(parts)*40 > uint64(max(r.r.N, 0)) {
@@ -257,12 +257,12 @@ func (x *Index) LoadSnapshot(ctx context.Context, filename string, opts ScanOpti
 			c.size = make([]int64, rows)
 			c.mtime = make([]int64, rows)
 			c.ext = make([]uint16, rows)
-			r.array(c.start)
-			r.array(c.foldStart)
-			r.array(c.parent)
-			r.array(c.size)
-			r.array(c.mtime)
-			r.array(c.ext)
+			readSnapshotArray(&r, c.start)
+			readSnapshotArray(&r, c.foldStart)
+			readSnapshotArray(&r, c.parent)
+			readSnapshotArray(&r, c.size)
+			readSnapshotArray(&r, c.mtime)
+			readSnapshotArray(&r, c.ext)
 			c.flags = r.raw(rows)
 			c.kind = r.raw(rows)
 			if r.err != nil {
@@ -272,6 +272,7 @@ func (x *Index) LoadSnapshot(ctx context.Context, filename string, opts ScanOpti
 				r.err = ErrSnapshotFormat
 				break
 			}
+			c.compact()
 			rd.chunks = append(rd.chunks, c)
 			rd.count += rows
 		}
@@ -344,20 +345,42 @@ func (w *snapshotWriter) strings(v []string) {
 }
 
 type snapshotReader struct {
-	ctx context.Context
-	r   *io.LimitedReader
-	err error
+	ctx     context.Context
+	r       *io.LimitedReader
+	err     error
+	scratch [32 * 1024]byte
 }
 
-func (r *snapshotReader) array(v any) {
+// Decode through one bounded buffer instead of binary.Read's temporary copy
+// of every column. In particular dirStamp can contain millions of values.
+func readSnapshotArray[T uint16 | uint32 | int64](r *snapshotReader, v []T) {
+	var value T
+	width := binary.Size(value)
+	for len(v) > 0 && r.err == nil {
+		count := min(len(v), len(r.scratch)/width)
+		buf := r.scratch[:count*width]
+		r.read(buf)
+		if r.err == nil {
+			_, r.err = binary.Decode(buf, binary.LittleEndian, v[:count])
+		}
+		v = v[count:]
+	}
+}
+func (r *snapshotReader) read(buf []byte) {
 	if r.err == nil {
 		r.err = r.ctx.Err()
 		if r.err == nil {
-			r.err = binary.Read(r.r, binary.LittleEndian, v)
+			_, r.err = io.ReadFull(r.r, buf)
 		}
 	}
 }
-func (r *snapshotReader) u32() uint32 { var n uint32; r.array(&n); return n }
+func (r *snapshotReader) u32() uint32 {
+	r.read(r.scratch[:4])
+	if r.err != nil {
+		return 0
+	}
+	return binary.LittleEndian.Uint32(r.scratch[:4])
+}
 func (r *snapshotReader) raw(n int) []byte {
 	if r.err != nil {
 		return nil
@@ -367,7 +390,7 @@ func (r *snapshotReader) raw(n int) []byte {
 		return nil
 	}
 	b := make([]byte, n)
-	_, r.err = io.ReadFull(r.r, b)
+	r.read(b)
 	return b
 }
 func (r *snapshotReader) blob() []byte {
@@ -383,6 +406,13 @@ func (r *snapshotReader) str() string {
 	if n > 1024*1024 {
 		r.err = ErrSnapshotFormat
 		return ""
+	}
+	if int(n) <= len(r.scratch) {
+		r.read(r.scratch[:n])
+		if r.err != nil {
+			return ""
+		}
+		return string(r.scratch[:n])
 	}
 	return string(r.raw(int(n)))
 }

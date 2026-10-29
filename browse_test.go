@@ -20,6 +20,12 @@ import (
 func browserHarness(t *testing.T, f *fitest.Server) *harness {
 	h := newHarness(t, signedIn(t, f))
 	h.settle()
+	// The app starts on the search: the tests start in the first root.
+	sv := h.a.store.Servers[0]
+	if roots := h.a.roots[sv.ID]; len(roots) > 0 {
+		h.a.goPlace(rootPlace(sv.ID, roots[0].ID))
+		h.settle()
+	}
 	return h
 }
 

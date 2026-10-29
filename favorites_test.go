@@ -27,8 +27,7 @@ func (h *harness) dropdown(label string, item ...string) {
 func TestFavorites(t *testing.T) {
 	f := fitest.New(t)
 	os.MkdirAll(filepath.Join(f.Root, "照片", "2026"), 0755)
-	h := newHarness(t, signedIn(t, f))
-	h.settle()
+	h := browserHarness(t, f)
 	local := t.TempDir()
 	os.MkdirAll(filepath.Join(local, "项目"), 0755)
 
@@ -319,7 +318,7 @@ func TestSidebarClicksOpen(t *testing.T) {
 	h.want("本机文件夹 代码")
 	// A server is a section of its own, closed by a click.
 	h.click("家里")
-	if *h.a.sectionOpen("server/"+h.a.store.Servers[0].ID) || h.tt.HasText("文件夹 照片") {
+	if *h.a.sectionOpen("server/" + h.a.store.Servers[0].ID) || h.tt.HasText("文件夹 照片") {
 		t.Fatal("the server's section did not close")
 	}
 }

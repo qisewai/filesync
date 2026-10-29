@@ -115,7 +115,7 @@ func (a *app) goLocation(loc string) {
 			}
 		}
 	default:
-		a.place = "home"
+		a.openSearch("")
 	}
 }
 
@@ -222,7 +222,7 @@ func (a *app) topBar(c *ui.Context) {
 			case a.onAdmin():
 				a.adminHeader(c)
 			case a.onSearch():
-				a.searchHeader(c)
+				// The field is on the page.
 			default:
 				ui.Text(c, a.pageTitle()).FontSize(15).Bold().SingleLine().Shrink(1)
 			}

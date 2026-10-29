@@ -4,13 +4,69 @@ import (
 	"bytes"
 	"context"
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"runtime"
 	"slices"
 	"sync/atomic"
 	"testing"
+	"time"
 )
+
+func TestSnapshotMixedCaseAndChunkBoundaries(t *testing.T) {
+	ctx := context.Background()
+	positions := []int{0, 1, 62, 63, 64, 65, 127, 128, 4094, 4095, 4096, 8191, 8192, 8194}
+	opts := ScanOptions{Roots: []string{filepath.Join(t.TempDir(), "root1"), filepath.Join(t.TempDir(), "root2")}}
+	x := New()
+	var roots []*rootData
+	var want []int64
+	for ri, root := range opts.Roots {
+		b := newBuilder(root)
+		for i := range 8195 {
+			name := fmt.Sprintf("plain%05d.txt", i)
+			size := int64(ri*100_000 + i + 1)
+			if slices.Contains(positions, i) {
+				// Lowercasing İ changes its UTF-8 length, so display and search
+				// offsets must remain independent in these chunks.
+				name = fmt.Sprintf("İSTANBUL-报告%05d.TXT", i)
+				want = append(want, size)
+			}
+			b.add(Entry{Name: name, Ext: "txt", Size: size}, 0)
+		}
+		roots = append(roots, b.snapshot())
+	}
+	x.publish(roots, time.Now())
+	filename := filepath.Join(t.TempDir(), "index.bin")
+	if err := x.SaveSnapshot(ctx, filename, opts, SnapshotMeta{}); err != nil {
+		t.Fatal(err)
+	}
+	y := New()
+	if _, err := y.LoadSnapshot(ctx, filename, opts, nil); err != nil {
+		t.Fatal(err)
+	}
+	for _, index := range []*Index{x, y} {
+		r := search(t, index, Query{Text: "istanbul 报告", Sort: "size"})
+		if r.Total() != len(want) || search(t, index, Query{}).Total() != 2*8195 {
+			t.Fatalf("lost matches: %d", r.Total())
+		}
+		// Retained results must survive replacement of the current version.
+		index.publish(nil, time.Now())
+		for offset := 0; offset < len(want); offset += 5 {
+			es := page(t, r, offset, 5)
+			got := make([]int64, len(es))
+			for i, e := range es {
+				got[i] = e.Size
+				if !bytes.HasPrefix([]byte(e.Name), []byte("İSTANBUL-报告")) {
+					t.Fatalf("display name changed: %q", e.Name)
+				}
+			}
+			if !slices.Equal(got, want[offset:min(offset+5, len(want))]) {
+				t.Fatalf("page %d: %v", offset, got)
+			}
+		}
+	}
+}
 
 func TestSnapshotRoundTripWithoutFilesystemScan(t *testing.T) {
 	root := t.TempDir()
@@ -159,16 +215,20 @@ func BenchmarkMillionSnapshot(b *testing.B) {
 	b.Run("Load", func(b *testing.B) {
 		b.ReportAllocs()
 		b.ResetTimer()
+		var indexBytes int64
 		for b.Loop() {
 			y := New()
 			if _, err := y.LoadSnapshot(ctx, filename, opts, nil); err != nil {
 				b.Fatal(err)
 			}
-			if y.Status().Count != 1_000_000 {
+			status := y.Status()
+			if status.Count != 1_000_000 {
 				b.Fatal("lost entries")
 			}
+			indexBytes = status.Bytes
 		}
 		b.ReportMetric(float64(st.Size())/1024/1024, "file-MiB")
+		b.ReportMetric(float64(indexBytes)/1024/1024, "index-MiB")
 	})
 	b.Run("Save", func(b *testing.B) {
 		b.ReportAllocs()

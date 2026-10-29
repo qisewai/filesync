@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"cmp"
 	"context"
+	"math/bits"
 	"runtime"
 	"slices"
 	"sort"
@@ -22,16 +23,24 @@ type Query struct {
 	From, To         int64
 }
 type Results struct {
-	snap  *snapshot
-	hits  []uint64
-	query Query
+	snap    *snapshot
+	matches []chunkMatches
+	total   int
+	query   Query
+}
+
+// One bit per row bounds even an all-files search to one bit per indexed
+// entry, rather than growing and concatenating per-worker uint64 hit lists.
+type chunkMatches struct {
+	base uint64
+	rows [chunkSize / 64]uint64
 }
 
 func (r *Results) Total() int {
 	if r == nil {
 		return 0
 	}
-	return len(r.hits)
+	return r.total
 }
 func (r *Results) Version() uint64 {
 	if r == nil || r.snap == nil {
@@ -87,18 +96,23 @@ func (x *Index) Search(ctx context.Context, q Query) (*Results, error) {
 		}
 	}
 	w := min(max(1, runtime.GOMAXPROCS(0)), 4, len(tasks))
-	partial := make([][]uint64, w)
+	out.matches = make([]chunkMatches, len(tasks))
 	var wg sync.WaitGroup
 	for worker := range w {
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
+			// Give each worker a contiguous output range to keep writes local.
+			matchAt := worker*(len(tasks)/w) + min(worker, len(tasks)%w)
 			for ti := worker; ti < len(tasks); ti += w {
 				if ctx.Err() != nil {
 					return
 				}
 				t := tasks[ti]
 				r, c := s.roots[t.root], s.roots[t.root].chunks[t.part]
+				match := &out.matches[matchAt]
+				matchAt++
+				match.base = uint64(t.root)<<48 | uint64(t.part)<<16
 				keep := func(i int) {
 					if q.Category == "file" && c.flags[i]&flagDir != 0 {
 						return
@@ -121,7 +135,7 @@ func (x *Index) Search(ctx context.Context, q Query) (*Results, error) {
 							return
 						}
 					}
-					partial[worker] = append(partial[worker], uint64(t.root)<<48|uint64(t.part)<<16|uint64(i))
+					match.rows[i/64] |= uint64(1) << (i % 64)
 				}
 				if len(terms) == 0 {
 					for i := range c.start {
@@ -157,7 +171,11 @@ func (x *Index) Search(ctx context.Context, q Query) (*Results, error) {
 	if err := ctx.Err(); err != nil {
 		return nil, err
 	}
-	out.hits = slices.Concat(partial...)
+	for _, match := range out.matches {
+		for _, word := range match.rows {
+			out.total += bits.OnesCount64(word)
+		}
+	}
 	return out, nil
 }
 
@@ -198,11 +216,11 @@ func (r *Results) compare(a, b uint64) int {
 // Page selects a globally sorted prefix using a bounded max heap. It retains
 // the immutable version from Search, even if a new scan completes meanwhile.
 func (r *Results) Page(ctx context.Context, offset, limit int) ([]Entry, error) {
-	if r == nil || limit <= 0 || offset >= len(r.hits) {
+	if r == nil || limit <= 0 || offset >= r.total {
 		return nil, ctx.Err()
 	}
 	offset = max(offset, 0)
-	k := offset + min(limit, len(r.hits)-offset)
+	k := offset + min(limit, r.total-offset)
 	h := make([]uint64, 0, k)
 	down := func(i int) {
 		for {
@@ -220,12 +238,7 @@ func (r *Results) Page(ctx context.Context, offset, limit int) ([]Entry, error) 
 			i = child
 		}
 	}
-	for i, ref := range r.hits {
-		if i%256 == 0 {
-			if err := ctx.Err(); err != nil {
-				return nil, err
-			}
-		}
+	keep := func(ref uint64) {
 		if len(h) < k {
 			h = append(h, ref)
 			for p := len(h) - 1; p > 0; {
@@ -239,6 +252,18 @@ func (r *Results) Page(ctx context.Context, offset, limit int) ([]Entry, error) 
 		} else if r.compare(ref, h[0]) < 0 {
 			h[0] = ref
 			down(0)
+		}
+	}
+	for _, match := range r.matches {
+		for wi, word := range match.rows {
+			if wi%4 == 0 && ctx.Err() != nil {
+				return nil, ctx.Err()
+			}
+			for word != 0 {
+				row := wi*64 + bits.TrailingZeros64(word)
+				keep(match.base | uint64(row))
+				word &= word - 1
+			}
 		}
 	}
 	// The prefix is already a max heap. Drain it in place so sorting also
@@ -267,9 +292,9 @@ func (r *Results) Page(ctx context.Context, offset, limit int) ([]Entry, error) 
 
 // CompareNames agrees with the desktop's natural, case-insensitive order.
 func CompareNames(a, b string) int {
-	return compareLower([]byte(strings.ToLower(a)), []byte(strings.ToLower(b)))
+	return compareLower(strings.ToLower(a), strings.ToLower(b))
 }
-func compareLower(a, b []byte) int {
+func compareLower[T string | []byte](a, b T) int {
 	for len(a) > 0 && len(b) > 0 {
 		// Paths often share a long ASCII prefix. Skip equal nonnumeric bytes
 		// without decoding; digit runs must still be compared as whole numbers.
@@ -277,8 +302,8 @@ func compareLower(a, b []byte) int {
 			a, b = a[1:], b[1:]
 			continue
 		}
-		ra, na := utf8.DecodeRune(a)
-		rb, nb := utf8.DecodeRune(b)
+		ra, na := utf8.DecodeRuneInString(string(a))
+		rb, nb := utf8.DecodeRuneInString(string(b))
 		if ra >= '0' && ra <= '9' && rb >= '0' && rb <= '9' {
 			i, j := 0, 0
 			for i < len(a) && a[i] >= '0' && a[i] <= '9' {
@@ -287,12 +312,20 @@ func compareLower(a, b []byte) int {
 			for j < len(b) && b[j] >= '0' && b[j] <= '9' {
 				j++
 			}
-			ta, tb := bytes.TrimLeft(a[:i], "0"), bytes.TrimLeft(b[:j], "0")
+			ta, tb := a[:i], b[:j]
+			for len(ta) > 0 && ta[0] == '0' {
+				ta = ta[1:]
+			}
+			for len(tb) > 0 && tb[0] == '0' {
+				tb = tb[1:]
+			}
 			if n := cmp.Compare(len(ta), len(tb)); n != 0 {
 				return n
 			}
-			if n := bytes.Compare(ta, tb); n != 0 {
-				return n
+			for k := range len(ta) {
+				if n := cmp.Compare(ta[k], tb[k]); n != 0 {
+					return n
+				}
 			}
 			a, b = a[i:], b[j:]
 			continue

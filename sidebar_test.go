@@ -1,6 +1,8 @@
 package main
 
 import (
+	"os"
+	"path/filepath"
 	"testing"
 
 	"filesync/config"
@@ -8,33 +10,36 @@ import (
 	"github.com/egoist/mygo/ui"
 )
 
-func TestHomeSidebarEntryAndHistory(t *testing.T) {
+// The app starts on the search, its field in the middle and ready for
+// typing; a search moves it to the top, over the results.
+func TestStartsOnTheSearch(t *testing.T) {
 	f := fitest.New(t)
-	h := browserHarness(t, f)
-	before := h.a.location()
-	h.click("首页")
-	if h.a.place != "home" || h.a.location() != "/" || h.a.pageTitle() != "首页" {
-		t.Fatalf("home: %q, %q", h.a.place, h.a.location())
-	}
-	// The places of the sidebar, as cards.
-	h.want("打开 搜索")
-	h.want("打开 备份任务")
-	h.want("打开 nas")
-	h.click("打开 nas")
-	if !h.a.onRoot() || h.a.br.root.Name != "nas" {
-		t.Fatalf("the card went to %q", h.a.place)
-	}
-	h.tt.Key(ui.Alt, ui.KeyLeft)
+	os.WriteFile(filepath.Join(f.Root, "报告.txt"), []byte("x"), 0o644)
+	h := newHarness(t, signedIn(t, f))
 	h.settle()
-	h.tt.Key(ui.Alt, ui.KeyLeft)
-	h.settle()
-	if h.a.location() != before {
-		t.Fatalf("back: %q, want %q", h.a.location(), before)
+	if !h.a.onSearch() || !h.a.searchLanding() {
+		t.Fatalf("started on %q", h.a.location())
 	}
-	h.tt.Key(ui.Alt, ui.KeyRight)
+	h.want("一个搜索框，找遍本机和所有 NAS")
+	h.want("在 家里 中搜索")
+	if h.tt.HasText("首页") || h.tt.HasText("隐藏详情") {
+		t.Fatal("a home page, or the details, beside the search")
+	}
+	field, _ := h.tt.Find("全局搜索")
+	h.tt.Type("报告")
+	h.tt.Key(0, ui.KeyEnter)
 	h.settle()
-	if h.a.place != "home" {
-		t.Fatalf("forward: %q", h.a.place)
+	if h.a.searchLanding() || h.a.gsearch.query != "报告" {
+		t.Fatalf("typing went elsewhere: %q", h.a.gsearch.query)
+	}
+	h.want("报告.txt")
+	if top, _ := h.tt.Find("全局搜索"); top.Y >= field.Y {
+		t.Fatalf("the field stayed at %v, from %v", top.Y, field.Y)
+	}
+	// Cleared, the search is the first page again.
+	h.click("清除搜索")
+	if !h.a.searchLanding() {
+		t.Fatalf("cleared, the results stay: %q %v", h.a.gsearch.query, h.a.gsearch.filter)
 	}
 }
 
@@ -50,7 +55,7 @@ func TestSidebarHidesRestoresAndPersists(t *testing.T) {
 	for range 3 {
 		h.tt.Frame()
 	}
-	if !h.a.sidebarHidden || h.tt.HasText("首页") || h.tt.HasText("隐藏侧边栏") {
+	if !h.a.sidebarHidden || h.tt.HasText("过滤侧边栏") || h.tt.HasText("隐藏侧边栏") {
 		t.Fatalf("sidebar still present (hidden=%v): %q", h.a.sidebarHidden, h.tt.Texts())
 	}
 	wide, ok := h.tt.Find("搜索文件")

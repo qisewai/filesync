@@ -163,7 +163,7 @@ func TestSearchHistoryAndRecent(t *testing.T) {
 	h, _, _ := searchHarness(t)
 	h.a.store.RecentSearches = []string{"合同"}
 	h.click("搜索")
-	h.want("最近搜索")
+	h.want("最近")
 	h.want("合同")
 	h.tt.Type("报")
 	h.settle()

@@ -4,6 +4,7 @@
 package localindex
 
 import (
+	"bytes"
 	"fmt"
 	"path/filepath"
 	"runtime"
@@ -41,8 +42,8 @@ const (
 type rootData struct {
 	path       string
 	dirs, exts []string
-	foldDirs   [][]byte
-	dirStamp   []int64 // nanoseconds, only trusted when dirReady is set
+	foldDirs   []string // lowercase paths share storage with dirs when unchanged
+	dirStamp   []int64  // nanoseconds, only trusted when dirReady is set
 	dirReady   []byte
 	excludes   []string
 	chunks     []*chunk
@@ -80,12 +81,21 @@ func (x *Index) Status() Status {
 		for _, d := range r.dirs {
 			out.Bytes += int64(len(d) + 16)
 		}
-		for _, d := range r.foldDirs {
-			out.Bytes += int64(cap(d) + 24)
+		for i, d := range r.foldDirs {
+			out.Bytes += 16
+			if d != r.dirs[i] {
+				out.Bytes += int64(len(d))
+			}
 		}
 		out.Bytes += int64(cap(r.dirStamp)*8 + cap(r.dirReady))
 		for _, c := range r.chunks {
-			out.Bytes += int64(cap(c.names) + cap(c.folded) + cap(c.start)*4 + cap(c.foldStart)*4 + cap(c.parent)*4 + cap(c.size)*8 + cap(c.mtime)*8 + cap(c.ext)*2 + cap(c.flags) + cap(c.kind))
+			out.Bytes += int64(cap(c.names) + cap(c.start)*4 + cap(c.parent)*4 + cap(c.size)*8 + cap(c.mtime)*8 + cap(c.ext)*2 + cap(c.flags) + cap(c.kind))
+			if !sameStorage(c.names, c.folded) {
+				out.Bytes += int64(cap(c.folded))
+			}
+			if !sameStorage(c.start, c.foldStart) {
+				out.Bytes += int64(cap(c.foldStart) * 4)
+			}
 		}
 	}
 	return out
@@ -147,12 +157,12 @@ type builder struct {
 }
 
 func newBuilder(root string) *builder {
-	return &builder{data: rootData{path: root, dirs: []string{root}, foldDirs: [][]byte{[]byte(strings.ToLower(root))}, dirStamp: []int64{0}, dirReady: []byte{0}, exts: []string{""}}, extIDs: map[string]uint16{"": 0}}
+	return &builder{data: rootData{path: root, dirs: []string{root}, foldDirs: []string{strings.ToLower(root)}, dirStamp: []int64{0}, dirReady: []byte{0}, exts: []string{""}}, extIDs: map[string]uint16{"": 0}}
 }
 func (b *builder) directory(p string) uint32 {
 	id := uint32(len(b.data.dirs))
 	b.data.dirs = append(b.data.dirs, p)
-	b.data.foldDirs = append(b.data.foldDirs, []byte(strings.ToLower(p)))
+	b.data.foldDirs = append(b.data.foldDirs, strings.ToLower(p))
 	b.data.dirStamp = append(b.data.dirStamp, 0)
 	b.data.dirReady = append(b.data.dirReady, 0)
 	return id
@@ -206,9 +216,31 @@ func (b *builder) add(e Entry, parent uint32) {
 }
 func (b *builder) seal() {
 	if b.current != nil {
+		b.current.compact()
 		b.data.chunks = append(b.data.chunks, b.current)
 		b.current = nil
 	}
+}
+
+// Chunks become immutable when sealed or loaded. Identical search and display
+// columns can then share storage, including offsets when case folding preserves
+// byte lengths. Compact copies also discard the builder's spare name capacity.
+func (c *chunk) compact() {
+	if cap(c.names) > len(c.names) {
+		c.names = slices.Clone(c.names)
+	}
+	if bytes.Equal(c.names, c.folded) {
+		c.folded = c.names
+	} else if cap(c.folded) > len(c.folded) {
+		c.folded = slices.Clone(c.folded)
+	}
+	if slices.Equal(c.start, c.foldStart) {
+		c.foldStart = c.start
+	}
+}
+
+func sameStorage[T any](a, b []T) bool {
+	return len(a) > 0 && len(b) > 0 && &a[0] == &b[0]
 }
 func (b *builder) snapshot() *rootData {
 	b.seal()

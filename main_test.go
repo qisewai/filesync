@@ -218,7 +218,7 @@ func TestAddServerChooseDirectoryAndBackUp(t *testing.T) {
 
 	store := &config.Store{Dir: t.TempDir()}
 	h := newHarness(t, store)
-	h.want("欢迎使用 FileSync")
+	h.want("还没有添加 NAS 服务器")
 	h.click("添加服务器…")
 	h.typeInto("名称", "家里")
 	h.typeInto("地址", f.Addr())

@@ -130,38 +130,75 @@ func filterBar(c *ui.Context, key string, f *searchFilter, changed func(wait boo
 // it searches, and chooses it with menu. It reports a change, Enter, and
 // the field cleared, with its button or Escape.
 func (a *app) searchBox(c *ui.Context, key, label string, query *string, scope, placeholder string, menu func(m *ui.Menu)) (changed, submitted, cleared bool) {
+	return a.searchField(c, key, label, query, scope, placeholder, menu, false)
+}
+
+// searchField is a field of the search; big, the pill of the page of the
+// search, raised on the page as a search engine's.
+func (a *app) searchField(c *ui.Context, key, label string, query *string, scope, placeholder string, menu func(m *ui.Menu), big bool) (changed, submitted, cleared bool) {
 	t := c.Theme()
 	var in ui.Element
 	// The rest of the toolbar, as wide as it is.
 	box := ui.Row(c.Key(key+"-box")).Grow(1).Shrink(1).MinWidth(260).AlignItems(ui.Center).Gap(6).
 		Padding(3, 6, 3, 3).Radius(t.Radius).Background(t.Surface).Border(1, t.Border).Cursor(ui.CursorText)
+	if big {
+		box.Height(50).Padding(0, 16, 0, 8).Gap(10).Radius(25).Background(t.Background)
+	}
 	box.Children(func() {
 		chip := ui.ButtonBase(c.Key(key+"-scope")).Padding(2, 6).Gap(4).AlignItems(ui.Center).Radius(t.Radius * 0.75).
 			Background(t.Accent.Alpha(0.1)).Label("搜索范围：" + scope).Tooltip("选择搜索范围").Menu(menu)
+		if big {
+			chip.Padding(6, 12).Radius(17)
+		}
 		chip.Children(func() {
 			ui.Text(c, scope).FontSize(12).SingleLine().MaxWidth(110).TextColor(t.Accent)
 			ui.Icon(c, iconChevronDown).FontSize(11).TextColor(t.Accent)
 		})
-		ui.Icon(c, iconSearch).FontSize(14).TextColor(t.TextMuted)
-		in = ui.TextInputBase(c.Key(key), query).Label(label).Placeholder(placeholder).Grow(1).Shrink(1).MinWidth(0).Bind(&a.searchFocus)
+		size := float32(14)
+		if big {
+			size = 18
+		}
+		ui.Icon(c, iconSearch).FontSize(size).TextColor(t.TextMuted)
+		handle := &a.searchFocus
+		if big {
+			// Its own: in the frame a field of the toolbar starts a search,
+			// both are built.
+			handle = &a.searchPageFocus
+		}
+		in = ui.TextInputBase(c.Key(key), query).Label(label).Placeholder(placeholder).Grow(1).Shrink(1).MinWidth(0).Bind(handle)
+		if big {
+			in.FontSize(16)
+		}
 		if *query != "" {
-			ui.ButtonBase(c.Key(key+"-clear")).Size(18, 18).Radius(9).Background(t.TextMuted.Alpha(0.3)).
-				Label("清除搜索").Tooltip("清除搜索（Esc）").OnClick(func() { cleared = true }).Children(func() {
-				ui.Icon(c, iconClose).FontSize(10).TextColor(t.Background)
-			})
+			// Clicked as it is built: a callback would run after this returns.
+			x := ui.ButtonBase(c.Key(key+"-clear")).Size(18, 18).Radius(9).Background(t.TextMuted.Alpha(0.3)).
+				Label("清除搜索").Tooltip("清除搜索（Esc）")
+			x.Children(func() { ui.Icon(c, iconClose).FontSize(10).TextColor(t.Background) })
+			cleared = x.Clicked()
 		} else {
 			ui.Row(c).Size(18, 18)
 		}
 	})
-	if in.Focused() {
+	switch {
+	case big && (in.Focused() || box.Hovered()):
+		box.BorderColor(t.Border).Shadow(0, 2, 10, 0, ui.RGBA(0, 0, 0, 0.14))
+	case big:
+		box.Shadow(0, 1, 4, 0, ui.RGBA(0, 0, 0, 0.07))
+	case in.Focused():
 		box.BorderColor(t.Accent)
 	}
 	if box.Clicked() {
 		in.Focus()
 	}
+	// The router gives the focus to the page it shows next, as it goes to
+	// the location this frame records: the field takes it until the
+	// router is there, a few frames at most.
 	if a.focusSearch {
-		a.focusSearch = false
 		in.Focus()
+		a.focusTries++
+		if in.Focused() && a.nav.Location() == a.location() || a.focusTries > 5 {
+			a.focusSearch, a.focusTries = false, 0
+		}
 	}
 	// Each reports once.
 	changed, submitted = in.Changed(), in.Submitted()
@@ -733,23 +770,6 @@ func (a *app) fileSearch(c *ui.Context, place string) {
 	}
 }
 
-// searchHeader is, in the toolbar of the page of the search, its field.
-func (a *app) searchHeader(c *ui.Context) {
-	s := a.gsearch
-	changed, submitted, cleared := a.searchBox(c, "global-search", "全局搜索", &s.query, a.scopeName(s.scope), "搜索文件名", func(m *ui.Menu) {
-		a.scopeMenu(m, s.scope, a.setScope)
-	})
-	switch {
-	case cleared:
-		a.runSearch(0)
-	case changed:
-		a.runSearch(250 * time.Millisecond)
-	case submitted:
-		a.remember(s.query)
-		a.runSearch(0)
-	}
-}
-
 // searchPage shows what the search found.
 func (a *app) searchPage(c *ui.Context) {
 	s := a.gsearch
@@ -774,6 +794,27 @@ func (a *app) searchPage(c *ui.Context) {
 		case acts.writable && n == 1 && c.Shortcut(0, ui.KeyF2):
 			a.renameIn(acts.files, es[0])
 		}
+	}
+	landing := a.searchLanding()
+	// Over the field, on the page without a search, the name of the app,
+	// the field in the middle; with one, the field is at the top. The field
+	// stays where it is among the page's own, its focus kept as it moves.
+	top := ui.Column(c.Key("search-top")).Shrink(0).AlignItems(ui.Center).Justify(ui.End)
+	if landing {
+		top.Grow(1).Gap(10).Padding(0, 0, 28, 0).Children(func() { searchLogo(c) })
+	}
+	bar := ui.Row(c.Key("search-bar")).Shrink(0).Justify(ui.Center)
+	bar.Children(func() {
+		ui.Row(c.Key("search-bar-width")).Grow(1).MaxWidth(680).Children(func() { a.searchBar(c) })
+	})
+	if !landing {
+		bar.Justify(ui.Start)
+	}
+	if landing {
+		ui.Column(c.Key("search-below")).Grow(1.4).AlignItems(ui.Center).Gap(18).Padding(22, 0, 0, 0).Children(func() {
+			a.searchLandingBelow(c)
+		})
+		return
 	}
 	if len(s.groups) > 0 {
 		a.searchScopes(c)
@@ -1038,31 +1079,122 @@ func (a *app) searchScopes(c *ui.Context) {
 	}
 }
 
-// searchEmpty is what the page of the search shows without results: the
-// recent searches, before any.
+// searchEmpty is what the page of the search shows without results.
 func (a *app) searchEmpty(c *ui.Context) {
+	emptyState(c, iconSearch, "没有找到匹配的文件", "换个关键词或筛选条件试试。本机的结果来自本机索引，文件有变化时需要更新索引。", nil)
+}
+
+// searchLanding reports whether the page of the search shows no search:
+// its field in the middle, as a search engine's first page.
+func (a *app) searchLanding() bool {
+	s := a.gsearch
+	return a.onSearch() && strings.TrimSpace(s.query) == "" && !s.filter.active()
+}
+
+// searchBar is the field of the page of the search.
+func (a *app) searchBar(c *ui.Context) {
+	s := a.gsearch
+	changed, submitted, cleared := a.searchField(c, "global-search", "全局搜索", &s.query, a.scopeName(s.scope), "搜索本机和服务器上的文件名", func(m *ui.Menu) {
+		a.scopeMenu(m, s.scope, a.setScope)
+	}, true)
+	switch {
+	case cleared:
+		a.runSearch(0)
+		a.focusSearch = true
+	case changed:
+		a.runSearch(250 * time.Millisecond)
+	case submitted:
+		a.remember(s.query)
+		a.runSearch(0)
+	}
+}
+
+// searchLogo is the name of the app, over the field of the search.
+func searchLogo(c *ui.Context) {
+	t := c.Theme()
+	ui.Row(c).Gap(12).AlignItems(ui.Center).Children(func() {
+		ui.Icon(c, iconBackup).FontSize(40).TextColor(t.Accent)
+		ui.Text(c, "FileSync").FontSize(36).Bold()
+	})
+	ui.Text(c, "一个搜索框，找遍本机和所有 NAS").FontSize(13).TextColor(t.TextMuted)
+}
+
+// searchLandingBelow is, under the field of the page without a search,
+// where to search, the recent searches, and what keeps files from being
+// found.
+func (a *app) searchLandingBelow(c *ui.Context) {
 	s := a.gsearch
 	t := c.Theme()
-	if strings.TrimSpace(s.query) != "" || s.filter.active() {
-		emptyState(c, iconSearch, "没有找到匹配的文件", "换个关键词或筛选条件试试。本机的结果来自本机索引，文件有变化时需要更新索引。", nil)
-		return
-	}
-	ui.Column(c).Fill().Center().Gap(10).Padding(32).Children(func() {
-		ui.Icon(c, iconSearch).FontSize(36).TextColor(t.TextMuted.Alpha(0.6))
-		ui.Text(c, "搜索本机和所有服务器").FontSize(16).Bold()
-		ui.Text(c, "输入文件名的一部分，多个词用空格分开。任何页面按 Ctrl+F 都可以开始搜索。").FontSize(12).TextColor(t.TextMuted).TextAlign(ui.Center).MaxWidth(380)
-		if recent := a.store.RecentSearches; len(recent) > 0 {
-			ui.Text(c, "最近搜索").FontSize(12).Bold().TextColor(t.TextMuted).Margin(12, 0, 0, 0)
-			ui.Row(c).Gap(6).Wrap().Justify(ui.Center).MaxWidth(480).Children(func() {
-				for _, q := range recent {
-					if ui.Button(c.Key("recent/"+q), q).Clicked() {
-						s.query = q
-						a.runSearch(0)
-					}
+	// The places, as the chip of the field chooses them.
+	ui.Row(c.Key("landing-scopes")).Gap(8).Wrap().Justify(ui.Center).MaxWidth(680).Children(func() {
+		pill := func(key, name string, svg *ui.SVG) {
+			on := s.scope == key
+			p := ui.ButtonBase(c.Key("landing-scope/"+key)).Padding(6, 14).Gap(6).AlignItems(ui.Center).Radius(99).
+				Border(1, t.Border).Label("在 " + name + " 中搜索").OnClick(func() {
+				a.setScope(key)
+				a.focusSearch = true
+			})
+			switch {
+			case on:
+				p.Background(t.Accent.Alpha(0.1)).BorderColor(t.Accent.Alpha(0.4))
+			case p.Hovered():
+				p.Background(t.SurfaceHover)
+			}
+			p.Children(func() {
+				color := t.TextMuted
+				if on {
+					color = t.Accent
 				}
+				ui.Icon(c, svg).FontSize(13).TextColor(color)
+				ui.Text(c, name).FontSize(12).SingleLine().TextColor(color)
 			})
 		}
+		pill("all", "全部位置", iconSearch)
+		pill(localPlace, "本机", iconLaptop)
+		for _, sv := range a.store.Servers {
+			if sv.Token != "" {
+				pill(sv.ID, sv.Title(), iconServer)
+			}
+		}
 	})
+	if recent := a.store.RecentSearches; len(recent) > 0 {
+		ui.Row(c.Key("landing-recent")).Gap(6).Wrap().Justify(ui.Center).AlignItems(ui.Center).MaxWidth(620).Children(func() {
+			ui.Text(c, "最近").FontSize(12).TextColor(t.TextMuted).Margin(0, 4, 0, 0)
+			for _, q := range recent {
+				r := ui.ButtonBase(c.Key("recent/"+q)).Padding(4, 10).Radius(99).Label(q).OnClick(func() {
+					s.query = q
+					a.runSearch(0)
+				})
+				if r.Hovered() {
+					r.Background(t.SurfaceHover)
+				}
+				r.Children(func() { ui.Text(c, q).FontSize(12).SingleLine().MaxWidth(160).TextColor(t.Text) })
+			}
+		})
+	}
+	// What keeps the search from finding everything, quietly.
+	note := func(key, text, action string, do func()) {
+		ui.Row(c.Key(key)).Gap(8).AlignItems(ui.Center).Children(func() {
+			ui.Text(c, text).FontSize(12).TextColor(t.TextMuted)
+			l := ui.ButtonBase(c.Key(key + "-do")).Label(action).OnClick(do)
+			l.Children(func() {
+				text := ui.Text(c, action).FontSize(12).TextColor(t.Accent)
+				if l.Hovered() {
+					text.Underline()
+				}
+			})
+		})
+	}
+	if len(a.store.Servers) == 0 {
+		note("landing-no-server", "还没有添加 NAS 服务器", "添加服务器…", func() {
+			a.openServers()
+			a.nasStartEdit(nil)
+		})
+	}
+	if m := a.localIdx; m != nil && m.status.Count == 0 && !m.running && !m.loading {
+		note("landing-no-index", "本机还没有建立索引，搜不到本机的文件", "建立索引", a.startLocalScan)
+	}
+	ui.Text(c, "Ctrl+F 在任何页面开始搜索 · 多个词用空格分开").FontSize(11).TextColor(t.TextMuted.Alpha(0.7))
 }
 
 // searchStatus is, in the status bar, how many results show, of how many.
