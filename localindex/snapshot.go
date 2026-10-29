@@ -98,7 +98,11 @@ func (x *Index) SaveSnapshot(ctx context.Context, filename string, opts ScanOpti
 		w.array(r.dirStamp)
 		w.raw(r.dirReady)
 		w.u32(uint32(len(r.chunks)))
-		for _, c := range r.chunks {
+		for _, stored := range r.chunks {
+			c, err := readChunk(ctx, r, stored)
+			if err != nil {
+				return err
+			}
 			w.u32(uint32(len(c.start)))
 			w.blob(c.names)
 			w.blob(c.folded)
@@ -172,11 +176,16 @@ func (x *Index) LoadSnapshot(ctx context.Context, filename string, opts ScanOpti
 	if err != nil {
 		return SnapshotMeta{}, err
 	}
-	f, err := os.Open(filename)
+	f, err := openSnapshot(filename)
 	if err != nil {
 		return SnapshotMeta{}, err
 	}
-	defer f.Close()
+	keepFile := false
+	defer func() {
+		if !keepFile {
+			f.Close()
+		}
+	}()
 	st, err := f.Stat()
 	if err != nil {
 		return SnapshotMeta{}, err
@@ -241,6 +250,7 @@ func (x *Index) LoadSnapshot(ctx context.Context, filename string, opts ScanOpti
 			break
 		}
 		for range parts {
+			start := int64(snapshotHeaderSize) + int64(n) - r.r.N
 			rows := int(r.u32())
 			if rows < 1 || rows > chunkSize {
 				r.err = ErrSnapshotFormat
@@ -272,8 +282,8 @@ func (x *Index) LoadSnapshot(ctx context.Context, filename string, opts ScanOpti
 				r.err = ErrSnapshotFormat
 				break
 			}
-			c.compact()
-			rd.chunks = append(rd.chunks, c)
+			end := int64(snapshotHeaderSize) + int64(n) - r.r.N
+			rd.chunks = append(rd.chunks, &chunk{file: f, offset: start, length: end - start})
 			rd.count += rows
 		}
 		if r.err != nil {
@@ -305,6 +315,7 @@ func (x *Index) LoadSnapshot(ctx context.Context, filename string, opts ScanOpti
 	if stamp := int64(binary.LittleEndian.Uint64(header[24:])); stamp != 0 {
 		updated = time.Unix(0, stamp)
 	}
+	keepFile = true
 	x.publish(data, updated)
 	if progress != nil {
 		progress(LoadProgress{Read: int64(n), Total: int64(n)})

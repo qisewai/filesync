@@ -158,7 +158,7 @@ func (a *app) scanLocalIndex(full bool) {
 			p, err = x.Update(ctx, opts, progress)
 		}
 		status := x.Status()
-		var saveErr error
+		var saveErr, compactErr error
 		if err == nil && filename != "" {
 			a.post(func() {
 				if !a.closed && a.localIdx == m && m.index == x {
@@ -166,6 +166,10 @@ func (a *app) scanLocalIndex(full bool) {
 				}
 			})
 			saveErr = x.SaveSnapshot(ctx, filename, opts, localindex.SnapshotMeta{Partial: p.Errors > 0, Errors: p.Errors, Messages: p.Messages})
+			if saveErr == nil {
+				_, compactErr = x.LoadSnapshot(ctx, filename, opts, nil)
+				status = x.Status()
+			}
 		}
 		a.post(func() {
 			if a.closed || a.localIdx != m || m.index != x {
@@ -193,6 +197,9 @@ func (a *app) scanLocalIndex(full bool) {
 					m.err = "索引已更新，但快照保存失败：" + saveErr.Error()
 				} else {
 					m.savedVersion = status.Version
+					if compactErr != nil {
+						m.err = "索引已保存，但切换磁盘读取失败：" + compactErr.Error()
+					}
 				}
 			}
 			a.indexChanged()

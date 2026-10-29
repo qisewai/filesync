@@ -69,7 +69,10 @@ func (x *Index) scan(ctx context.Context, opts ScanOptions, progress func(Progre
 		return Progress{}, fmt.Errorf("索引目录过多")
 	}
 	filter, _ := engine.NewFilter(opts.Excludes)
-	previous := x.snap.Load()
+	previous, err := materialize(ctx, x.snap.Load())
+	if err != nil {
+		return Progress{}, err
+	}
 	next := make([]*rootData, len(roots))
 	updated := time.Time{}
 	if previous != nil {

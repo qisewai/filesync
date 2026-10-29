@@ -6,6 +6,7 @@ package localindex
 import (
 	"bytes"
 	"fmt"
+	"os"
 	"path/filepath"
 	"runtime"
 	"slices"
@@ -26,6 +27,8 @@ type Entry struct {
 }
 
 type chunk struct {
+	file                     *os.File
+	offset, length           int64
 	names, folded            []byte
 	start, foldStart, parent []uint32
 	size, mtime              []int64
@@ -89,6 +92,10 @@ func (x *Index) Status() Status {
 		}
 		out.Bytes += int64(cap(r.dirStamp)*8 + cap(r.dirReady))
 		for _, c := range r.chunks {
+			if c.file != nil {
+				out.Bytes += 32
+				continue
+			}
 			out.Bytes += int64(cap(c.names) + cap(c.start)*4 + cap(c.parent)*4 + cap(c.size)*8 + cap(c.mtime)*8 + cap(c.ext)*2 + cap(c.flags) + cap(c.kind))
 			if !sameStorage(c.names, c.folded) {
 				out.Bytes += int64(cap(c.folded))

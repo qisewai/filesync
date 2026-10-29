@@ -98,6 +98,8 @@ func (x *Index) Search(ctx context.Context, q Query) (*Results, error) {
 	w := min(max(1, runtime.GOMAXPROCS(0)), 4, len(tasks))
 	out.matches = make([]chunkMatches, len(tasks))
 	var wg sync.WaitGroup
+	var readMu sync.Mutex
+	var readErr error
 	for worker := range w {
 		wg.Add(1)
 		go func() {
@@ -109,7 +111,16 @@ func (x *Index) Search(ctx context.Context, q Query) (*Results, error) {
 					return
 				}
 				t := tasks[ti]
-				r, c := s.roots[t.root], s.roots[t.root].chunks[t.part]
+				r := s.roots[t.root]
+				c, err := readChunk(ctx, r, r.chunks[t.part])
+				if err != nil {
+					readMu.Lock()
+					if readErr == nil {
+						readErr = err
+					}
+					readMu.Unlock()
+					return
+				}
 				match := &out.matches[matchAt]
 				matchAt++
 				match.base = uint64(t.root)<<48 | uint64(t.part)<<16
@@ -168,6 +179,9 @@ func (x *Index) Search(ctx context.Context, q Query) (*Results, error) {
 		}()
 	}
 	wg.Wait()
+	if readErr != nil {
+		return nil, readErr
+	}
 	if err := ctx.Err(); err != nil {
 		return nil, err
 	}
@@ -179,12 +193,17 @@ func (x *Index) Search(ctx context.Context, q Query) (*Results, error) {
 	return out, nil
 }
 
-func (r *Results) compare(a, b uint64) int {
-	ra, ca, ia := r.snap.decode(a)
-	rb, cb, ib := r.snap.decode(b)
-	da, db := ca.flags[ia]&flagDir != 0, cb.flags[ib]&flagDir != 0
-	if da != db {
-		if da {
+type pageCandidate struct {
+	ref         uint64
+	lower       []byte
+	dir         string
+	size, mtime int64
+	isDir       bool
+}
+
+func (r *Results) compare(a, b pageCandidate) int {
+	if a.isDir != b.isDir {
+		if a.isDir {
 			return -1
 		}
 		return 1
@@ -192,36 +211,36 @@ func (r *Results) compare(a, b uint64) int {
 	var n int
 	switch r.query.Sort {
 	case "size":
-		n = cmp.Compare(ca.size[ia], cb.size[ib])
+		n = cmp.Compare(a.size, b.size)
 	case "mtime":
-		n = cmp.Compare(ca.mtime[ia], cb.mtime[ib])
+		n = cmp.Compare(a.mtime, b.mtime)
 	case "path":
-		n = compareLower(ra.foldDirs[ca.parent[ia]], rb.foldDirs[cb.parent[ib]])
+		n = compareLower(a.dir, b.dir)
 	}
 	if n == 0 {
-		n = compareLower(ca.lower(ia), cb.lower(ib))
+		n = compareLower(a.lower, b.lower)
 	}
 	if r.query.Desc {
 		n = -n
 	}
 	if n == 0 {
-		n = compareLower(ra.foldDirs[ca.parent[ia]], rb.foldDirs[cb.parent[ib]])
+		n = compareLower(a.dir, b.dir)
 	}
 	if n == 0 {
-		n = cmp.Compare(a, b)
+		n = cmp.Compare(a.ref, b.ref)
 	}
 	return n
 }
 
-// Page selects a globally sorted prefix using a bounded max heap. It retains
-// the immutable version from Search, even if a new scan completes meanwhile.
+// Page scans matching blocks once and retains the globally best prefix. Heap
+// keys own their names so a retained result never pins an entire file block.
 func (r *Results) Page(ctx context.Context, offset, limit int) ([]Entry, error) {
 	if r == nil || limit <= 0 || offset >= r.total {
 		return nil, ctx.Err()
 	}
 	offset = max(offset, 0)
 	k := offset + min(limit, r.total-offset)
-	h := make([]uint64, 0, k)
+	h := make([]pageCandidate, 0, k)
 	down := func(i int) {
 		for {
 			child := i*2 + 1
@@ -238,9 +257,10 @@ func (r *Results) Page(ctx context.Context, offset, limit int) ([]Entry, error) 
 			i = child
 		}
 	}
-	keep := func(ref uint64) {
+	keep := func(item pageCandidate) {
 		if len(h) < k {
-			h = append(h, ref)
+			item.lower = bytes.Clone(item.lower)
+			h = append(h, item)
 			for p := len(h) - 1; p > 0; {
 				parent := (p - 1) / 2
 				if r.compare(h[p], h[parent]) <= 0 {
@@ -249,25 +269,45 @@ func (r *Results) Page(ctx context.Context, offset, limit int) ([]Entry, error) 
 				h[p], h[parent] = h[parent], h[p]
 				p = parent
 			}
-		} else if r.compare(ref, h[0]) < 0 {
-			h[0] = ref
+		} else if r.compare(item, h[0]) < 0 {
+			item.lower = bytes.Clone(item.lower)
+			h[0] = item
 			down(0)
 		}
 	}
 	for _, match := range r.matches {
+		if err := ctx.Err(); err != nil {
+			return nil, err
+		}
+		hasMatch := false
+		for _, w := range match.rows {
+			if w != 0 {
+				hasMatch = true
+				break
+			}
+		}
+		if !hasMatch {
+			continue
+		}
+		root := r.snap.roots[match.base>>48]
+		c, err := readChunk(ctx, root, root.chunks[uint32(match.base>>16)])
+		if err != nil {
+			return nil, err
+		}
 		for wi, word := range match.rows {
 			if wi%4 == 0 && ctx.Err() != nil {
 				return nil, ctx.Err()
 			}
 			for word != 0 {
-				row := wi*64 + bits.TrailingZeros64(word)
-				keep(match.base | uint64(row))
+				i := wi*64 + bits.TrailingZeros64(word)
+				if i >= len(c.start) {
+					return nil, ErrSnapshotFormat
+				}
+				keep(pageCandidate{ref: match.base | uint64(i), lower: c.lower(i), dir: root.foldDirs[c.parent[i]], size: c.size[i], mtime: c.mtime[i], isDir: c.flags[i]&flagDir != 0})
 				word &= word - 1
 			}
 		}
 	}
-	// The prefix is already a max heap. Drain it in place so sorting also
-	// responds to cancellation when a deep page requests a large prefix.
 	whole := h
 	for len(h) > 1 {
 		if len(h)%256 == 0 && ctx.Err() != nil {
@@ -282,10 +322,34 @@ func (r *Results) Page(ctx context.Context, offset, limit int) ([]Entry, error) 
 	if err := ctx.Err(); err != nil {
 		return nil, err
 	}
-	out := make([]Entry, 0, len(h)-offset)
-	for _, ref := range h[offset:] {
-		root, c, i := r.snap.decode(ref)
-		out = append(out, root.entry(c, i))
+	selected := h[offset:]
+	// Read each selected block once, but place entries in their sorted positions.
+	order := make([]int, len(selected))
+	for i := range order {
+		order[i] = i
+	}
+	sort.Slice(order, func(i, j int) bool { return selected[order[i]].ref < selected[order[j]].ref })
+	out := make([]Entry, len(selected))
+	var current uint64 = ^uint64(0)
+	var root *rootData
+	var c *chunk
+	for _, dest := range order {
+		ref := selected[dest].ref
+		base := ref &^ uint64(0xffff)
+		if base != current {
+			root = r.snap.roots[ref>>48]
+			var err error
+			c, err = readChunk(ctx, root, root.chunks[uint32(ref>>16)])
+			if err != nil {
+				return nil, err
+			}
+			current = base
+		}
+		i := int(uint16(ref))
+		if i >= len(c.start) {
+			return nil, ErrSnapshotFormat
+		}
+		out[dest] = root.entry(c, i)
 	}
 	return out, nil
 }

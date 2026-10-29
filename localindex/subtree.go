@@ -1,6 +1,7 @@
 package localindex
 
 import (
+	"context"
 	"path/filepath"
 	"runtime"
 	"strings"
@@ -51,7 +52,11 @@ func (x *Index) Subtree(dir string) (Subtree, bool) {
 			continue
 		}
 		out := Subtree{Updated: s.updated}
-		for _, c := range r.chunks {
+		for _, stored := range r.chunks {
+			c, err := readChunk(context.Background(), r, stored)
+			if err != nil {
+				return Subtree{}, false
+			}
 			for i, parent := range c.parent {
 				if int(parent) >= len(below) || !below[parent] {
 					continue
