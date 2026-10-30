@@ -7,8 +7,8 @@ import (
 	"testing"
 
 	"filesync/config"
-	"filesync/fileindex"
-	"filesync/fileindex/fitest"
+	"filemanager/remoteclient"
+	"filemanager/remoteclient/fitest"
 )
 
 // The sidebar shows the computer's places, their directories read as they

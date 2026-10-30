@@ -11,7 +11,7 @@ import (
 	"time"
 
 	localindex "filemanager/index"
-	"filesync/fileindex"
+	"filemanager/remoteclient"
 
 	"github.com/egoist/mygo/ui"
 )

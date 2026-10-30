@@ -3,7 +3,7 @@ package main
 import (
 	"strings"
 
-	"filesync/fileindex"
+	"filemanager/remoteclient"
 
 	"github.com/egoist/mygo/ui"
 )

@@ -4,7 +4,7 @@ import (
 	"fmt"
 	"path/filepath"
 
-	"filesync/fileindex"
+	"filemanager/remoteclient"
 
 	"github.com/egoist/mygo/ui"
 )

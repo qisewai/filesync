@@ -13,8 +13,9 @@ import (
 
 	"github.com/egoist/mygo/ui"
 
+	"filemanager/api"
 	localindex "filemanager/index"
-	"filesync/fileindex"
+	"filemanager/remoteclient"
 )
 
 // The properties of a file or folder, of a server or of this computer.
@@ -265,45 +266,19 @@ func (a *app) localProps(p string, count bool) *propsDialog {
 // walkLocal counts what is below dir, links not followed, showing the
 // count as it goes.
 func (a *app) walkLocal(ctx context.Context, dir string, d *propsDialog, t *localTally) {
-	var now localTally
-	shown := time.Now()
-	filepath.WalkDir(dir, func(p string, e fs.DirEntry, err error) error {
-		if ctx.Err() != nil {
-			return ctx.Err()
-		}
-		if err != nil {
-			if e != nil && e.IsDir() && p != dir {
-				now.unreadable++
-			}
-			return nil // WalkDir skips what it cannot read
-		}
-		if p == dir {
-			return nil
-		}
-		if e.IsDir() {
-			now.dirs++
-		} else {
-			now.files++
-			if e.Type().IsRegular() {
-				if fi, err := e.Info(); err == nil {
-					now.size += fi.Size()
-				}
-			}
-		}
-		if time.Since(shown) > 200*time.Millisecond {
-			shown = time.Now()
-			snap := now
-			a.post(func() { *t = snap })
-		}
-		return nil
+	result, err := a.backend.Tally(ctx, backendLocation(dir), func(v api.Tally) {
+		snap := localTally{files: v.Files, dirs: v.Dirs, size: v.Size, unreadable: v.Unreadable, done: v.Done}
+		a.post(func() { *t = snap })
 	})
 	if ctx.Err() != nil {
 		return
 	}
-	now.done = true
 	a.post(func() {
-		*t = now
+		*t = localTally{files: result.Files, dirs: result.Dirs, size: result.Size, unreadable: result.Unreadable, done: true}
 		d.loading = false
+		if err != nil {
+			d.err = err.Error()
+		}
 	})
 }
 

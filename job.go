@@ -7,9 +7,10 @@ import (
 	"path"
 	"time"
 
+	"filemanager/api"
+	"filemanager/engine"
+	"filemanager/remoteclient"
 	"filesync/config"
-	"filesync/engine"
-	"filesync/fileindex"
 
 	"github.com/egoist/mygo/ui"
 )
@@ -137,9 +138,35 @@ func (a *app) options(task *config.Task) (engine.Options, error) {
 // prepare scans the source and the target.
 func (a *app) prepare(ctx context.Context, j *job, opts engine.Options) (*engine.Plan, error) {
 	a.post(func() { j.status = "正在比较本机目录和 NAS 上的目录…" })
-	return engine.Prepare(ctx, opts, func(p engine.ScanProgress) {
+	spec := api.BackupSpec{Source: []byte(opts.Source), Mode: opts.Mode, Excludes: opts.Excludes, Only: opts.Only}
+	switch target := opts.Dest.(type) {
+	case *fileindex.Target:
+		spec.Address = target.Client.Addr
+		spec.Token = target.Client.Token
+		spec.Root = target.Location.Root
+		spec.Path = target.Location.Path
+	case *fileindex.Archive:
+		spec.Address = target.Client.Addr
+		spec.Token = target.Client.Token
+		spec.Root = target.Location.Root
+		spec.Path = target.Location.Path
+		spec.ArchiveName = target.Name
+		spec.ArchivePrefix = target.Prefix
+		spec.Compress = target.Compress
+	default:
+		return nil, errors.New("不支持的备份目标")
+	}
+	plan, err := a.backend.PrepareBackup(ctx, spec, func(p engine.ScanProgress) {
 		a.post(func() { j.scanned = p.Entries })
 	})
+	var remoteErr *api.Error
+	if errors.As(err, &remoteErr) && remoteErr.Code == "authentication_required" {
+		err = fileindex.ErrAuth
+	}
+	if plan != nil {
+		plan.Options.Dest = opts.Dest
+	}
+	return plan, err
 }
 
 func (a *app) startBackup(task *config.Task) {
@@ -412,8 +439,8 @@ func (a *app) doneView(c *ui.Context, j *job, task *config.Task) {
 		stat(c, "已复制", formatBytes(r.Bytes), t.Text)
 		stat(c, "用时", formatDuration(r.Finished.Sub(r.Started).Seconds()), t.Text)
 	})
-	if arc, ok := j.plan.Options.Dest.(*fileindex.Archive); ok && arc.Saved() != "" {
-		notice(c, t.Success, "已保存为 "+a.target(task.Server, task.RootName, arc.Saved())+"（fileindex 中路径）")
+	if r.SavedPath != "" {
+		notice(c, t.Success, "已保存为 "+a.target(task.Server, task.RootName, r.SavedPath)+"（fileindex 中路径）")
 	}
 	if r.Canceled {
 		notice(c, t.Warning, "已复制完成的文件保留在目标中；正在复制的文件没有写入。再次备份会接着复制剩下的文件。")

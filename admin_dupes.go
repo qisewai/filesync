@@ -6,7 +6,7 @@ import (
 	"fmt"
 	"sort"
 
-	"filesync/fileindex"
+	"filemanager/remoteclient"
 	"github.com/egoist/mygo/ui"
 )
 

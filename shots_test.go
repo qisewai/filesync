@@ -7,7 +7,7 @@ import (
 	"testing"
 	"time"
 
-	"filesync/fileindex/fitest"
+	"filemanager/remoteclient/fitest"
 
 	"github.com/egoist/mygo/ui"
 )

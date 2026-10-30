@@ -3,7 +3,7 @@ package main
 import (
 	"encoding/json"
 	"errors"
-	"filesync/fileindex"
+	"filemanager/remoteclient"
 	"fmt"
 	"os"
 	"path/filepath"

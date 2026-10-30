@@ -11,8 +11,8 @@ import (
 	"time"
 
 	"filesync/config"
-	"filesync/engine"
-	"filesync/fileindex"
+	"filemanager/engine"
+	"filemanager/remoteclient"
 
 	"github.com/egoist/mygo/ui"
 )

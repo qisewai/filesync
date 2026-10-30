@@ -8,7 +8,7 @@ import (
 	"slices"
 	"strings"
 
-	"filesync/fileindex"
+	"filemanager/remoteclient"
 
 	mt "github.com/egoist/mygo/transfer"
 	"github.com/egoist/mygo/ui"

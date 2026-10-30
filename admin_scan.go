@@ -6,7 +6,7 @@ import (
 	"fmt"
 	"time"
 
-	"filesync/fileindex"
+	"filemanager/remoteclient"
 )
 
 func (a *app) startScan(m *adminPage, r fileindex.Root, rebuild bool) {

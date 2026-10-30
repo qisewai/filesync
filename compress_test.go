@@ -10,8 +10,8 @@ import (
 	"time"
 
 	"filesync/config"
-	"filesync/fileindex"
-	"filesync/fileindex/fitest"
+	"filemanager/remoteclient"
+	"filemanager/remoteclient/fitest"
 )
 
 func TestCompressionDialogSubmissionResultAndClose(t *testing.T) {

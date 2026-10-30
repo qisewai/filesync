@@ -10,8 +10,8 @@ import (
 	"time"
 
 	localindex "filemanager/index"
+	"filemanager/remoteclient"
 	"filesync/config"
-	"filesync/fileindex"
 
 	"github.com/egoist/mygo/ui"
 )
@@ -715,7 +715,7 @@ func (a *app) startUploadTo(server string, root int64, where, dir string, files 
 	tr.cancel = cancel
 	loc := fileindex.Location{Addr: sv.Addr, Root: root, Path: dir}
 	go func() {
-		res := c.Upload(ctx, loc, files, hooks(a, tr))
+		res := a.backendUpload(ctx, c, loc, files, hooks(a, tr))
 		var failed []string
 		broken := map[string]bool{} // the items with an entry not landed
 		for _, e := range res.Errors {
@@ -807,9 +807,10 @@ func (a *app) startDownloadFrom(c *fileindex.Client, f *nasFiles, es []fileindex
 		var logErr error
 		err, logErr = loggedLocalOperation(operationLog, "download", "", target, func() error {
 			if len(es) == 1 && !es[0].IsDir {
-				return c.DownloadFile(ctx, root, es[0].Path, target, onProgress)
+				_, err := a.backendDownload(ctx, c, "download_file", root, []string{es[0].Path}, target, "", onProgress)
+				return err
 			}
-			errs, fatal := c.Download(ctx, root, paths(es), dest, onProgress)
+			errs, fatal := a.backendDownload(ctx, c, "download", root, paths(es), dest, "", onProgress)
 			for _, e := range errs {
 				failed = append(failed, e.Error())
 			}

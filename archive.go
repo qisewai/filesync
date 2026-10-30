@@ -10,8 +10,8 @@ import (
 	"strconv"
 	"strings"
 
-	"filesync/fileindex"
-	archiveio "filesync/internal/archive"
+	"filemanager/remoteclient"
+	archiveio "filemanager/archive"
 	"github.com/egoist/mygo/ui"
 )
 

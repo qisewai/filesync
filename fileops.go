@@ -9,7 +9,7 @@ import (
 	"slices"
 	"strings"
 
-	"filesync/fileindex"
+	"filemanager/remoteclient"
 
 	"github.com/egoist/mygo/ui"
 )
@@ -205,7 +205,7 @@ func (a *app) startRelay(f *nasFiles, src, dst *fileindex.Client, move bool, es 
 		a.post(func() { tr.done, tr.current = p.Done, p.Current; tr.total = max(p.Total, tr.total) })
 	}
 	go func() {
-		whole, errs, err := fileindex.Relay(ctx, src, srcRoot, paths(es), dst, root, dir, onProgress)
+		whole, errs, err := a.backendRelay(ctx, src, srcRoot, paths(es), dst, root, dir, onProgress)
 		var failed []string
 		for _, e := range errs {
 			failed = append(failed, e.Error())

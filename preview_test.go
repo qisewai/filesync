@@ -16,8 +16,8 @@ import (
 	"time"
 	"unicode/utf16"
 
-	"filesync/fileindex"
-	"filesync/fileindex/fitest"
+	"filemanager/remoteclient"
+	"filemanager/remoteclient/fitest"
 	"github.com/egoist/mygo/ui"
 )
 

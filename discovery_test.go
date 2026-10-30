@@ -7,8 +7,8 @@ import (
 	"testing"
 
 	"filesync/config"
-	"filesync/fileindex"
-	"filesync/fileindex/fitest"
+	"filemanager/remoteclient"
+	"filemanager/remoteclient/fitest"
 )
 
 func TestDiscoveredServersFillFormAndKeepSavedSession(t *testing.T) {

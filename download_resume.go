@@ -7,7 +7,7 @@ import (
 	"path/filepath"
 	"time"
 
-	"filesync/fileindex"
+	"filemanager/remoteclient"
 )
 
 // Immutable task parameters persisted with history; sessions are always read
@@ -105,7 +105,7 @@ func (a *app) runResumableDownload(c *fileindex.Client, tr *transfer) {
 			}
 		}
 		opErr, logErr := loggedLocalOperation(operationLog, "download", "", dest, func() error {
-			return c.DownloadFileResumable(ctx, download.Root, download.Path, dest, download.Partial, func(p fileindex.Progress) {
+			_, err := a.backendDownload(ctx, c, "resume", download.Root, []string{download.Path}, dest, download.Partial, func(p fileindex.Progress) {
 				a.post(func() {
 					if first {
 						tr.resumed, first = p.Done, false
@@ -117,6 +117,7 @@ func (a *app) runResumableDownload(c *fileindex.Client, tr *transfer) {
 					}
 				})
 			})
+			return err
 		})
 		var failed []string
 		if logErr != nil {

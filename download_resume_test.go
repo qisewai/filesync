@@ -14,7 +14,7 @@ import (
 
 	localindex "filemanager/index"
 	"filesync/config"
-	"filesync/fileindex"
+	"filemanager/remoteclient"
 )
 
 func waitDownload(t *testing.T, h *harness) {

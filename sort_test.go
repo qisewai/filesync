@@ -9,8 +9,8 @@ import (
 	"testing"
 
 	"filesync/config"
-	"filesync/fileindex"
-	"filesync/fileindex/fitest"
+	"filemanager/remoteclient"
+	"filemanager/remoteclient/fitest"
 )
 
 func TestNaturalCompare(t *testing.T) {

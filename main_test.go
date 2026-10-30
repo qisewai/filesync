@@ -13,10 +13,10 @@ import (
 	"testing"
 	"time"
 
+	"filemanager/engine"
+	"filemanager/remoteclient"
+	"filemanager/remoteclient/fitest"
 	"filesync/config"
-	"filesync/engine"
-	"filesync/fileindex"
-	"filesync/fileindex/fitest"
 
 	"github.com/egoist/mygo/ui"
 )
@@ -39,6 +39,12 @@ func newHarness(t *testing.T, store *config.Store) *harness {
 		t.Fatal(err)
 	}
 	if err := backend.EnableWrites(filepath.Join(t.TempDir(), "mutations.log")); err != nil {
+		t.Fatal(err)
+	}
+	if err := backend.EnableLocalBackup(); err != nil {
+		t.Fatal(err)
+	}
+	if err := backend.EnableLocalIndex(); err != nil {
 		t.Fatal(err)
 	}
 	if err := backend.EnableLocalTransfers(); err != nil {

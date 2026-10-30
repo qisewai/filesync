@@ -11,8 +11,8 @@ import (
 	"strings"
 
 	localindex "filemanager/index"
+	"filemanager/remoteclient"
 	"filesync/config"
-	"filesync/fileindex"
 	"github.com/egoist/mygo/ui"
 )
 
@@ -42,7 +42,7 @@ func (a *app) ensureLocalIndex() {
 	if a.localIdx != nil {
 		return
 	}
-	m := &localIndexState{index: localindex.New()}
+	m := &localIndexState{index: a.newBackendIndex()}
 	if saved := a.store.LocalIndex; saved != nil {
 		m.settings = config.LocalIndexSettings{Roots: slices.Clone(saved.Roots), Excludes: slices.Clone(saved.Excludes)}
 	} else {
@@ -221,7 +221,7 @@ func (a *app) scanLocalIndex(full bool) {
 		if checkpointReady && err == nil && saveErr == nil && compactErr == nil && p.Errors == 0 {
 			checkpointErr = operationLog.CommitCheckpoint(ctx, filename)
 			if checkpointErr == nil {
-				x.ClearDeltas()
+				checkpointErr = x.ClearDeltas()
 				status = x.Status()
 			}
 		}
@@ -462,7 +462,8 @@ func (a *app) localIndexDialog(c *ui.Context) {
 				if !changed {
 					return
 				}
-				m.index = localindex.New()
+				m.index.Close()
+				m.index = a.newBackendIndex()
 				m.status = localindex.Status{}
 				m.savedVersion = 0
 				m.progress = localindex.Progress{}
@@ -535,4 +536,8 @@ func (a *app) nextLocalBackup() {
 	es, rest := a.localBackups[0], a.localBackups[1:]
 	a.newTaskFrom(filepath.Dir(es[0].Path), es)
 	a.localBackups = rest
+}
+
+func (a *app) newBackendIndex() *localindex.Index {
+	return a.backend.Index()
 }

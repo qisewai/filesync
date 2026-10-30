@@ -10,8 +10,8 @@ import (
 	"testing"
 
 	"filesync/config"
-	"filesync/fileindex"
-	"filesync/fileindex/fitest"
+	"filemanager/remoteclient"
+	"filemanager/remoteclient/fitest"
 	"github.com/egoist/mygo/ui"
 )
 

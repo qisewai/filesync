@@ -8,7 +8,7 @@ import (
 	"unicode"
 	"unicode/utf8"
 
-	"filesync/fileindex"
+	"filemanager/remoteclient"
 
 	"github.com/egoist/mygo/ui"
 )

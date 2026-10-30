@@ -7,7 +7,7 @@ import (
 	"strconv"
 	"strings"
 
-	"filesync/fileindex"
+	"filemanager/remoteclient"
 	"github.com/egoist/mygo/ui"
 )
 

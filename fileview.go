@@ -2,15 +2,15 @@ package main
 
 import (
 	"context"
+	"filemanager/api"
 	"fmt"
 	"image"
 	_ "image/gif"
 	_ "image/jpeg"
 	_ "image/png"
-	"os"
 	"strings"
 
-	"filesync/fileindex"
+	"filemanager/remoteclient"
 
 	"github.com/egoist/mygo/ui"
 	"golang.org/x/image/draw"
@@ -313,7 +313,7 @@ func (a *app) localThumb(e fileindex.Entry) *ui.Bitmap {
 		parent = a.local.thumbCtx
 	}
 	return a.thumbCached(key, parent, func(ctx context.Context) (*ui.Bitmap, error) {
-		f, err := os.Open(e.Path)
+		f, err := a.backend.Read(ctx, api.ReadRequest{Location: backendLocation(e.Path), Limit: localThumbLimit})
 		if err != nil {
 			return nil, err
 		}

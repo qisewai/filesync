@@ -86,7 +86,7 @@ NAS 浏览需要更新 fileindex，使其包含三个已登录只读接口：
 
 首次读取 tar 压缩流和单文件压缩流需要顺序扫描，界面显示读取量并可取消。打开 tar 内靠后的文件或固实 7z/RAR 成员也会较慢。加密包或加密成员只显示提示，第一阶段不输入密码；包内音视频下载后再打开；搜索不包含包内文件。多卷压缩包不支持。
 
-`internal/archive/` 是客户端与 fileindex 的同源读取代码。两个仓库保持独立 Go 模块，通过 `scripts/sync-archive.sh [fileindex仓库路径]` 同步读取器、测试和样本；修改读取代码后两边都需运行测试。
+归档读取器与测试已统一至 `../filemanager/archive/`，客户端和服务端直接依赖共用模块。`scripts/sync-archive.sh` 仅保留为运行共用归档测试的兼容入口。
 
 ## 功能
 
@@ -177,7 +177,7 @@ NAS 浏览需要更新 fileindex，使其包含三个已登录只读接口：
 
 ```sh
 go run .                 # 运行
-go test ./...            # 测试（界面测试不需要窗口，用 fileindex/fitest 模拟服务器）
+go test ./...            # 测试（界面测试不需要窗口，用 filemanager/remoteclient/fitest 模拟服务器）
 go tool mygo dev         # 开发模式，修改代码后自动重新加载
 go tool mygo build       # 打包
 GOOS=windows go build -o filesync.exe .   # 在 Linux 上交叉编译 Windows 版本
@@ -201,10 +201,10 @@ FILESYNC_E2E_ADDR=192.168.0.235:8090 FILESYNC_E2E_TOKEN=会话 FILESYNC_E2E_SRC=
 ## 代码结构
 
 ```
-engine/     比较与计划：扫描本机目录、对比目标、生成计划、执行（Target 接口）
+../filemanager/engine/ 比较与计划：扫描本机目录、对比目标、生成计划、执行（Target 接口）
 internal/archive/ 压缩包只读读取器、目录缓存和 HTTP 流（同步到 fileindex）
 archive.go  NAS/本机压缩包浏览、预览、导航和解压入口
-fileindex/  fileindex 客户端和备份目标：浏览、管理、扫描、查重、统计、回收站、本机代理、任务事件、tar 上传下载、服务器间中转、归档
+../filemanager/remoteclient/ fileindex 客户端和备份目标：浏览、管理、扫描、查重、统计、回收站、本机代理、任务事件、tar 上传下载、服务器间中转、归档
             fitest/ 测试用的模拟 fileindex 服务器
 config/     服务器、任务和运行记录的读写
 localtrash/ 把本机文件移入系统回收站（Linux freedesktop、Windows 回收站）
@@ -248,10 +248,8 @@ main.go     窗口和系统接口（目录选择对话框、打开文件和网�
 正式运行默认寻找前台可执行文件旁的 `filemanager`，不会从 PATH 随意启动同名程序。
 后台通过用户私有 Unix socket 通信，继承当前用户权限；前台退出或异常断开拥有者管道时后台停止。
 
-迁移仍在进行：索引与复制移动原语已抽取，本机浏览和基础文件修改已后台化；索引编排、复制移动批次编排、备份和跨端传输仍有前台执行路径。后台按 `/v1/info` 声明实际能力。本机复制移动已有持久化任务和取消查询；用户级单实例复用、跨端任务和统一推送待后续接入。
+索引计算与分页结果、本机文件修改、复制移动、备份计划执行、上传/下载/续传及服务器间中转已接入后台。前台仍保留索引检查点和日志桥接、批次确认、部分基础属性/预览/系统集成（缩略图读取与目录递归统计已通过后台）。后台按 `/v1/info` 声明能力。
 
-Linux 已有真实子进程集成测试；Windows 目前仅要求可编译，尚未提供命名管道适配。
+本机后台操作证据位于配置目录 `filemanager/mutations.log`，独立于索引快照。复制移动任务支持持久化结果查询及取消；备份和跨端传输当前仍是请求流，尚未统一重连查询。用户级单实例复用、事件游标、外部变化监听仍待完成；FileIndex 搜索核心已切换到共用树索引。完整边界见 `../filemanager/README.md`。
 
-### 本机后台迁移进度
-
-本机新建、重命名、永久删除、移入系统回收站，以及上传完成后的源文件回收，已通过配套 FileManager 后台执行。后台操作证据保存在配置目录 `filemanager/mutations.log`，独立于索引快照。相同日志只允许一个后台进程持有；重复启动会明确报错。本机复制移动已提交到后台，前台显示进度并请求取消；前台索引回放桥接、批次编排及跨端传输仍保留。详细边界见 `../filemanager/README.md`。
+Linux 支持真实后台子进程；Windows 尚未提供 IPC 运行适配，交叉编译不代表可运行。

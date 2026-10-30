@@ -9,7 +9,7 @@ import (
 	"strings"
 	"testing"
 
-	"filesync/fileindex/fitest"
+	"filemanager/remoteclient/fitest"
 	"github.com/egoist/mygo/ui"
 )
 

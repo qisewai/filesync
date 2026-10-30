@@ -6,7 +6,7 @@ import (
 	"strings"
 	"time"
 
-	"filesync/fileindex"
+	"filemanager/remoteclient"
 	"github.com/egoist/mygo/ui"
 )
 

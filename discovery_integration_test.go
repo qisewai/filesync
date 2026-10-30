@@ -13,7 +13,7 @@ import (
 	"time"
 
 	"filesync/config"
-	"filesync/fileindex"
+	"filemanager/remoteclient"
 )
 
 // Explicitly opt in to a real multicast test, against two disposable production

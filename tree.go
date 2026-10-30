@@ -9,7 +9,7 @@ import (
 	"time"
 
 	"filesync/config"
-	"filesync/fileindex"
+	"filemanager/remoteclient"
 
 	"github.com/egoist/mygo/ui"
 )

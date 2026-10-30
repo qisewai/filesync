@@ -6,8 +6,8 @@ import (
 	"testing"
 
 	"filesync/config"
-	"filesync/engine"
-	"filesync/fileindex/fitest"
+	"filemanager/engine"
+	"filemanager/remoteclient/fitest"
 )
 
 // A task's card backs it up at once: it compares, copies, and tells how

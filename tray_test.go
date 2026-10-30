@@ -7,8 +7,8 @@ import (
 	"testing"
 
 	"filesync/config"
-	"filesync/engine"
-	"filesync/fileindex/fitest"
+	"filemanager/engine"
+	"filemanager/remoteclient/fitest"
 )
 
 func TestTray(t *testing.T) {

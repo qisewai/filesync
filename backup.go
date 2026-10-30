@@ -6,7 +6,7 @@ import (
 	"time"
 
 	"filesync/config"
-	"filesync/engine"
+	"filemanager/engine"
 
 	"github.com/egoist/mygo/ui"
 )

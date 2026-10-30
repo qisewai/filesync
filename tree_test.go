@@ -6,8 +6,8 @@ import (
 	"testing"
 	"time"
 
-	"filesync/fileindex"
-	"filesync/fileindex/fitest"
+	"filemanager/remoteclient"
+	"filemanager/remoteclient/fitest"
 )
 
 // As files are uploaded, the server tells of many changes: the tree reads

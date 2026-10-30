@@ -4,7 +4,7 @@ import (
 	"testing"
 
 	"filesync/config"
-	"filesync/fileindex/fitest"
+	"filemanager/remoteclient/fitest"
 )
 
 // The settings show the servers and their state, the index of this
