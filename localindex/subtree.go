@@ -24,6 +24,8 @@ func (x *Index) Subtree(dir string) (Subtree, bool) {
 		return Subtree{}, false
 	}
 	dir = filepath.Clean(dir)
+	out := Subtree{Updated: s.updated}
+	anyFound := false
 	for _, r := range s.roots {
 		if !Within(dir, r.path) {
 			continue
@@ -40,7 +42,14 @@ func (x *Index) Subtree(dir string) (Subtree, bool) {
 		}
 		below := make([]bool, len(r.dirs))
 		found := false
-		for id, p := range r.dirs {
+		cached, err := s.directories(context.Background(), r)
+		if err != nil {
+			return Subtree{}, false
+		}
+		for id, p := range cached.paths {
+			if cached.hidden[id] {
+				continue
+			}
 			p = fold(p)
 			if p == at {
 				below[id], found = true, true
@@ -51,14 +60,14 @@ func (x *Index) Subtree(dir string) (Subtree, bool) {
 		if !found {
 			continue
 		}
-		out := Subtree{Updated: s.updated}
+		anyFound = true
 		for _, stored := range r.chunks {
 			c, err := readChunk(context.Background(), r, stored)
 			if err != nil {
 				return Subtree{}, false
 			}
 			for i, parent := range c.parent {
-				if int(parent) >= len(below) || !below[parent] {
+				if int(parent) >= len(below) || !below[parent] || !cached.visible(parent, c.name(i)) {
 					continue
 				}
 				if c.flags[i]&flagDir != 0 {
@@ -69,7 +78,6 @@ func (x *Index) Subtree(dir string) (Subtree, bool) {
 				}
 			}
 		}
-		return out, true
 	}
-	return Subtree{}, false
+	return out, anyFound
 }

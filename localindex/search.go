@@ -23,10 +23,11 @@ type Query struct {
 	From, To         int64
 }
 type Results struct {
-	snap    *snapshot
-	matches []chunkMatches
-	total   int
-	query   Query
+	snap     *snapshot
+	foldDirs [][]string // paths resolved for this immutable result version
+	matches  []chunkMatches
+	total    int
+	query    Query
 }
 
 // One bit per row bounds even an all-files search to one bit per indexed
@@ -78,13 +79,21 @@ func (x *Index) Search(ctx context.Context, q Query) (*Results, error) {
 	type task struct {
 		root, part int
 		dirs       []bool
+		visibility *resolvedDirectories
 	}
 	var tasks []task
+	out.foldDirs = make([][]string, len(s.roots))
 	for ri, r := range s.roots {
+		cached, err := s.directories(ctx, r)
+		if err != nil {
+			return nil, err
+		}
+		out.foldDirs[ri] = cached.folded
+		paths := cached.paths
 		var dirs []bool
 		if q.Dir != "" {
 			dirs = make([]bool, len(r.dirs))
-			for i, p := range r.dirs {
+			for i, p := range paths {
 				if i%256 == 0 && ctx.Err() != nil {
 					return nil, ctx.Err()
 				}
@@ -92,7 +101,7 @@ func (x *Index) Search(ctx context.Context, q Query) (*Results, error) {
 			}
 		}
 		for ci := range r.chunks {
-			tasks = append(tasks, task{ri, ci, dirs})
+			tasks = append(tasks, task{ri, ci, dirs, cached})
 		}
 	}
 	w := min(max(1, runtime.GOMAXPROCS(0)), 4, len(tasks))
@@ -125,6 +134,9 @@ func (x *Index) Search(ctx context.Context, q Query) (*Results, error) {
 				matchAt++
 				match.base = uint64(t.root)<<48 | uint64(t.part)<<16
 				keep := func(i int) {
+					if t.visibility.restricted && !t.visibility.visible(c.parent[i], c.name(i)) {
+						return
+					}
 					if q.Category == "file" && c.flags[i]&flagDir != 0 {
 						return
 					}
@@ -189,6 +201,9 @@ func (x *Index) Search(ctx context.Context, q Query) (*Results, error) {
 		for _, word := range match.rows {
 			out.total += bits.OnesCount64(word)
 		}
+	}
+	if s.delta && q.Hidden && len(terms) == 0 && q.Dir == "" && q.Category == "" && len(extSet) == 0 && q.MinSize == 0 && q.MaxSize == 0 && q.From == 0 && q.To == 0 {
+		s.exactCount.Store(int64(out.total))
 	}
 	return out, nil
 }
@@ -303,7 +318,7 @@ func (r *Results) Page(ctx context.Context, offset, limit int) ([]Entry, error) 
 				if i >= len(c.start) {
 					return nil, ErrSnapshotFormat
 				}
-				keep(pageCandidate{ref: match.base | uint64(i), lower: c.lower(i), dir: root.foldDirs[c.parent[i]], size: c.size[i], mtime: c.mtime[i], isDir: c.flags[i]&flagDir != 0})
+				keep(pageCandidate{ref: match.base | uint64(i), lower: c.lower(i), dir: r.foldDirs[match.base>>48][c.parent[i]], size: c.size[i], mtime: c.mtime[i], isDir: c.flags[i]&flagDir != 0})
 				word &= word - 1
 			}
 		}

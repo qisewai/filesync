@@ -15,6 +15,7 @@ require (
 	github.com/stangelandcl/ppmd v0.1.1
 	github.com/ulikunitz/xz v0.5.17
 	golang.org/x/image v0.46.0
+	golang.org/x/sys v0.48.0
 	golang.org/x/text v0.43.0
 )
 
@@ -30,5 +31,4 @@ require (
 	github.com/spf13/afero v1.15.0 // indirect
 	go4.org v0.0.0-20260112195520-a5071408f32f // indirect
 	golang.org/x/net v0.59.0 // indirect
-	golang.org/x/sys v0.48.0 // indirect
 )

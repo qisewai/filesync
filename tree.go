@@ -253,10 +253,6 @@ func (a *app) directoryMenu(c *ui.Context, m *ui.Menu, sv *config.Server, root f
 	if m.Item("上传文件夹到这里…").Disabled(!writable).Chosen() {
 		inside(func() { a.pickUpload(true) })()
 	}
-	here := pasteTarget{server: sv.ID, root: root.ID, rootName: root.Name, dir: dir}
-	if m.Item("粘贴到此文件夹").Disabled(root.ReadOnly || !a.hasPaste(c.Services())).Chosen() {
-		a.paste(c.Services(), here)
-	}
 	if dir == "" {
 		// The root itself: managed with the roots.
 		m.Separator()

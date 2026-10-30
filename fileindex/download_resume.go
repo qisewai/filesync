@@ -45,6 +45,13 @@ func (c *Client) DownloadFileResumable(ctx context.Context, root int64, p, dest,
 	if c.InArchive() || !validDownloadPartial(dest, partial) {
 		return errors.New("续传下载的路径无效")
 	}
+	if c.BeforeLocalWrite != nil {
+		for _, target := range []string{dest, partial, partial + ".json"} {
+			if err := c.BeforeLocalWrite(target); err != nil {
+				return err
+			}
+		}
+	}
 	q := url.Values{"path": {p}}
 	endpoint := fmt.Sprintf("/api/download/%d", root)
 	source := c.url(endpoint, q)
@@ -175,6 +182,11 @@ func (c *Client) DownloadFileResumable(ctx context.Context, root int64, p, dest,
 	}
 	if mt, err := http.ParseTime(next.Modified); err == nil {
 		if err := os.Chtimes(partial, mt, mt); err != nil {
+			return err
+		}
+	}
+	if c.BeforeLocalWrite != nil {
+		if err := c.BeforeLocalWrite(dest); err != nil {
 			return err
 		}
 	}

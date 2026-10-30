@@ -17,17 +17,20 @@ import (
 )
 
 type localIndexState struct {
-	index           *localindex.Index
-	settings        config.LocalIndexSettings
-	running         bool
-	loading, saving bool
-	loadProgress    localindex.LoadProgress
-	savedVersion    uint64
-	cancel          context.CancelFunc
-	progress        localindex.Progress
-	status          localindex.Status
-	note, err       string
-	draft           *localIndexDraft
+	liveRunning, liveReplay bool
+	livePaths               []string
+	liveCancel              context.CancelFunc
+	index                   *localindex.Index
+	settings                config.LocalIndexSettings
+	running                 bool
+	loading, saving         bool
+	loadProgress            localindex.LoadProgress
+	savedVersion            uint64
+	cancel                  context.CancelFunc
+	progress                localindex.Progress
+	status                  localindex.Status
+	note, err               string
+	draft                   *localIndexDraft
 }
 type localIndexDraft struct {
 	open, picking bool
@@ -98,6 +101,7 @@ func (a *app) loadLocalSnapshot() {
 					m.note = fmt.Sprintf("已加载索引快照 · %d 处记录未能更新", meta.Errors)
 				}
 			}
+			a.startLiveIndex()
 			a.indexChanged()
 		})
 	}()
@@ -132,6 +136,18 @@ func (a *app) scanLocalIndex(full bool) {
 		m.err = "请先在索引范围中添加目录"
 		return
 	}
+	var operationLog *localindex.OperationLog
+	if full && a.localCachePath != "" {
+		if a.localOpLogLoading {
+			m.err = "正在校验文件操作日志，请稍后重试"
+			return
+		}
+		operationLog = a.localOpLog
+		// Reserve ownership while a missing/damaged log is opened off-thread.
+		if operationLog == nil {
+			a.localOpLogLoading = true
+		}
+	}
 	opts := localindex.ScanOptions{Roots: slices.Clone(m.settings.Roots), Excludes: slices.Clone(m.settings.Excludes)}
 	ctx, cancel := context.WithCancel(context.Background())
 	m.cancel = cancel
@@ -141,6 +157,35 @@ func (a *app) scanLocalIndex(full bool) {
 	x, filename := m.index, a.localCachePath
 	go func() {
 		defer cancel()
+		var checkpointErr error
+		checkpointReady := false
+		if full && filename != "" {
+			if operationLog == nil {
+				operationLog, checkpointErr = localindex.OpenRecoverableOperationLog(filename + ".operations")
+				opened, openErr := operationLog, checkpointErr
+				a.post(func() {
+					a.localOpLogLoading = false
+					if a.closed {
+						if opened != nil {
+							opened.Close()
+						}
+						return
+					}
+					a.localOpLog, a.localOpLogErr = opened, openErr
+					if opened != nil {
+						a.connectLocalOperationLog(opened)
+					}
+				})
+			}
+			if checkpointErr == nil {
+				checkpointErr = operationLog.StartCheckpoint()
+				checkpointReady = checkpointErr == nil
+				if checkpointReady {
+					defer operationLog.EndCheckpoint()
+				}
+			}
+		}
+
 		opts.Skip = indexSkipPaths(opts.Roots)
 		progress := func(p localindex.Progress) {
 			a.post(func() {
@@ -152,7 +197,9 @@ func (a *app) scanLocalIndex(full bool) {
 		}
 		var p localindex.Progress
 		var err error
-		if full {
+		if checkpointErr != nil {
+			err = checkpointErr
+		} else if full {
 			p, err = x.Scan(ctx, opts, progress)
 		} else {
 			p, err = x.Update(ctx, opts, progress)
@@ -168,6 +215,13 @@ func (a *app) scanLocalIndex(full bool) {
 			saveErr = x.SaveSnapshot(ctx, filename, opts, localindex.SnapshotMeta{Partial: p.Errors > 0, Errors: p.Errors, Messages: p.Messages})
 			if saveErr == nil {
 				_, compactErr = x.LoadSnapshot(ctx, filename, opts, nil)
+				status = x.Status()
+			}
+		}
+		if checkpointReady && err == nil && saveErr == nil && compactErr == nil && p.Errors == 0 {
+			checkpointErr = operationLog.CommitCheckpoint(ctx, filename)
+			if checkpointErr == nil {
+				x.ClearDeltas()
 				status = x.Status()
 			}
 		}
@@ -202,6 +256,11 @@ func (a *app) scanLocalIndex(full bool) {
 					}
 				}
 			}
+			if checkpointErr != nil {
+				m.err = "索引日志未能建立检查点：" + checkpointErr.Error()
+			}
+			m.liveReplay = true
+			a.startLiveIndex()
 			a.indexChanged()
 		})
 	}()
@@ -210,7 +269,7 @@ func (a *app) scanLocalIndex(full bool) {
 // indexChanged searches again, as the index of this computer changed, on
 // the page of the search.
 func (a *app) indexChanged() {
-	if a.onSearch() && len(a.gsearch.groups) > 0 && !a.gsearch.busy() {
+	if a.onSearch() && len(a.gsearch.groups) > 0 {
 		a.runSearch(0)
 	}
 }
@@ -241,10 +300,16 @@ func (a *app) localIndexStatus(c *ui.Context) {
 		text, dot = "尚未建立索引", t.TextMuted
 	default:
 		text = "已索引 " + groupDigits(int64(m.status.Count)) + " 项"
+		if m.status.Approximate {
+			text = "索引项数正在核对"
+		}
+		if m.status.Delta {
+			text += " · 含实时变更"
+		}
 		if !m.status.Updated.IsZero() {
 			text += " · 更新于 " + m.status.Updated.Format("01-02 15:04")
 		}
-		if a.localCachePath != "" && m.status.Version > 0 && m.savedVersion != m.status.Version {
+		if a.localCachePath != "" && m.status.Version > 0 && m.savedVersion != m.status.Version && !m.status.Delta {
 			tip, dot = "当前索引尚未保存，下次启动需要重新建立", t.Warning
 		}
 	}

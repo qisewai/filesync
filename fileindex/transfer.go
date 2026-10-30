@@ -106,6 +106,11 @@ func (c *Client) DownloadFile(ctx context.Context, root int64, p, dest string, o
 		pr.Total = 0
 	}
 	mtime, _ := http.ParseTime(res.Header.Get("Last-Modified"))
+	if c.BeforeLocalWrite != nil {
+		if err := c.BeforeLocalWrite(dest); err != nil {
+			return err
+		}
+	}
 	return writeFile(dest, res.Body, 0o644, mtime, func(n int64) {
 		pr.Done += n
 		if onProgress != nil {
@@ -178,7 +183,12 @@ func (c *Client) Download(ctx context.Context, root int64, paths []string, dest 
 	defer res.Body.Close()
 	pr := Progress{}
 	pr.Total, _ = strconv.ParseInt(res.Header.Get("X-Total-Size"), 10, 64)
-	x := &extractor{dest: dest}
+	x := &extractor{dest: dest, guard: c.BeforeLocalWrite}
+	if x.guard != nil {
+		if err := x.guard(dest); err != nil {
+			return nil, err
+		}
+	}
 	if err := os.MkdirAll(dest, 0o755); err != nil {
 		return nil, err
 	}
@@ -243,6 +253,7 @@ func (r *archiveTail) complete() bool {
 
 // extractor unpacks a tar stream into a directory, never out of it.
 type extractor struct {
+	guard    func(string) error
 	dest     string
 	errs     []error
 	dirTimes []dirTime
@@ -309,6 +320,12 @@ func (x *extractor) extract(tr *tar.Reader, onBytes func(int64, string)) error {
 		if err != nil {
 			x.errs = append(x.errs, err)
 			continue
+		}
+		if x.guard != nil {
+			if err := x.guard(dst); err != nil {
+				x.errs = append(x.errs, err)
+				continue
+			}
 		}
 		name := strings.TrimSuffix(h.Name, "/")
 		switch h.Typeflag {

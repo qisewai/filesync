@@ -69,7 +69,7 @@ func (x *Index) scan(ctx context.Context, opts ScanOptions, progress func(Progre
 		return Progress{}, fmt.Errorf("索引目录过多")
 	}
 	filter, _ := engine.NewFilter(opts.Excludes)
-	previous, err := materialize(ctx, x.snap.Load())
+	previous, err := materialize(ctx, x.base.Load())
 	if err != nil {
 		return Progress{}, err
 	}
@@ -352,8 +352,8 @@ func readDirectory(ctx context.Context, t directoryTask, filter *engine.Filter, 
 }
 func preserveFailed(ctx context.Context, b *builder, old *rootData, failed []string, filter *engine.Filter, blocked func(string) bool) error {
 	dirs := map[string]uint32{}
-	for i, p := range b.data.dirs {
-		dirs[p] = uint32(i)
+	for p, id := range b.dirIDs {
+		dirs[p] = id
 	}
 	// Enumerations may return a partial directory before failing; never add
 	// duplicate records from the old snapshot for those already observed.

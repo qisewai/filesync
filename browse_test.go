@@ -2,11 +2,13 @@ package main
 
 import (
 	"context"
+	"fmt"
 	"image/png"
 	"net/http"
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -357,8 +359,8 @@ func TestCopyAndMoveToAnotherServer(t *testing.T) {
 	h.settle()
 	h.tt.Key(ui.Ctrl, ui.KeyV)
 	h.settle()
-	h.want("替换目标中同名的项？")
-	h.click("替换")
+	h.want("合并同名目录并覆盖文件？")
+	h.click("合并并覆盖")
 	h.waitTransfers()
 	if b, _ := os.ReadFile(filepath.Join(f2.Root, "收", "笔记.txt")); string(b) != "notes" {
 		t.Fatalf("copy %q", b)
@@ -415,8 +417,8 @@ func TestCopyAndMoveBetweenComputerAndServer(t *testing.T) {
 	h.clickPage("笔记.txt")
 	h.tt.Key(ui.Ctrl, ui.KeyC)
 	paste(localLocation(dest))
-	h.want("替换本机同名的项？")
-	h.click("替换")
+	h.want("合并同名目录并覆盖文件？")
+	h.click("合并并覆盖")
 	h.waitTransfers()
 	if b, _ := os.ReadFile(filepath.Join(dest, "笔记.txt")); string(b) != "notes" {
 		t.Fatalf("copy to computer %q", b)
@@ -485,11 +487,12 @@ func TestLocalCopyAndMove(t *testing.T) {
 	}
 	h.want("a (2).txt")
 
-	// Cut, pasted into a folder chosen, from its menu.
+	// Cut, then open the destination and paste into the displayed folder.
 	h.clickPage("a (2).txt")
 	h.tt.Key(ui.Ctrl, ui.KeyX)
-	h.clickPage("子")
-	h.menu("子", "粘贴到此文件夹")
+	h.a.openLocal(filepath.Join(dir, "子"))
+	h.settle()
+	h.menu("孙", "粘贴")
 	h.waitTransfers()
 	h.settle()
 	if _, err := os.Stat(filepath.Join(dir, "子", "a (2).txt")); err != nil {
@@ -500,6 +503,8 @@ func TestLocalCopyAndMove(t *testing.T) {
 	}
 
 	// A folder into itself.
+	h.a.openLocal(dir)
+	h.settle()
 	h.clickPage("子")
 	h.tt.Key(ui.Ctrl, ui.KeyC)
 	h.a.openLocal(filepath.Join(dir, "子", "孙"))
@@ -616,4 +621,90 @@ func TestServerProps(t *testing.T) {
 	h.settle()
 	h.want("服务器版本较旧，只显示基本信息")
 	h.want("6 字节")
+}
+
+// The file-page menu always targets the open directory, regardless of
+// whether the right-clicked row is a directory, a file, or empty space.
+func TestPasteMenuUsesShownDirectory(t *testing.T) {
+	for _, remote := range []bool{false, true} {
+		for _, target := range []string{"child", "file.txt"} {
+			t.Run(fmt.Sprintf("remote=%v/%s", remote, target), func(t *testing.T) {
+				var h *harness
+				var dir string
+				if remote {
+					f := fitest.New(t)
+					dir = f.Root
+					os.MkdirAll(filepath.Join(dir, "source"), 0o755)
+					os.MkdirAll(filepath.Join(dir, "dest", "child"), 0o755)
+					os.WriteFile(filepath.Join(dir, "dest", "file.txt"), nil, 0o644)
+					h = browserHarness(t, f)
+				} else {
+					dir = t.TempDir()
+					os.MkdirAll(filepath.Join(dir, "source"), 0o755)
+					os.MkdirAll(filepath.Join(dir, "dest", "child"), 0o755)
+					os.WriteFile(filepath.Join(dir, "dest", "file.txt"), nil, 0o644)
+					h = newHarness(t, &config.Store{Dir: t.TempDir()})
+					h.a.openLocal(dir)
+					h.settle()
+				}
+				h.clickPage("source")
+				h.tt.Key(ui.Ctrl, ui.KeyX)
+				if remote {
+					h.a.browse("dest")
+				} else {
+					h.a.openLocal(filepath.Join(dir, "dest"))
+				}
+				h.settle()
+				for _, sv := range h.a.store.Servers {
+					*h.a.sectionOpen("server/" + sv.ID) = false
+				}
+				h.tt.Frame()
+				if err := h.tt.RightClick(target); err != nil {
+					t.Fatal(err)
+				}
+				if menu := h.tt.Menu(); slices.Contains(menu, "粘贴到此文件夹") || !slices.Contains(menu, "粘贴") {
+					t.Fatalf("unexpected paste menu: %v", menu)
+				}
+				if err := h.tt.ChooseMenuItem("粘贴"); err != nil {
+					t.Fatal(err)
+				}
+				h.settle()
+				h.waitTransfers()
+				if _, err := os.Stat(filepath.Join(dir, "dest", "source")); err != nil {
+					t.Fatalf("paste did not target displayed directory: %v", err)
+				}
+				if _, err := os.Stat(filepath.Join(dir, "source")); !os.IsNotExist(err) {
+					t.Fatal("source was not moved")
+				}
+			})
+		}
+	}
+}
+
+func TestRejectedLocalPasteKeepsCut(t *testing.T) {
+	dir := t.TempDir()
+	os.MkdirAll(filepath.Join(dir, "source", "child"), 0o755)
+	os.MkdirAll(filepath.Join(dir, "dest"), 0o755)
+	h := newHarness(t, &config.Store{Dir: t.TempDir()})
+	h.a.openLocal(dir)
+	h.settle()
+	h.clickPage("source")
+	h.tt.Key(ui.Ctrl, ui.KeyX)
+	cl := h.a.clip
+	for _, dest := range []string{dir, filepath.Join(dir, "source", "child")} {
+		h.a.openLocal(dest)
+		h.settle()
+		h.tt.Key(ui.Ctrl, ui.KeyV)
+		h.settle()
+		if h.a.clip != cl || h.a.errorMsg == "" {
+			t.Fatalf("rejected paste lost cut state or feedback: %q", h.a.errorMsg)
+		}
+	}
+	h.a.openLocal(filepath.Join(dir, "dest"))
+	h.settle()
+	h.tt.Key(ui.Ctrl, ui.KeyV)
+	h.waitTransfers()
+	if _, err := os.Stat(filepath.Join(dir, "dest", "source", "child")); err != nil {
+		t.Fatal(err)
+	}
 }

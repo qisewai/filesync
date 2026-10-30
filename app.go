@@ -10,6 +10,7 @@ import (
 	"filesync/config"
 	"filesync/engine"
 	"filesync/fileindex"
+	"filesync/localindex"
 
 	"github.com/egoist/mygo/ui"
 )
@@ -141,17 +142,21 @@ type app struct {
 	serverErr map[string]error
 	tree      map[string]*directoryNode
 
-	br             *browser // the root shown
-	local          *localBrowser
-	localIdx       *localIndexState
-	localCachePath string // supplied by main; tests use a private temporary cache
-	localBackups   [][]fileindex.Entry
-	localRoots     []localRoot
-	netMounts      []string // where network shares are mounted
-	preview        *preview
-	proxy          *fileindex.LocalProxy
-	recycle        *recycleBrowser
-	admin          *adminPage
+	br                 *browser // the root shown
+	local              *localBrowser
+	localIdx           *localIndexState
+	localCachePath     string // supplied by main; tests use a private temporary cache
+	localOpLog         *localindex.OperationLog
+	localOpLogRequired bool
+	localOpLogLoading  bool
+	localOpLogErr      error
+	localBackups       [][]fileindex.Entry
+	localRoots         []localRoot
+	netMounts          []string // where network shares are mounted
+	preview            *preview
+	proxy              *fileindex.LocalProxy
+	recycle            *recycleBrowser
+	admin              *adminPage
 	// docs is the document previewed, served to docView, the web view made
 	// the first time one shows; docErr tells why it could not be made.
 	docs    docFiles
@@ -672,6 +677,13 @@ func (a *app) stopBackground() {
 		a.save()
 	}
 	a.closed = true
+	if a.localOpLog != nil {
+		a.localOpLog.Close()
+		a.localOpLog = nil
+	}
+	if a.localIdx != nil && a.localIdx.liveCancel != nil {
+		a.localIdx.liveCancel()
+	}
 	if a.localIdx != nil && a.localIdx.cancel != nil {
 		a.localIdx.cancel()
 	}

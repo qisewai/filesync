@@ -1,5 +1,5 @@
-// Package localindex indexes file names and metadata only when explicitly
-// scanned. Published columnar chunks are immutable; searches retain a version
+// Package localindex indexes names and metadata through explicit scans and
+// operation-driven reconciliation. Columnar chunks are immutable; queries retain a version
 // so directory changes cannot mix pages from different scans.
 package localindex
 
@@ -43,34 +43,46 @@ const (
 )
 
 type rootData struct {
-	path       string
-	dirs, exts []string
-	foldDirs   []string // lowercase paths share storage with dirs when unchanged
-	dirStamp   []int64  // nanoseconds, only trusted when dirReady is set
-	dirReady   []byte
-	excludes   []string
-	chunks     []*chunk
-	count      int
+	replacedNames map[string]bool
+	removed       map[string]bool // immutable replacement regions in the base view
+	path          string
+	dirs, exts    []string // directory names; the root name is empty
+	dirParents    []uint32 // parent directory ID; root points to itself
+	dirStamp      []int64  // nanoseconds, only trusted when dirReady is set
+	dirReady      []byte
+	excludes      []string
+	chunks        []*chunk
+	count         int
 }
 type snapshot struct {
-	roots   []*rootData
-	version uint64
-	updated time.Time
+	delta      bool
+	exactCount atomic.Int64
+	pathsMu    sync.Mutex
+	pathBytes  atomic.Int64
+	paths      map[*rootData]*resolvedDirectories
+	roots      []*rootData
+	version    uint64
+	updated    time.Time
 }
 type Index struct {
-	snap    atomic.Pointer[snapshot]
-	writer  sync.Mutex
-	disk    sync.Mutex
-	version atomic.Uint64
+	base          atomic.Pointer[snapshot]
+	deltaMu       sync.Mutex
+	regions       map[string]region
+	ancestorRoots map[string]*rootData
+	snap          atomic.Pointer[snapshot]
+	writer        sync.Mutex
+	disk          sync.Mutex
+	version       atomic.Uint64
 }
 
 func New() *Index { return &Index{} }
 
 type Status struct {
-	Count   int
-	Version uint64
-	Updated time.Time
-	Bytes   int64
+	Delta, Approximate bool
+	Count              int
+	Version            uint64
+	Updated            time.Time
+	Bytes              int64
 }
 
 func (x *Index) Status() Status {
@@ -78,18 +90,13 @@ func (x *Index) Status() Status {
 	if s == nil {
 		return Status{}
 	}
-	out := Status{Version: s.version, Updated: s.updated}
+	out := Status{Delta: s.delta, Approximate: s.delta && s.exactCount.Load() < 0, Version: s.version, Updated: s.updated}
 	for _, r := range s.roots {
 		out.Count += r.count
 		for _, d := range r.dirs {
 			out.Bytes += int64(len(d) + 16)
 		}
-		for i, d := range r.foldDirs {
-			out.Bytes += 16
-			if d != r.dirs[i] {
-				out.Bytes += int64(len(d))
-			}
-		}
+		out.Bytes += int64(cap(r.dirParents) * 4)
 		out.Bytes += int64(cap(r.dirStamp)*8 + cap(r.dirReady))
 		for _, c := range r.chunks {
 			if c.file != nil {
@@ -105,10 +112,43 @@ func (x *Index) Status() Status {
 			}
 		}
 	}
+	if s.delta && s.exactCount.Load() >= 0 {
+		out.Count = int(s.exactCount.Load())
+	}
+	out.Bytes += s.pathBytes.Load()
 	return out
 }
 func (x *Index) publish(roots []*rootData, updated time.Time) {
-	x.snap.Store(&snapshot{roots: slices.Clone(roots), version: x.version.Add(1), updated: updated})
+	x.deltaMu.Lock()
+	defer x.deltaMu.Unlock()
+	base := &snapshot{roots: slices.Clone(roots), updated: updated}
+	x.base.Store(base)
+	// Scope changes invalidate patches from the previous settings.
+	for key, patch := range x.regions {
+		found := false
+		for _, r := range roots {
+			if r.path == patch.root && slices.Equal(r.excludes, patch.excludes) {
+				found = true
+				break
+			}
+		}
+		if !found {
+			delete(x.regions, key)
+		}
+	}
+	for root, meta := range x.ancestorRoots {
+		found := false
+		for _, r := range roots {
+			if r.path == root && slices.Equal(r.excludes, meta.excludes) {
+				found = true
+				break
+			}
+		}
+		if !found {
+			delete(x.ancestorRoots, root)
+		}
+	}
+	x.snap.Store(x.composeLocked(base, updated))
 }
 
 // NormalizeRoots removes duplicate and nested scopes without touching disk.
@@ -161,15 +201,21 @@ type builder struct {
 	data    rootData
 	current *chunk
 	extIDs  map[string]uint16
+	dirIDs  map[string]uint32
 }
 
 func newBuilder(root string) *builder {
-	return &builder{data: rootData{path: root, dirs: []string{root}, foldDirs: []string{strings.ToLower(root)}, dirStamp: []int64{0}, dirReady: []byte{0}, exts: []string{""}}, extIDs: map[string]uint16{"": 0}}
+	return &builder{data: rootData{path: root, dirs: []string{""}, dirParents: []uint32{0}, dirStamp: []int64{0}, dirReady: []byte{0}, exts: []string{""}}, extIDs: map[string]uint16{"": 0}, dirIDs: map[string]uint32{root: 0}}
 }
 func (b *builder) directory(p string) uint32 {
+	if id, ok := b.dirIDs[p]; ok {
+		return id
+	}
+	parent := b.directory(filepath.Dir(p))
 	id := uint32(len(b.data.dirs))
-	b.data.dirs = append(b.data.dirs, p)
-	b.data.foldDirs = append(b.data.foldDirs, strings.ToLower(p))
+	b.dirIDs[p] = id
+	b.data.dirs = append(b.data.dirs, filepath.Base(p))
+	b.data.dirParents = append(b.data.dirParents, parent)
 	b.data.dirStamp = append(b.data.dirStamp, 0)
 	b.data.dirReady = append(b.data.dirReady, 0)
 	return id
@@ -241,9 +287,24 @@ func (c *chunk) compact() {
 	} else if cap(c.folded) > len(c.folded) {
 		c.folded = slices.Clone(c.folded)
 	}
+	c.start = tightSlice(c.start)
 	if slices.Equal(c.start, c.foldStart) {
 		c.foldStart = c.start
+	} else {
+		c.foldStart = tightSlice(c.foldStart)
 	}
+	c.parent = tightSlice(c.parent)
+	c.size = tightSlice(c.size)
+	c.mtime = tightSlice(c.mtime)
+	c.ext = tightSlice(c.ext)
+	c.flags = tightSlice(c.flags)
+	c.kind = tightSlice(c.kind)
+}
+func tightSlice[T any](s []T) []T {
+	if cap(s) > len(s) {
+		return slices.Clone(s)
+	}
+	return s
 }
 
 func sameStorage[T any](a, b []T) bool {
@@ -256,7 +317,7 @@ func (b *builder) snapshot() *rootData {
 	// These append-only slices never change existing cells. Limit their capacity
 	// so consumers cannot overwrite the writer's still-growing storage.
 	r.dirs = r.dirs[:len(r.dirs):len(r.dirs)]
-	r.foldDirs = r.foldDirs[:len(r.foldDirs):len(r.foldDirs)]
+	r.dirParents = r.dirParents[:len(r.dirParents):len(r.dirParents)]
 	r.exts = r.exts[:len(r.exts):len(r.exts)]
 	// A directory's final stamp arrives after its entries. Unlike the path
 	// tables, these cells change, so published versions must own their copy.
@@ -279,6 +340,6 @@ func (c *chunk) lower(i int) []byte {
 	return c.folded[c.foldStart[i]:end]
 }
 func (r *rootData) entry(c *chunk, i int) Entry {
-	name, parent := c.name(i), r.dirs[c.parent[i]]
+	name, parent := c.name(i), r.dirPath(c.parent[i])
 	return Entry{Name: name, Path: filepath.Join(parent, name), Parent: parent, Ext: r.exts[c.ext[i]], Size: c.size[i], MTime: c.mtime[i], IsDir: c.flags[i]&flagDir != 0, Hidden: c.flags[i]&flagHidden != 0, Link: c.flags[i]&flagLink != 0}
 }

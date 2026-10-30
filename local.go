@@ -701,9 +701,6 @@ func (a *app) localDirectoryView(c *ui.Context, top, dir, name string, svg *ui.S
 		if m.Item("在新标签页中打开").Disabled(len(a.tabs) >= maxTabs).Chosen() {
 			a.openLocalInNewTab(dir)
 		}
-		if m.Item("粘贴到此文件夹").Disabled(!a.hasPaste(c.Services())).Chosen() {
-			a.paste(c.Services(), pasteTarget{local: dir})
-		}
 		a.favoriteMenuItem(m, &config.Favorite{Name: name, Local: dir})
 		m.Separator()
 		if m.Item("创建备份任务…").Chosen() {

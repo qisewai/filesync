@@ -63,6 +63,7 @@ func main() {
 		}
 	}()
 	a.localCachePath, err = localindex.DefaultSnapshotPath()
+	a.localOpLogRequired = true
 	if err != nil {
 		a.errorMsg = "无法确定本机索引快照位置：" + err.Error()
 	}
@@ -131,6 +132,7 @@ func main() {
 				a.syncTray()
 			})
 		}
+		a.initializeOperationLog()
 		a.ensureLocalIndex() // load only the persisted snapshot, never scan at startup
 		a.pickDir = func(title, start string) (string, error) {
 			paths, err := mygo.Dialog.Open(mygo.OpenDialogOptions{

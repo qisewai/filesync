@@ -226,22 +226,6 @@ func (a *app) pasteTargetShown() (pasteTarget, string) {
 	return pasteTarget{}, "请先打开要粘贴到的文件夹"
 }
 
-// folderTarget is a folder chosen in the page shown, to paste into.
-func (a *app) folderTarget(e fileindex.Entry) (pasteTarget, bool) {
-	switch {
-	case !e.IsDir:
-		return pasteTarget{}, false
-	case a.onRoot():
-		if a.br.root.ReadOnly {
-			return pasteTarget{}, false
-		}
-		return pasteTarget{server: a.br.server, root: a.br.root.ID, rootName: a.br.root.Name, dir: e.Path}, true
-	case a.onLocal():
-		return pasteTarget{local: e.Path}, true
-	}
-	return pasteTarget{}, false
-}
-
 // clipNow is what a paste pastes: what another app put on the system's
 // clipboard since, else what the app copied or cut.
 func (a *app) clipNow(sv ui.Services) *fileClip {
@@ -282,7 +266,9 @@ func (a *app) paste(sv ui.Services, t pasteTarget) {
 		for i, e := range cl.es {
 			paths[i] = e.Path
 		}
-		a.localTransfer(paths, cl.move, t.local)
+		if !a.localTransfer(paths, cl.move, t.local) {
+			return
+		}
 	case cl.local:
 		paths := make([]string, len(cl.es))
 		for i, e := range cl.es {
@@ -323,7 +309,8 @@ func (a *app) serverPaste(cl *fileClip, t pasteTarget, kind, title string) bool 
 			}
 		}
 		if here == len(es) {
-			return false // already there
+			a.errorMsg = "所选项目已在当前文件夹中，无需移动"
+			return false
 		}
 	}
 	c, ok := a.serverClient(cl.files.server)
@@ -403,7 +390,7 @@ func (a *app) uploadInto(files []string, move bool, server string, root int64, r
 				start()
 				return
 			}
-			a.ask("替换目标中同名的项？", fmt.Sprintf("目标目录中已经有 %s 等 %d 项与%s的同名。文件会被替换，文件夹会合并。", strings.Join(taken[:min(3, len(taken))], "、"), len(taken), kind), "替换", start)
+			a.ask("合并同名目录并覆盖文件？", fmt.Sprintf("目标目录中已经有 %s 等 %d 项与%s的同名。同名文件夹将合并，目标中独有的文件会保留；同名文件将被源文件覆盖，不再逐个询问。", strings.Join(taken[:min(3, len(taken))], "、"), len(taken), kind), "合并并覆盖", start)
 		})
 	}()
 }
@@ -429,7 +416,7 @@ func (a *app) clipShortcuts(c *ui.Context) {
 }
 
 // clipItems are the clipboard's items of a menu: cut, copy, and paste
-// into the folder shown, or into the folder chosen.
+// into the folder shown, consistently with Ctrl+V.
 func (a *app) clipItems(c *ui.Context, m *ui.Menu, es []fileindex.Entry) {
 	if len(es) > 0 {
 		_, whyCut := a.clipSource(true)
@@ -441,14 +428,6 @@ func (a *app) clipItems(c *ui.Context, m *ui.Menu, es []fileindex.Entry) {
 		}
 	}
 	paste := a.hasPaste(c.Services())
-	if len(es) == 1 {
-		if t, ok := a.folderTarget(es[0]); ok {
-			if m.Item("粘贴到此文件夹").Disabled(!paste).Chosen() {
-				a.paste(c.Services(), t)
-			}
-			return
-		}
-	}
 	_, why := a.pasteTargetShown()
 	if why != "" && len(es) > 0 {
 		return // nowhere to paste, as among results

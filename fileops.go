@@ -146,7 +146,7 @@ func (a *app) downloadInto(f *nasFiles, move bool, es []fileindex.Entry, dest st
 		start()
 		return
 	}
-	a.ask("替换本机同名的项？", fmt.Sprintf("%s 中已经有 %s 等 %d 项与下载的同名。文件会被替换，文件夹会合并。", dest, strings.Join(taken[:min(3, len(taken))], "、"), len(taken)), "替换", start)
+	a.ask("合并同名目录并覆盖文件？", fmt.Sprintf("%s 中已经有 %s 等 %d 项与下载的同名。同名文件夹将合并，目标中独有的文件会保留；同名文件将被源文件覆盖，不再逐个询问。", dest, strings.Join(taken[:min(3, len(taken))], "、"), len(taken)), "合并并覆盖", start)
 }
 
 // relayIn copies or moves the entries into dir of a root of another
@@ -188,7 +188,7 @@ func (a *app) relayIn(f *nasFiles, move bool, es []fileindex.Entry, to string, r
 				start()
 				return
 			}
-			a.ask("替换目标中同名的项？", fmt.Sprintf("目标目录中已经有 %s 等 %d 项与%s的同名。文件会被替换，文件夹会合并。", strings.Join(taken[:min(3, len(taken))], "、"), len(taken), kind), "替换", start)
+			a.ask("合并同名目录并覆盖文件？", fmt.Sprintf("目标目录中已经有 %s 等 %d 项与%s的同名。同名文件夹将合并，目标中独有的文件会保留；同名文件将被源文件覆盖，不再逐个询问。", strings.Join(taken[:min(3, len(taken))], "、"), len(taken), kind), "合并并覆盖", start)
 		})
 	}()
 }

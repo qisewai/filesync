@@ -11,6 +11,7 @@ import (
 
 	"filesync/config"
 	"filesync/fileindex"
+	"filesync/localindex"
 	"filesync/localtrash"
 
 	"github.com/egoist/mygo/ui"
@@ -667,7 +668,7 @@ func (a *app) upload(files []string) {
 		start()
 		return
 	}
-	a.ask("替换同名的项？", fmt.Sprintf("这里已经有 %s 等 %d 项与上传的同名。文件会被替换，文件夹会合并。", strings.Join(taken[:min(3, len(taken))], "、"), len(taken)), "替换", start)
+	a.ask("合并同名目录并覆盖文件？", fmt.Sprintf("这里已经有 %s 等 %d 项与上传的同名。同名文件夹将合并，目标中独有的文件会保留；同名文件将被源文件覆盖，不再逐个询问。", strings.Join(taken[:min(3, len(taken))], "、"), len(taken)), "合并并覆盖", start)
 }
 
 func (a *app) startUpload(files []string) {
@@ -690,6 +691,15 @@ func (a *app) startUploadTo(server string, root int64, where, dir string, files 
 	sv := a.store.Server(server)
 	if sv == nil || len(files) == 0 {
 		return
+	}
+	var operationLog *localindex.OperationLog
+	if move {
+		var err error
+		operationLog, err = a.operationLog()
+		if err != nil {
+			a.errorMsg = err.Error()
+			return
+		}
 	}
 	c := fileindex.New(sv.Addr, sv.Token)
 	title := filepath.Base(files[0])
@@ -722,8 +732,11 @@ func (a *app) startUploadTo(server string, root int64, where, dir string, files 
 			for _, f := range files {
 				if broken[filepath.Base(f)] {
 					failed = append(failed, filepath.Base(f)+"：没有完整上传，保留在本机")
-				} else if terr := localtrash.Move(f); terr != nil {
-					failed = append(failed, filepath.Base(f)+"：已上传，但本机文件未能移入回收站："+terr.Error())
+				} else {
+					opErr, logErr := loggedLocalOperation(operationLog, "trash", f, "", func() error { return localtrash.Move(f) })
+					if terr := errors.Join(opErr, logErr); terr != nil {
+						failed = append(failed, filepath.Base(f)+"：已上传，本机处理结果："+terr.Error())
+					}
 				}
 			}
 		}
@@ -761,6 +774,14 @@ func (a *app) startDownloadFrom(c *fileindex.Client, f *nasFiles, es []fileindex
 		a.startResumableDownload(c, f.server, es[0], dest)
 		return
 	}
+	operationLog, logOpenErr := a.operationLog()
+	if logOpenErr != nil {
+		a.errorMsg = logOpenErr.Error()
+		return
+	}
+	guardedClient := *c
+	guardedClient.BeforeLocalWrite = operationLog.CheckWritePath
+	c = &guardedClient
 	tr := a.addTransfer(kind, title+" → "+dest)
 	tr.server = f.server
 	tr.localDir, tr.folderReady = dest, true
@@ -780,14 +801,23 @@ func (a *app) startDownloadFrom(c *fileindex.Client, f *nasFiles, es []fileindex
 	go func() {
 		var failed []string
 		var err error
+		target := dest
 		if len(es) == 1 && !es[0].IsDir {
-			err = c.DownloadFile(ctx, root, es[0].Path, filepath.Join(dest, es[0].Name), onProgress)
-		} else {
-			var errs []error
-			errs, err = c.Download(ctx, root, paths(es), dest, onProgress)
+			target = filepath.Join(dest, es[0].Name)
+		}
+		var logErr error
+		err, logErr = loggedLocalOperation(operationLog, "download", "", target, func() error {
+			if len(es) == 1 && !es[0].IsDir {
+				return c.DownloadFile(ctx, root, es[0].Path, target, onProgress)
+			}
+			errs, fatal := c.Download(ctx, root, paths(es), dest, onProgress)
 			for _, e := range errs {
 				failed = append(failed, e.Error())
 			}
+			return errors.Join(append([]error{fatal}, errs...)...)
+		})
+		if logErr != nil {
+			failed = append(failed, logErr.Error())
 		}
 		// A move leaves the server only once all came whole.
 		moved := false

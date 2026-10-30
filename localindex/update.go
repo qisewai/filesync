@@ -22,7 +22,11 @@ type directoryCache struct {
 
 func cacheDirectories(ctx context.Context, r *rootData) (*directoryCache, error) {
 	c := &directoryCache{root: r, ids: make(map[string]int, len(r.dirs)), refs: make([][]uint64, len(r.dirs))}
-	for i, p := range r.dirs {
+	paths, err := directoryPathsContext(ctx, r.path, r.dirs, r.dirParents)
+	if err != nil {
+		return nil, err
+	}
+	for i, p := range paths {
 		c.ids[p] = i
 	}
 	for ci, ch := range r.chunks {

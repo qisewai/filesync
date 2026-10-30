@@ -32,6 +32,9 @@ const (
 
 // Client talks to one fileindex server.
 type Client struct {
+	// BeforeLocalWrite guards actual extraction destinations. Configure on a
+	// private client copy before starting a download, never on a shared client.
+	BeforeLocalWrite func(string) error
 	// Addr is the server's host and port, as 192.168.0.235:8090.
 	Addr string
 	// Token is the session, which Login sets.

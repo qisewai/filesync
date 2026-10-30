@@ -85,8 +85,16 @@ func (a *app) localMkdir(dir string) {
 		if _, err := os.Lstat(p); err == nil {
 			return fmt.Errorf("“%s”已经存在", name)
 		}
-		if err := os.Mkdir(p, 0o755); err != nil {
+		log, err := a.operationLog()
+		if err != nil {
 			return err
+		}
+		opErr, logErr := loggedLocalOperation(log, "mkdir", "", p, func() error { return os.Mkdir(p, 0o755) })
+		if logErr != nil {
+			a.errorMsg = logErr.Error()
+		}
+		if opErr != nil {
+			return opErr
 		}
 		a.localChanged(dir, name)
 		return nil
@@ -107,8 +115,16 @@ func (a *app) localRename(p string) {
 		if _, err := os.Lstat(to); err == nil && !strings.EqualFold(name, old) {
 			return fmt.Errorf("“%s”已经存在", name)
 		}
-		if err := os.Rename(p, to); err != nil {
+		log, err := a.operationLog()
+		if err != nil {
 			return err
+		}
+		opErr, logErr := loggedLocalOperation(log, "rename", p, to, func() error { return os.Rename(p, to) })
+		if logErr != nil {
+			a.errorMsg = logErr.Error()
+		}
+		if opErr != nil {
+			return opErr
 		}
 		a.localChanged(filepath.Dir(p), name)
 		return nil
@@ -131,15 +147,24 @@ func (a *app) localDelete(paths []string, forever bool) {
 	}
 	dir := filepath.Dir(paths[0])
 	a.ask(title, msg, ok, func() {
+		log, err := a.operationLog()
+		if err != nil {
+			a.errorMsg = err.Error()
+			return
+		}
 		var failed []string
 		for _, p := range paths {
-			var err error
+			action := "trash"
 			if forever {
-				err = os.RemoveAll(p)
-			} else {
-				err = localtrash.Move(p)
+				action = "delete"
 			}
-			if err != nil {
+			opErr, logErr := loggedLocalOperation(log, action, p, "", func() error {
+				if forever {
+					return os.RemoveAll(p)
+				}
+				return localtrash.Move(p)
+			})
+			if err := errors.Join(opErr, logErr); err != nil {
 				failed = append(failed, filepath.Base(p)+"："+err.Error())
 			}
 		}
@@ -157,9 +182,9 @@ func (a *app) localDelete(paths []string, forever bool) {
 // their own folder, a copy takes a numbered name, a move does nothing;
 // names taken elsewhere are asked about, files then replaced and folders
 // merged.
-func (a *app) localTransfer(files []string, move bool, dir string) {
+func (a *app) localTransfer(files []string, move bool, dir string) bool {
 	if len(files) == 0 {
-		return
+		return false
 	}
 	kind := "复制"
 	if move {
@@ -171,7 +196,7 @@ func (a *app) localTransfer(files []string, move bool, dir string) {
 	for _, f := range files {
 		if within(dir, f) {
 			a.errorMsg = fmt.Sprintf("不能把“%s”%s到它自己里面", filepath.Base(f), kind)
-			return
+			return false
 		}
 		to := filepath.Join(dir, filepath.Base(f))
 		switch {
@@ -187,9 +212,15 @@ func (a *app) localTransfer(files []string, move bool, dir string) {
 		items = append(items, item{f, to})
 	}
 	if len(items) == 0 {
-		return
+		a.errorMsg = "所选项目已在当前文件夹中，无需移动"
+		return false
 	}
-	start := func() {
+	start := func() bool {
+		log, err := a.operationLog()
+		if err != nil {
+			a.errorMsg = err.Error()
+			return false
+		}
 		title := filepath.Base(items[0].from)
 		if len(items) > 1 {
 			title = fmt.Sprintf("%s 等 %d 项", title, len(items))
@@ -216,12 +247,17 @@ func (a *app) localTransfer(files []string, move bool, dir string) {
 				if err = ctx.Err(); err != nil {
 					break
 				}
-				var e error
+				action := "copy"
 				if move {
-					e = moveTree(ctx, it.from, it.to, progress)
-				} else {
-					e = copyTree(ctx, it.from, it.to, progress)
+					action = "move"
 				}
+				opErr, logErr := loggedLocalOperation(log, action, it.from, it.to, func() error {
+					if move {
+						return moveTreeChecked(ctx, it.from, it.to, progress, log.CheckWritePath)
+					}
+					return copyTreeChecked(ctx, it.from, it.to, progress, log.CheckWritePath)
+				})
+				e := errors.Join(opErr, logErr)
 				if errors.Is(e, context.Canceled) {
 					err = e
 					break
@@ -238,12 +274,13 @@ func (a *app) localTransfer(files []string, move bool, dir string) {
 				}
 			})
 		}()
+		return true
 	}
 	if len(taken) == 0 {
-		start()
-		return
+		return start()
 	}
-	a.ask("替换同名的项？", fmt.Sprintf("%s 中已经有 %s 等 %d 项与%s的同名。文件会被替换，文件夹会合并。", dir, strings.Join(taken[:min(3, len(taken))], "、"), len(taken), kind), "替换", start)
+	a.ask("合并同名目录并覆盖文件？", fmt.Sprintf("%s 中已经有 %s 等 %d 项与%s的同名。同名文件夹将合并，目标中独有的文件会保留；同名文件将被源文件覆盖，不再逐个询问。", dir, strings.Join(taken[:min(3, len(taken))], "、"), len(taken), kind), "合并并覆盖", func() { start() })
+	return true
 }
 
 // numbered is a name for a copy of name in dir that nothing there has:
@@ -279,6 +316,14 @@ func treeSize(p string) int64 {
 // moveTree moves from to to: a rename where it can, else a copy, the
 // source removed once all of it was copied.
 func moveTree(ctx context.Context, from, to string, progress func(int64, string)) error {
+	return moveTreeChecked(ctx, from, to, progress, nil)
+}
+func moveTreeChecked(ctx context.Context, from, to string, progress func(int64, string), guard func(string) error) error {
+	if guard != nil {
+		if err := guard(to); err != nil {
+			return err
+		}
+	}
 	if _, err := os.Lstat(to); err != nil {
 		if err := os.Rename(from, to); err == nil {
 			progress(treeSize(to), filepath.Base(to))
@@ -293,7 +338,7 @@ func moveTree(ctx context.Context, from, to string, progress func(int64, string)
 			return nil
 		}
 	}
-	if err := copyTree(ctx, from, to, progress); err != nil {
+	if err := copyTreeChecked(ctx, from, to, progress, guard); err != nil {
 		return err
 	}
 	return os.RemoveAll(from)
@@ -307,6 +352,9 @@ func isCrossDevice(err error) bool {
 // copyTree copies from to to, folders merged, files replaced, links as
 // links, keeping times and permissions.
 func copyTree(ctx context.Context, from, to string, progress func(int64, string)) error {
+	return copyTreeChecked(ctx, from, to, progress, nil)
+}
+func copyTreeChecked(ctx context.Context, from, to string, progress func(int64, string), guard func(string) error) error {
 	return filepath.WalkDir(from, func(p string, d fs.DirEntry, err error) error {
 		if err != nil {
 			return err
@@ -316,6 +364,11 @@ func copyTree(ctx context.Context, from, to string, progress func(int64, string)
 		}
 		rel, _ := filepath.Rel(from, p)
 		dst := filepath.Join(to, rel)
+		if guard != nil {
+			if err := guard(dst); err != nil {
+				return err
+			}
+		}
 		info, err := d.Info()
 		if err != nil {
 			return err

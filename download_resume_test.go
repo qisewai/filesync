@@ -14,6 +14,7 @@ import (
 
 	"filesync/config"
 	"filesync/fileindex"
+	"filesync/localindex"
 )
 
 func waitDownload(t *testing.T, h *harness) {
@@ -68,6 +69,8 @@ func TestDownloadResumeAfterRestartFromTransferPage(t *testing.T) {
 		return &config.Store{Dir: dir, Servers: []*config.Server{{ID: "nas", Name: "NAS", Addr: addr, Token: token}}}
 	}
 	h := newHarness(t, settings("old-session"))
+	cache := filepath.Join(t.TempDir(), "index.bin")
+	h.a.localCachePath = cache
 	h.a.startDownloadFrom(fileindex.New(addr, "old-session"), &nasFiles{server: "nas"}, []fileindex.Entry{{Root: 1, Path: "照片备份.bin", Name: "照片备份.bin", Size: int64(len(content))}}, dest, false)
 	waitDownload(t, h)
 	if len(h.a.transfers) != 1 || h.a.transfers[0].state != "failed" || h.a.transfers[0].done != int64(cut) {
@@ -77,6 +80,7 @@ func TestDownloadResumeAfterRestartFromTransferPage(t *testing.T) {
 	h.a.stopBackground()
 	h.a.transferHistory.wait()
 	restarted := newHarness(t, settings("new-session"))
+	restarted.a.localCachePath = cache
 	restarted.settle()
 	restarted.click("传输任务")
 	restored := restarted.a.transfers[0]
@@ -97,6 +101,13 @@ func TestDownloadResumeAfterRestartFromTransferPage(t *testing.T) {
 	b, err := os.ReadFile(filepath.Join(dest, "照片备份.bin"))
 	if err != nil || !bytes.Equal(b, content) {
 		t.Fatalf("download differs: %v", err)
+	}
+	var records []localindex.Operation
+	if err := restarted.a.localOpLog.Replay(func(_ uint64, op localindex.Operation) error { records = append(records, op); return nil }); err != nil {
+		t.Fatal(err)
+	}
+	if len(records) != 4 || records[0].Action != "download" || records[1].Phase != "failed" || records[2].Action != "download" || records[3].Phase != "done" || records[3].TargetState.Kind != "file" {
+		t.Fatalf("download operation log: %+v", records)
 	}
 	if out := os.Getenv("FILESYNC_RESUME_AFTER_SNAPSHOT"); out != "" {
 		saveResumeSnapshot(t, restarted, out)

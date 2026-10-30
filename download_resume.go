@@ -79,6 +79,14 @@ func (a *app) resumeDownload(tr *transfer) {
 }
 
 func (a *app) runResumableDownload(c *fileindex.Client, tr *transfer) {
+	operationLog, err := a.operationLog()
+	if err != nil {
+		a.finishTransfer(tr, err, nil)
+		return
+	}
+	guardedClient := *c
+	guardedClient.BeforeLocalWrite = operationLog.CheckWritePath
+	c = &guardedClient
 	ctx, cancel := context.WithCancel(context.Background())
 	tr.state, tr.err, tr.note, tr.current = "running", "", "", ""
 	tr.errors, tr.finished, tr.started = nil, time.Time{}, time.Now()
@@ -96,18 +104,24 @@ func (a *app) runResumableDownload(c *fileindex.Client, tr *transfer) {
 				return
 			}
 		}
-		err := c.DownloadFileResumable(ctx, download.Root, download.Path, dest, download.Partial, func(p fileindex.Progress) {
-			a.post(func() {
-				if first {
-					tr.resumed, first = p.Done, false
-				}
-				tr.done, tr.total, tr.current = p.Done, p.Total, p.Current
-				if time.Since(lastSaved) >= time.Second {
-					a.saveTransferHistory()
-					lastSaved = time.Now()
-				}
+		opErr, logErr := loggedLocalOperation(operationLog, "download", "", dest, func() error {
+			return c.DownloadFileResumable(ctx, download.Root, download.Path, dest, download.Partial, func(p fileindex.Progress) {
+				a.post(func() {
+					if first {
+						tr.resumed, first = p.Done, false
+					}
+					tr.done, tr.total, tr.current = p.Done, p.Total, p.Current
+					if time.Since(lastSaved) >= time.Second {
+						a.saveTransferHistory()
+						lastSaved = time.Now()
+					}
+				})
 			})
 		})
-		a.post(func() { a.finishTransfer(tr, err, nil) })
+		var failed []string
+		if logErr != nil {
+			failed = append(failed, logErr.Error())
+		}
+		a.post(func() { a.finishTransfer(tr, opErr, failed) })
 	}()
 }

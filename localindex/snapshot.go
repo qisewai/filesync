@@ -15,12 +15,11 @@ import (
 	"path/filepath"
 	"runtime"
 	"slices"
-	"strings"
 	"time"
 )
 
 const snapshotHeaderSize = 104
-const snapshotFormat = 2
+const snapshotFormat = 3
 
 var snapshotMagic = [8]byte{'F', 'S', 'I', 'D', 'X', 'B', 'I', 'N'}
 var ErrSnapshotFormat = errors.New("索引快照损坏或格式不兼容")
@@ -64,7 +63,7 @@ func (x *Index) SaveSnapshot(ctx context.Context, filename string, opts ScanOpti
 	if err != nil {
 		return err
 	}
-	s := x.snap.Load()
+	s := x.base.Load()
 	if s == nil {
 		return fmt.Errorf("尚未建立索引")
 	}
@@ -93,6 +92,7 @@ func (x *Index) SaveSnapshot(ctx context.Context, filename string, opts ScanOpti
 	for _, r := range s.roots {
 		w.str(r.path)
 		w.strings(r.dirs)
+		w.array(r.dirParents)
 		w.strings(r.excludes)
 		w.strings(r.exts)
 		w.array(r.dirStamp)
@@ -194,7 +194,8 @@ func (x *Index) LoadSnapshot(ctx context.Context, filename string, opts ScanOpti
 	if _, err := io.ReadFull(f, header); err != nil {
 		return SnapshotMeta{}, ErrSnapshotFormat
 	}
-	if !bytes.Equal(header[:8], snapshotMagic[:]) || binary.LittleEndian.Uint32(header[8:]) != snapshotFormat || binary.LittleEndian.Uint32(header[12:]) > 1 {
+	format := binary.LittleEndian.Uint32(header[8:])
+	if !bytes.Equal(header[:8], snapshotMagic[:]) || (format != 2 && format != snapshotFormat) || binary.LittleEndian.Uint32(header[12:]) > 1 {
 		return SnapshotMeta{}, ErrSnapshotFormat
 	}
 	n := binary.LittleEndian.Uint64(header[16:])
@@ -215,11 +216,19 @@ func (x *Index) LoadSnapshot(ctx context.Context, filename string, opts ScanOpti
 	want, _ := NormalizeRoots(opts.Roots)
 	seenRoots := map[string]bool{}
 	for range roots {
-		rd := &rootData{path: r.str(), dirs: r.strings(), excludes: r.strings(), exts: r.strings()}
+		rd := &rootData{path: r.str(), dirs: r.strings()}
+		if format == snapshotFormat {
+			rd.dirParents = make([]uint32, len(rd.dirs))
+			readSnapshotArray(&r, rd.dirParents)
+			if r.err == nil {
+				_, r.err = directoryPathsContext(ctx, rd.path, rd.dirs, rd.dirParents)
+			}
+		}
+		rd.excludes, rd.exts = r.strings(), r.strings()
 		if r.err != nil {
 			break
 		}
-		if !slices.Contains(want, rd.path) || seenRoots[rd.path] || len(rd.dirs) == 0 || rd.dirs[0] != rd.path || len(rd.exts) == 0 || len(rd.exts) > 65536 || !slices.Equal(rd.excludes, opts.Excludes) {
+		if !slices.Contains(want, rd.path) || seenRoots[rd.path] || len(rd.dirs) == 0 || len(rd.exts) == 0 || len(rd.exts) > 65536 || !slices.Equal(rd.excludes, opts.Excludes) {
 			r.err = ErrSnapshotFormat
 			break
 		}
@@ -233,16 +242,8 @@ func (x *Index) LoadSnapshot(ctx context.Context, filename string, opts ScanOpti
 				break
 			}
 		}
-		rd.foldDirs = make([]string, len(rd.dirs))
-		for i, p := range rd.dirs {
-			if i%256 == 0 && ctx.Err() != nil {
-				return SnapshotMeta{}, ctx.Err()
-			}
-			if !filepath.IsAbs(p) || filepath.Clean(p) != p || !Within(p, rd.path) {
-				r.err = ErrSnapshotFormat
-				break
-			}
-			rd.foldDirs[i] = strings.ToLower(p)
+		if format == 2 {
+			rd.dirs, rd.dirParents, rd.dirStamp, rd.dirReady, r.err = directoryTree(rd)
 		}
 		parts := r.u32()
 		if uint64(parts)*40 > uint64(max(r.r.N, 0)) {
