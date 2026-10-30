@@ -6,8 +6,8 @@ import (
 	"testing"
 	"time"
 
-	"filesync/config"
 	"filemanager/remoteclient/fitest"
+	"filesync/config"
 	"github.com/egoist/mygo/ui"
 )
 
@@ -152,23 +152,16 @@ func TestPathBar(t *testing.T) {
 		t.Fatalf("went to %q, %s", h.a.br.path, h.a.errorMsg)
 	}
 
-	// Mistakes show as they are typed, and say so when gone to.
+	// Unknown paths are search text, without validation errors while typing.
 	h.click("编辑路径")
 	h.tt.Key(ui.Ctrl, ui.KeyA)
-	h.tt.Type("家哩/nas")
-	h.settle()
-	h.want("没有叫“家哩”的服务器")
-	h.tt.Key(ui.Ctrl, ui.KeyA)
-	h.tt.Type("家里/nsa/照片")
-	h.settle()
-	h.want("“家里”上没有索引目录“nsa”")
-	h.tt.Key(ui.Ctrl, ui.KeyA)
 	h.tt.Type("家里/nas/照片/没有")
-	h.tt.Key(0, ui.KeyEscape) // closes the suggestions
 	h.click("前往")
-	if h.a.br.path != "照片/2026" || h.a.errorMsg == "" {
-		t.Fatalf("went to %q, %q", h.a.br.path, h.a.errorMsg)
+	if !h.a.onSearch() || h.a.gsearch.scope != "folder" || h.a.errorMsg != "" {
+		t.Fatalf("invalid path: %s, %q", h.a.location(), h.a.errorMsg)
 	}
+	h.a.showDirectory(h.a.store.Servers[0].ID, h.a.roots[h.a.store.Servers[0].ID][0], "照片/2026")
+	h.settle()
 
 	// Of this computer: its places are suggested first, as full paths.
 	local := t.TempDir()
@@ -300,8 +293,12 @@ func TestSidebarClicksOpen(t *testing.T) {
 	}
 	h.click("家里")
 	h.want("文件夹 nas")
-	// Signed out, a click asks the password.
-	h.click("公司")
+	// Signed-out servers stay in management, not the navigation tree.
+	if h.tt.HasText("公司") {
+		t.Fatal("signed-out server is visible")
+	}
+	h.a.openLogin(store.Servers[1].ID, nil)
+	h.settle()
 	if !h.a.nas.open || h.a.nas.screen != screenLogin {
 		t.Fatalf("公司 opened %+v", h.a.nas.screen)
 	}

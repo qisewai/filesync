@@ -9,8 +9,8 @@ import (
 	"slices"
 	"strings"
 
-	"filesync/config"
 	"filemanager/remoteclient"
+	"filesync/config"
 
 	"github.com/egoist/mygo/ui"
 )
@@ -61,7 +61,15 @@ const crumbMenuMax = 300
 func (a *app) pathBar(c *ui.Context, key, label string, crumbs []crumb, text string) {
 	t := c.Theme()
 	edit := func() {
+		a.addressRequest++
+		a.addressPending = false
 		a.pathEditing, a.pathDirs = &pathEdit{key: key, text: text, open: true}, nil
+	}
+	if a.focusSearch {
+		a.addressRequest++
+		a.addressPending = false
+		a.focusSearch = false
+		a.pathEditing, a.pathDirs = &pathEdit{key: key, open: true}, nil
 	}
 	if e := a.pathEditing; e != nil && e.key == key {
 		a.pathEditor(c, e, label)
@@ -90,7 +98,8 @@ func (a *app) pathBar(c *ui.Context, key, label string, crumbs []crumb, text str
 		}
 	})
 	// The rest of the bar edits the path.
-	blank := ui.ButtonBase(c.Key(key + "/blank")).Grow(1).MinWidth(16).Height(28).Label("编辑路径").Tooltip("点击输入路径（Ctrl+L）").OnClick(edit)
+	blank := ui.ButtonBase(c.Key(key + "/blank")).Grow(1).MinWidth(16).Height(28).Label("编辑路径").Tooltip("输入路径或搜索当前文件夹（Ctrl+L / Ctrl+F）").OnClick(edit)
+	blank.Children(func() { ui.Text(c, "输入路径或搜索…").FontSize(12).TextColor(t.TextMuted).SingleLine() })
 	if blank.Hovered() {
 		blank.Background(t.SurfaceHover.Alpha(0.5))
 	}
@@ -203,13 +212,11 @@ func (a *app) pathEditor(c *ui.Context, e *pathEdit, label string) {
 		cb := ui.ComboboxBase(c.Key(fmt.Sprintf("input/%d", e.gen)), &e.text)
 		// After the input: it writes what was typed into e.text as it is
 		// built, which the options must match in the same pass.
-		options, problem := a.pathOptions(e.text)
+		options, _ := a.pathOptions(e.text)
 		border := t.Accent
-		if problem != "" {
-			border = t.Danger
-		}
+
 		in := cb.Input.Grow(1).Shrink(1).MinWidth(80).Padding(5, 8).Radius(t.Radius).Background(t.Surface).Border(1, border).
-			Label("编辑" + label).Placeholder("服务器/索引目录/文件夹，或本机的完整路径").AutoFocus()
+			Label("编辑" + label).Placeholder("输入路径，或搜索当前文件夹（支持 * 和 ?）").AutoFocus()
 		if e.open {
 			e.open = false
 			cb.SetOpen(true)
@@ -245,21 +252,24 @@ func (a *app) pathEditor(c *ui.Context, e *pathEdit, label string) {
 		}
 		switch v, ok := cb.Chosen(); {
 		case ok:
-			complete(v)
+			if strings.TrimRight(e.text, "/\\") == strings.TrimRight(v, "/\\") {
+				a.pathEditing = nil
+				a.submitLocation(v)
+			} else {
+				complete(v)
+			}
 		case in.Shortcut(0, ui.KeyTab) && len(options) > 0:
 			complete(options[0].value)
 		case in.Submitted():
 			a.pathEditing = nil
-			a.goPath(strings.TrimSpace(e.text))
+			a.submitLocation(e.text)
 		case !cb.Open() && in.Shortcut(0, ui.KeyEscape):
 			a.pathEditing = nil
 		}
-		if problem != "" {
-			ui.Text(c, problem).FontSize(12).TextColor(t.Danger).SingleLine().Shrink(2).MinWidth(0).Tooltip(problem)
-		}
-		goBtn := iconButton(c, "go", iconNext, "前往", "前往（Enter）", false, func() {
+
+		goBtn := iconButton(c, "go", iconNext, "前往", "前往路径或搜索（Enter）", false, func() {
 			a.pathEditing = nil
-			a.goPath(strings.TrimSpace(e.text))
+			a.submitLocation(e.text)
 		})
 		cancel := iconButton(c, "cancel", iconClose, "取消编辑路径", "取消（Esc）", false, func() { a.pathEditing = nil })
 		within = focused || goBtn.Focused() || cancel.Focused()
@@ -288,6 +298,9 @@ func (a *app) pathOptions(text string) ([]pathOption, string) {
 	switch len(parts) {
 	case 1: // a server, or a place of this computer
 		for _, sv := range a.store.Servers {
+			if !a.serverConnected(sv.ID) {
+				continue
+			}
 			opts = append(opts, pathOption{value: sv.Title() + "/", name: sv.Title(), hint: sv.Addr, svg: iconServer})
 		}
 		for _, r := range a.localRoots {
@@ -302,6 +315,9 @@ func (a *app) pathOptions(text string) ([]pathOption, string) {
 	sv := a.serverTitled(parts[0])
 	if sv == nil {
 		return nil, "没有叫“" + parts[0] + "”的服务器"
+	}
+	if a.serverErr[sv.ID] != nil {
+		return nil, "服务器未连接，请在设置中手动连接"
 	}
 	roots, ok := a.roots[sv.ID]
 	if !ok || a.rootsLoading[sv.ID] != nil {
@@ -454,6 +470,10 @@ func (a *app) goPath(p string) {
 	sv := a.serverTitled(parts[0])
 	if sv == nil {
 		a.errorMsg = "没有叫“" + parts[0] + "”的服务器。服务器路径写成“服务器/索引目录/文件夹”，本机写完整路径"
+		return
+	}
+	if a.serverErr[sv.ID] != nil {
+		a.errorMsg = "服务器未连接，请在设置中手动连接"
 		return
 	}
 	roots, ok := a.roots[sv.ID]

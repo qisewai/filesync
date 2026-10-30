@@ -6,9 +6,9 @@ import (
 	"slices"
 	"testing"
 
-	"filesync/config"
 	"filemanager/remoteclient"
 	"filemanager/remoteclient/fitest"
+	"filesync/config"
 
 	"github.com/egoist/mygo/ui"
 )
@@ -71,9 +71,11 @@ func TestDeleteForever(t *testing.T) {
 	}
 	// Typing the search, Delete deletes text, not files; the search shows
 	// on its page, which back leaves.
-	h.click("搜索文件")
+	h.tt.Key(ui.Ctrl, ui.KeyF)
 	h.tt.Type("临")
+	h.tt.Key(0, ui.KeyEnter)
 	h.settle()
+	h.click("全局搜索")
 	h.tt.Key(0, ui.KeyDelete)
 	h.settle()
 	if h.a.deleting != nil || !h.a.onSearch() {

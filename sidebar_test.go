@@ -5,8 +5,8 @@ import (
 	"path/filepath"
 	"testing"
 
-	"filesync/config"
 	"filemanager/remoteclient/fitest"
+	"filesync/config"
 	"github.com/egoist/mygo/ui"
 )
 
@@ -50,7 +50,7 @@ func TestSidebarHidesRestoresAndPersists(t *testing.T) {
 	h.a.store.SidebarWidth = 300
 	h.tt.Frame()
 	before := h.a.location()
-	search, _ := h.tt.Find("搜索文件")
+	search, _ := h.tt.Find("编辑路径")
 	h.click("隐藏侧边栏")
 	for range 3 {
 		h.tt.Frame()
@@ -58,7 +58,7 @@ func TestSidebarHidesRestoresAndPersists(t *testing.T) {
 	if !h.a.sidebarHidden || h.tt.HasText("过滤侧边栏") || h.tt.HasText("隐藏侧边栏") {
 		t.Fatalf("sidebar still present (hidden=%v): %q", h.a.sidebarHidden, h.tt.Texts())
 	}
-	wide, ok := h.tt.Find("搜索文件")
+	wide, ok := h.tt.Find("编辑路径")
 	if !ok || wide.X >= search.X {
 		t.Fatalf("page did not expand: before %+v, after %+v", search, wide)
 	}

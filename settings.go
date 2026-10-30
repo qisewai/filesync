@@ -67,6 +67,9 @@ func (a *app) serversCard(c *ui.Context) {
 				})
 				if sv.Token == "" {
 					ui.Button(c.Key("login/"+sv.ID), "登录…").OnClick(func() { a.openLogin(sv.ID, func() {}) })
+				} else if !a.serverConnected(sv.ID) {
+					ui.Button(c.Key("connect/"+sv.ID), "连接").Label("连接 " + sv.Title()).
+						Disabled(a.rootsLoading[sv.ID] != nil).OnClick(func() { a.reconnect(sv) })
 				} else {
 					ui.Button(c.Key("manage/"+sv.ID), "管理").Label("管理 " + sv.Title()).OnClick(func() { a.openAdmin(sv.ID, "roots") })
 				}

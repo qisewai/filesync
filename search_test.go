@@ -7,9 +7,9 @@ import (
 	"strings"
 	"testing"
 
-	"filesync/config"
 	"filemanager/remoteclient"
 	"filemanager/remoteclient/fitest"
+	"filesync/config"
 
 	"github.com/egoist/mygo/ui"
 )
@@ -113,9 +113,10 @@ func TestServerSearchScopeAndFilters(t *testing.T) {
 	h.click("文件夹 项目")
 	g := h.find("报告")
 	s := h.a.gsearch
-	if s.scope != h.a.store.Servers[0].ID || g.total != 3 {
-		t.Fatalf("all the server: %q %d", s.scope, g.total)
+	if s.scope != "folder" || g.total != 1 {
+		t.Fatalf("current folder: %q %d", s.scope, g.total)
 	}
+	h.click("搜索范围 家里")
 	roots := map[string]bool{}
 	for _, e := range s.items {
 		roots[e.RootName] = true
@@ -218,6 +219,7 @@ func TestSearchResultOperations(t *testing.T) {
 		t.Fatal("the search did not follow")
 	}
 
+	h.click("搜索范围 家里")
 	choose("报告封面.jpg")
 	h.tt.Key(0, ui.KeyDelete)
 	h.want("1 项会移到 fileindex 的回收站，可以在左侧的回收站中恢复。")
@@ -233,5 +235,79 @@ func TestSearchResultOperations(t *testing.T) {
 	h.tt.Key(ui.Ctrl, ui.KeyC)
 	if !strings.Contains(h.a.errorMsg, "来自不同位置") {
 		t.Fatalf("copied results of several places at once: %q", h.a.errorMsg)
+	}
+}
+
+func TestSearchPatternsAndInvalidRegexUI(t *testing.T) {
+	h, _, _ := searchHarness(t)
+	h.a.store.Servers = nil
+	h.a.openSearch("本机*.pdf")
+	h.settle()
+	s := h.a.gsearch
+	if len(s.items) != 1 || s.items[0].Name != "本机报告.pdf" {
+		t.Fatalf("glob %+v", s.items)
+	}
+	h.want("正则表达式")
+	h.click("正则表达式")
+	s.query = `^本机.*\.pdf$`
+	h.a.runSearch(0)
+	h.settle()
+	if !s.filter.regex || len(s.items) != 1 {
+		t.Fatalf("regex %v %+v", s.filter.regex, s.items)
+	}
+	s.query = "["
+	h.a.runSearch(0)
+	h.settle()
+	if s.queryError == "" || len(s.groups) != 0 || len(s.items) != 0 || s.cancel != nil {
+		t.Fatal("invalid regex started a query or kept stale results")
+	}
+	s.query = "本机"
+	h.click("正则表达式")
+	h.a.runSearch(0)
+	h.settle()
+	if s.queryError != "" || len(s.items) != 1 {
+		t.Fatal("failed to recover from invalid regex")
+	}
+}
+
+func TestSearchMovesIntoNavigationToolbar(t *testing.T) {
+	h, _, _ := searchHarness(t)
+	h.a.openSearch("")
+	h.a.focusSearch = true
+	h.settle()
+	center, ok := h.tt.Find("全局搜索")
+	if !ok {
+		t.Fatal("missing landing field")
+	}
+	h.tt.Type("报告")
+	h.tt.Key(0, ui.KeyEnter)
+	h.settle()
+	field, ok := h.tt.Find("全局搜索")
+	if !ok {
+		t.Fatal("missing toolbar field")
+	}
+	nav, ok := h.tt.Find("导航")
+	if !ok {
+		t.Fatal("missing navigation")
+	}
+	if field.Y >= center.Y || field.Y+field.H/2 < nav.Y || field.Y+field.H/2 > nav.Y+nav.H {
+		t.Fatalf("search not beside navigation: field=%+v navigation=%+v landing=%+v", field, nav, center)
+	}
+	h.tt.Type("甲")
+	h.tt.Key(0, ui.KeyEnter)
+	h.settle()
+	if h.a.gsearch.query != "报告甲" {
+		t.Fatalf("focus lost on move: %q", h.a.gsearch.query)
+	}
+	h.click("清除搜索")
+	h.settle()
+	if h.a.searchInToolbar {
+		t.Fatal("empty search did not return to landing")
+	}
+	h.tt.Type("报告")
+	h.tt.Key(0, ui.KeyEnter)
+	h.settle()
+	if h.a.gsearch.query != "报告" {
+		t.Fatal("focus lost when clearing")
 	}
 }

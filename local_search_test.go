@@ -40,17 +40,12 @@ func (h *harness) indexMenu(item string) {
 // page of the search, and returns the results of the place shown.
 func (h *harness) find(q string) *searchGroup {
 	h.t.Helper()
-	label := "全局搜索"
-	switch {
-	case h.a.onLocal():
-		label = "本机搜索"
-	case h.a.onRoot():
-		label = "搜索文件"
-	}
-	if label == "全局搜索" {
-		h.replaceField(label, q)
+	if h.a.onLocal() || h.a.onRoot() {
+		h.tt.Key(ui.Ctrl, ui.KeyF)
+		h.tt.Type(q)
+		h.tt.Key(0, ui.KeyEnter)
 	} else {
-		h.typeInto(label, q)
+		h.replaceField("全局搜索", q)
 	}
 	h.settle()
 	s := h.a.gsearch
@@ -104,7 +99,7 @@ func TestLocalSearchManualWorkflow(t *testing.T) {
 	}
 	// The search of this computer, from its page, before the index.
 	g := h.find("项目")
-	if h.a.gsearch.scope != localPlace || g.total != 0 {
+	if h.a.gsearch.scope != "folder" || g.total != 0 {
 		t.Fatalf("unbuilt index: scope %q, %d", h.a.gsearch.scope, g.total)
 	}
 	h.want("本机还没有建立索引，搜不到本机的文件。建立索引只读取文件名、大小和修改时间。")

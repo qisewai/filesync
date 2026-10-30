@@ -24,6 +24,7 @@ import (
 // searchFilter narrows a search: by the kind of file, the extensions, the
 // time of the last change and the size. Each is the label shown.
 type searchFilter struct {
+	regex                  bool
 	kind, exts, when, size string
 }
 
@@ -84,6 +85,7 @@ func (f searchFilter) sizes() (lo, hi int64) {
 
 // local puts the filter in a query of the index of this computer.
 func (f searchFilter) local(q *localindex.Query) {
+	q.Regex = f.regex
 	q.Category = kindKeys[f.kind]
 	q.Exts = f.extList()
 	q.From = f.since()
@@ -92,6 +94,7 @@ func (f searchFilter) local(q *localindex.Query) {
 
 // nas puts the filter in a search of a server.
 func (f searchFilter) nas(o *fileindex.SearchOptions) {
+	o.Regex = f.regex
 	switch k := kindKeys[f.kind]; k {
 	case "dir", "file":
 		o.Type = k
@@ -138,6 +141,7 @@ func (a *app) searchBox(c *ui.Context, key, label string, query *string, scope, 
 func (a *app) searchField(c *ui.Context, key, label string, query *string, scope, placeholder string, menu func(m *ui.Menu), big bool) (changed, submitted, cleared bool) {
 	t := c.Theme()
 	var in ui.Element
+	modeChanged := false
 	// The rest of the toolbar, as wide as it is.
 	box := ui.Row(c.Key(key+"-box")).Grow(1).Shrink(1).MinWidth(260).AlignItems(ui.Center).Gap(6).
 		Padding(3, 6, 3, 3).Radius(t.Radius).Background(t.Surface).Border(1, t.Border).Cursor(ui.CursorText)
@@ -160,7 +164,7 @@ func (a *app) searchField(c *ui.Context, key, label string, query *string, scope
 		}
 		ui.Icon(c, iconSearch).FontSize(size).TextColor(t.TextMuted)
 		handle := &a.searchFocus
-		if big {
+		if key == "global-search" {
 			// Its own: in the frame a field of the toolbar starts a search,
 			// both are built.
 			handle = &a.searchPageFocus
@@ -168,6 +172,28 @@ func (a *app) searchField(c *ui.Context, key, label string, query *string, scope
 		in = ui.TextInputBase(c.Key(key), query).Label(label).Placeholder(placeholder).Grow(1).Shrink(1).MinWidth(0).Bind(handle)
 		if big {
 			in.FontSize(16)
+		}
+		if key == "global-search" && a.gsearch != nil {
+			state := &a.gsearch.filter.regex
+			tip := "正则表达式：关闭（支持关键词、* 和 ?）"
+			if *state {
+				tip = "正则表达式：开启"
+			}
+			toggle := ui.ButtonBase(c.Key(key+"-regex")).Size(28, 28).Radius(6).
+				AlignItems(ui.Center).Justify(ui.Center).Label("正则表达式").Tooltip(tip).Cursor(ui.CursorPointer)
+			if toggle.Clicked() {
+				*state = !*state
+				modeChanged = true
+				in.Focus()
+			}
+			color := t.TextMuted
+			if *state {
+				color = t.Accent
+				toggle.Background(t.Accent.Alpha(0.12))
+			} else if toggle.Hovered() {
+				toggle.Background(t.SurfaceHover)
+			}
+			toggle.Children(func() { ui.Text(c, ".*").FontSize(16).Bold().TextColor(color) })
 		}
 		if *query != "" {
 			// Clicked as it is built: a callback would run after this returns.
@@ -187,6 +213,9 @@ func (a *app) searchField(c *ui.Context, key, label string, query *string, scope
 	case in.Focused():
 		box.BorderColor(t.Accent)
 	}
+	if key == "global-search" && a.gsearch != nil && a.gsearch.queryError != "" {
+		box.BorderColor(t.Danger)
+	}
 	if box.Clicked() {
 		in.Focus()
 	}
@@ -201,7 +230,7 @@ func (a *app) searchField(c *ui.Context, key, label string, query *string, scope
 		}
 	}
 	// Each reports once.
-	changed, submitted = in.Changed(), in.Submitted()
+	changed, submitted = in.Changed() || modeChanged, in.Submitted()
 	if in.Shortcut(0, ui.KeyEscape) && *query != "" {
 		cleared = true
 	}
@@ -209,7 +238,7 @@ func (a *app) searchField(c *ui.Context, key, label string, query *string, scope
 		*query = ""
 		changed = false
 	}
-	a.searchTyping = in.Focused()
+	a.searchTyping = a.searchTyping || in.Focused()
 	return changed, submitted, cleared
 }
 
@@ -238,8 +267,9 @@ func (a *app) remember(q string) {
 
 // globalSearch is the search, and its results.
 type globalSearch struct {
-	query  string
-	filter searchFilter
+	queryError string
+	query      string
+	filter     searchFilter
 	// scope is the tab shown: "all", "folder", localPlace or a server's ID.
 	scope  string
 	folder *searchFolder // the folder the search began in, if any
@@ -437,6 +467,16 @@ func (a *app) runSearch(wait time.Duration) {
 		s.cancel = nil
 	}
 	q := strings.TrimSpace(s.query)
+	if s.filter.regex {
+		q = s.query
+	}
+	s.queryError = ""
+	if err := localindex.ValidateQuery(q, s.filter.regex); err != nil {
+		s.queryError = err.Error()
+		s.groups, s.hits, s.items = nil, nil, nil
+		s.sel.Clear()
+		return
+	}
 	if q == "" && !s.filter.active() {
 		s.groups, s.hits, s.items = nil, nil, nil
 		s.sel.Clear()
@@ -463,7 +503,7 @@ func (a *app) runSearch(wait time.Duration) {
 			a.searchIn(ctx, &searchGroup{key: localPlace, source: localPlace, name: "本机"}, q, nil)
 		}
 		for _, sv := range a.store.Servers {
-			if sv.Token != "" {
+			if a.serverConnected(sv.ID) {
 				a.searchIn(ctx, &searchGroup{key: sv.ID, source: sv.ID, name: sv.Title()}, q, nil)
 			}
 		}
@@ -492,6 +532,9 @@ func (s *globalSearch) group(key string) *searchGroup {
 // searchIn searches a place, in folder f if any, for the first page of its
 // results.
 func (a *app) searchIn(ctx context.Context, g *searchGroup, q string, f *searchFolder) {
+	if g.source != localPlace && !a.serverConnected(g.source) {
+		return
+	}
 	s := a.gsearch
 	gen := s.gen
 	g.loading, g.q = true, q
@@ -721,7 +764,7 @@ func (a *app) scopeMenu(m *ui.Menu, scope string, choose func(string)) {
 	}
 	scopes = append(scopes, "all", localPlace)
 	for _, sv := range a.store.Servers {
-		if sv.Token != "" {
+		if a.serverConnected(sv.ID) {
 			scopes = append(scopes, sv.ID)
 		}
 	}
@@ -733,40 +776,6 @@ func (a *app) scopeMenu(m *ui.Menu, scope string, choose func(string)) {
 		if m.Item(name).Checked(k == scope).Chosen() {
 			choose(k)
 		}
-	}
-}
-
-// fileSearch is the field of the toolbar of the pages of files: typing in
-// it starts a search on the page of the search, of the place shown unless
-// its chip chose another scope.
-func (a *app) fileSearch(c *ui.Context, place string) {
-	scope := a.searchStart
-	if scope == "" || scope != "all" && scope != "folder" {
-		scope = place
-	}
-	q := ""
-	label, placeholder := "本机搜索", "搜索本机文件"
-	if place != localPlace {
-		label, placeholder = "搜索文件", "搜索"+a.scopeName(place)+"上的文件"
-	}
-	name := a.scopeName(scope)
-	if scope == "folder" {
-		name = "此文件夹"
-	}
-	changed, submitted, _ := a.searchBox(c, "file-search", label, &q, name, placeholder, func(m *ui.Menu) {
-		a.scopeMenu(m, scope, func(k string) {
-			a.searchStart = k
-			if k != "folder" && k != "all" {
-				a.searchStart = ""
-			}
-			if k == "all" || k != place && k != "folder" {
-				// Another place: there is nothing of it here to search.
-				a.searchFrom("", k)
-			}
-		})
-	})
-	if changed || submitted {
-		a.searchFrom(q, scope)
 	}
 }
 
@@ -795,26 +804,20 @@ func (a *app) searchPage(c *ui.Context) {
 			a.renameIn(acts.files, es[0])
 		}
 	}
-	landing := a.searchLanding()
-	// Over the field, on the page without a search, the name of the app,
-	// the field in the middle; with one, the field is at the top. The field
-	// stays where it is among the page's own, its focus kept as it moves.
-	top := ui.Column(c.Key("search-top")).Shrink(0).AlignItems(ui.Center).Justify(ui.End)
+	landing := !a.searchInToolbar
+	// The empty search page has a centered field. Active searches use the
+	// navigation toolbar's location slot, leaving this page for results.
 	if landing {
-		top.Grow(1).Gap(10).Padding(0, 0, 28, 0).Children(func() { searchLogo(c) })
-	}
-	bar := ui.Row(c.Key("search-bar")).Shrink(0).Justify(ui.Center)
-	bar.Children(func() {
-		ui.Row(c.Key("search-bar-width")).Grow(1).MaxWidth(680).Children(func() { a.searchBar(c) })
-	})
-	if !landing {
-		bar.Justify(ui.Start)
-	}
-	if landing {
-		ui.Column(c.Key("search-below")).Grow(1.4).AlignItems(ui.Center).Gap(18).Padding(22, 0, 0, 0).Children(func() {
-			a.searchLandingBelow(c)
+		ui.Column(c.Key("search-top")).Shrink(0).AlignItems(ui.Center).Justify(ui.End).
+			Grow(1).Gap(10).Padding(0, 0, 28, 0).Children(func() { searchLogo(c) })
+		ui.Row(c.Key("search-bar")).Shrink(0).Justify(ui.Center).Children(func() {
+			ui.Row(c.Key("search-bar-width")).Grow(1).MaxWidth(680).Children(func() { a.searchBar(c, true) })
 		})
+		ui.Column(c.Key("search-below")).Grow(1.4).AlignItems(ui.Center).Gap(18).Padding(22, 0, 0, 0).Children(func() { a.searchLandingBelow(c) })
 		return
+	}
+	if s.queryError != "" {
+		ui.Text(c, s.queryError).TextColor(c.Theme().Danger)
 	}
 	if len(s.groups) > 0 {
 		a.searchScopes(c)
@@ -1092,11 +1095,19 @@ func (a *app) searchLanding() bool {
 }
 
 // searchBar is the field of the page of the search.
-func (a *app) searchBar(c *ui.Context) {
+func (a *app) searchBar(c *ui.Context, large bool) {
+	wasLanding := a.searchLanding()
 	s := a.gsearch
-	changed, submitted, cleared := a.searchField(c, "global-search", "全局搜索", &s.query, a.scopeName(s.scope), "搜索本机和服务器上的文件名", func(m *ui.Menu) {
+	placeholder := "输入路径或搜索文件，支持 * 和 ?"
+	if s.filter.regex {
+		placeholder = "输入正则表达式"
+	}
+	changed, submitted, cleared := a.searchField(c, "global-search", "全局搜索", &s.query, a.scopeName(s.scope), placeholder, func(m *ui.Menu) {
 		a.scopeMenu(m, s.scope, a.setScope)
-	}, true)
+	}, large)
+	if wasLanding != a.searchLanding() {
+		a.focusSearch = true
+	}
 	switch {
 	case cleared:
 		a.runSearch(0)
@@ -1104,8 +1115,12 @@ func (a *app) searchBar(c *ui.Context) {
 	case changed:
 		a.runSearch(250 * time.Millisecond)
 	case submitted:
-		a.remember(s.query)
-		a.runSearch(0)
+		if s.filter.regex {
+			a.remember(s.query)
+			a.runSearch(0)
+		} else {
+			a.submitLocation(s.query)
+		}
 	}
 }
 
@@ -1152,7 +1167,7 @@ func (a *app) searchLandingBelow(c *ui.Context) {
 		pill("all", "全部位置", iconSearch)
 		pill(localPlace, "本机", iconLaptop)
 		for _, sv := range a.store.Servers {
-			if sv.Token != "" {
+			if a.serverConnected(sv.ID) {
 				pill(sv.ID, sv.Title(), iconServer)
 			}
 		}

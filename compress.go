@@ -43,7 +43,7 @@ func (a *app) openTransfers() {
 	a.showTransfers = true
 	if !a.noEvents {
 		for _, sv := range a.store.Servers {
-			if sv.Token != "" {
+			if a.serverConnected(sv.ID) {
 				a.refreshCompressionTasks(sv.ID)
 			}
 		}
@@ -162,7 +162,7 @@ func (a *app) pickCompressionDir(d *compressionDialog) {
 		}
 	}, probes: map[string]*serverProbe{}, lockServer: sv.ID, title: "压缩包保存位置"}
 	a.nas.startServer, a.nas.startRoot, a.nas.startPath = sv.ID, d.dstRoot, d.dstDir
-	a.probe(sv)
+	a.cachePickerServer(sv)
 	a.nasUse(sv)
 }
 

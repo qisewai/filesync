@@ -194,6 +194,7 @@ func (a *app) onRoot() bool {
 // topBar is the toolbar over the page: back and forward, up, where the
 // page is, then the search.
 func (a *app) topBar(c *ui.Context) {
+	a.searchInToolbar = a.onSearch() && !a.searchLanding()
 	if up := a.upward(); up != nil {
 		c.OnShortcut(ui.Alt, ui.KeyUp, up)
 	}
@@ -222,7 +223,9 @@ func (a *app) topBar(c *ui.Context) {
 			case a.onAdmin():
 				a.adminHeader(c)
 			case a.onSearch():
-				// The field is on the page.
+				if a.searchInToolbar {
+					a.searchBar(c, false)
+				}
 			default:
 				ui.Text(c, a.pageTitle()).FontSize(15).Bold().SingleLine().Shrink(1)
 			}
@@ -232,17 +235,17 @@ func (a *app) topBar(c *ui.Context) {
 			switch {
 			case a.onArchive():
 				ui.Text(c, "压缩包内容只读 · 搜索不包含包内文件").FontSize(12).TextColor(t.TextMuted).Shrink(1)
-			case a.onLocal():
-				a.fileSearch(c, localPlace)
-			case a.onRoot():
-				a.fileSearch(c, a.br.server)
+			case a.onLocal(), a.onRoot():
 			case a.onSearch():
 			default:
 				a.anywhereSearch(c)
 			}
 		})
-		if a.onSearch() {
+		if a.onSearch() || a.onLocal() || a.onRoot() {
 			search.Width(0).MinWidth(0)
+		}
+		if a.addressPending {
+			ui.Spinner(c).FontSize(14).Label("正在检查路径")
 		}
 		a.pageTools(c)
 	})

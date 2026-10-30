@@ -5,11 +5,13 @@ import (
 	"filemanager/api"
 	fmclient "filemanager/client"
 	fmservice "filemanager/service"
-	"net"
+	"fmt"
+	"net/http"
 	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -84,7 +86,7 @@ func (h *harness) settle() {
 		case <-deadline:
 			h.t.Fatal("the work did not finish")
 		default:
-			if (h.a.lan == nil || !h.a.lan.busy) && (h.a.arc == nil || !h.a.arc.loading) && !h.a.busy() && (h.a.local == nil || !h.a.local.loading) && (h.a.localIdx == nil || !h.a.localIdx.running && !h.a.localIdx.loading && !h.a.localIdx.saving && !h.a.localIdx.liveRunning && (h.a.localIdx.draft == nil || !h.a.localIdx.draft.picking)) && h.a.nas.busy == "" && !h.probing() && len(h.a.rootsLoading) == 0 && !h.treeLoading() && (h.a.br == nil || !h.a.br.loading && !h.a.br.operating && !h.a.br.quiet && !h.a.br.refreshPending) && (h.a.gsearch == nil || !h.a.gsearch.busy()) && (h.a.preview == nil || !h.a.preview.loading) && (h.a.recycle == nil || !h.a.recycle.loading && !h.a.recycle.operating) && (h.a.admin == nil || !h.a.admin.loading && !h.a.admin.busy && !h.a.admin.historyLoading && (h.a.admin.draft == nil || h.a.admin.draft.picker == nil || !h.a.admin.draft.picker.loading)) && len(h.queue) == 0 && !h.a.localOpLogLoading {
+			if (h.a.lan == nil || !h.a.lan.busy) && (h.a.arc == nil || !h.a.arc.loading) && !h.a.busy() && (h.a.local == nil || !h.a.local.loading) && (h.a.localIdx == nil || !h.a.localIdx.running && !h.a.localIdx.loading && !h.a.localIdx.saving && !h.a.localIdx.liveRunning && (h.a.localIdx.draft == nil || !h.a.localIdx.draft.picking)) && h.a.nas.busy == "" && !h.probing() && len(h.a.rootsLoading) == 0 && !h.treeLoading() && (h.a.br == nil || !h.a.br.loading && !h.a.br.operating && !h.a.br.quiet && !h.a.br.refreshPending) && (h.a.gsearch == nil || !h.a.gsearch.busy()) && (h.a.preview == nil || !h.a.preview.loading) && (h.a.recycle == nil || !h.a.recycle.loading && !h.a.recycle.operating) && (h.a.admin == nil || !h.a.admin.loading && !h.a.admin.busy && !h.a.admin.historyLoading && (h.a.admin.draft == nil || h.a.admin.draft.picker == nil || !h.a.admin.draft.picker.loading)) && len(h.queue) == 0 && !h.a.localOpLogLoading && !h.a.addressPending {
 				h.tt.Frame()
 				return
 			}
@@ -251,20 +253,19 @@ func TestAddServerChooseDirectoryAndBackUp(t *testing.T) {
 	h.click("保存")
 	h.want("家里")
 	h.want("未登录")
-	h.click("完成")
-
-	h.newTask(filepath.Dir(src), "xiaomai")
-	h.click("选择…")
-	// The servers are listed, and each connected to: this one answers but
-	// has no session.
-	h.want("● 需要登录")
-	h.click("登录并浏览")
+	h.click("登录")
 	h.want("请输入 fileindex 的管理员密码。这里只保存登录状态，不保存密码。")
 	h.typeInto("密码", "wrong")
 	h.click("登录")
 	h.want("密码错误")
 	h.typeInto("密码", fitest.Password)
 	h.click("登录")
+	h.click("完成")
+
+	h.newTask(filepath.Dir(src), "xiaomai")
+	h.click("选择…")
+	h.want("● 已连接")
+	h.click("浏览")
 	h.want("只读")
 	// A click chooses a root, and opening it shows its directories.
 	h.click("/data/nas")
@@ -683,91 +684,73 @@ func TestNormalizeAddr(t *testing.T) {
 	}
 }
 
-// The dialog choosing a target lists the servers, connecting to each at
-// once; one that does not answer cannot be entered.
-func TestPickerConnectsToServers(t *testing.T) {
-	f := fitest.New(t)
-	store := signedIn(t, f)
-	// A port nothing listens on.
-	l, err := net.Listen("tcp", "127.0.0.1:0")
-	if err != nil {
-		t.Fatal(err)
-	}
-	dead := l.Addr().String()
-	l.Close()
-	store.AddServer(&config.Server{Name: "旧 NAS", Addr: dead, Token: "old"})
+// Failed startup connections stay hidden until explicitly reconnected in settings.
+func TestOfflineServersRequireManualConnection(t *testing.T) {
+	var requests atomic.Int64
+	var available atomic.Bool
+	remote := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		requests.Add(1)
+		if !available.Load() {
+			http.Error(w, "offline", http.StatusServiceUnavailable)
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+		if r.URL.Path == "/api/roots" {
+			fmt.Fprint(w, `{"roots":[{"id":1,"name":"nas","path":"/data/nas"}]}`)
+			return
+		}
+		fmt.Fprint(w, `{"items":[],"total":0}`)
+	}))
+	defer remote.Close()
+	sv := &config.Server{ID: "offline", Name: "离线 NAS", Addr: strings.TrimPrefix(remote.URL, "http://"), Token: "tok"}
+	store := &config.Store{Dir: t.TempDir(), Servers: []*config.Server{sv},
+		Favorites: []*config.Favorite{{Name: "远程收藏", Server: sv.ID, Root: 1}}}
 	h := newHarness(t, store)
-	h.newTask(t.TempDir())
-	h.click("选择…")
+	h.settle()
+	if requests.Load() != 1 || h.a.serverErr[sv.ID] == nil {
+		t.Fatalf("initial requests=%d error=%v", requests.Load(), h.a.serverErr[sv.ID])
+	}
+	available.Store(true)
+	for range 3 {
+		h.a.gsearch.query = "报告"
+		h.a.runSearch(0)
+		h.settle()
+		h.a.openPicker("", 0, "", func(string, int64, string, string) {})
+		h.settle()
+		if h.tt.HasText(sv.Name) || h.tt.HasText("远程收藏") {
+			t.Fatal("offline server shown in operational UI")
+		}
+		h.a.nas.open = false
+		h.a.loadRoots(sv)
+		h.a.pathOptions(sv.Name + "/")
+		h.a.goPath(sv.Name + "/nas")
+		h.a.openTransfers()
+		h.settle()
+	}
+	if requests.Load() != 1 {
+		t.Fatalf("offline server retried: %d requests", requests.Load())
+	}
+	h.a.errorMsg = ""
+	h.a.showTransfers = false
+	h.click("设置")
+	h.click("连接 " + sv.Name)
+	if !h.a.serverConnected(sv.ID) || requests.Load() != 2 {
+		t.Fatalf("manual connection: requests=%d error=%v", requests.Load(), h.a.serverErr[sv.ID])
+	}
+	h.want("文件夹 nas")
+	h.a.openPicker("", 0, "", func(string, int64, string, string) {})
+	h.settle()
 	h.want("● 已连接")
-	h.want("● 无法连接")
-	h.want("连接被拒绝，fileindex 可能没有运行，或端口不对")
-	if n := strings.Count(strings.Join(h.tt.Texts(), "\n"), "\n浏览\n"); n != 1 {
-		t.Errorf("%d servers can be entered", n)
+	if requests.Load() != 2 {
+		t.Fatal("picker unexpectedly probed again")
 	}
-	h.click("重试")
-	h.want("● 无法连接")
-	// Its new address is connected to once saved.
-	f2 := fitest.New(t)
-	h.click("编辑地址")
-	h.a.nas.addr = f2.Addr()
-	h.click("保存")
-	h.want("选择一个服务器：")
-	if h.tt.HasText("● 无法连接") {
-		t.Fatal("still unreachable at its new address")
-	}
-	h.want("● 需要登录") // the session was of the old address
-
-	// A session the server refused asks the password.
-	f.Expired.Store(true)
-	h.a.probe(store.Servers[0])
+	h.a.nas.open = false
+	h.a.gsearch.query = "恢复"
+	h.a.runSearch(0)
 	h.settle()
-	h.want("● 需要登录")
-	h.click("登录并浏览")
-	h.typeInto("密码", fitest.Password)
-	h.click("登录")
-	h.want("/data/nas")
-}
-
-// A server that cannot be reached is marked in the sidebar; the mark and
-// its menu connect again, which reads its directories.
-func TestSidebarReconnects(t *testing.T) {
-	f := fitest.New(t)
-	l, err := net.Listen("tcp", "127.0.0.1:0")
-	if err != nil {
-		t.Fatal(err)
+	if h.a.gsearch.group(sv.ID) == nil || requests.Load() <= 2 {
+		t.Fatal("reconnected server missing from search")
 	}
-	dead := l.Addr().String()
-	l.Close()
-	store := &config.Store{Dir: t.TempDir()}
-	store.AddServer(&config.Server{Name: "家里", Addr: dead, Token: "tok"})
-	h := newHarness(t, store)
-	h.settle()
-	h.want("无法连接")
-	h.want("连接被拒绝，fileindex 可能没有运行，或端口不对")
-	if h.a.errorMsg != "" {
-		t.Errorf("the page shows %q", h.a.errorMsg)
-	}
-	h.click("重新连接 家里")
-	h.want("无法连接")
-
-	// Back at an address that answers, the mark connects again.
-	store.Servers[0].Addr = f.Addr()
-	h.click("重新连接 家里")
-	h.want("文件夹 nas")
-	if h.tt.HasText("无法连接") || h.tt.HasText("重新连接 家里") {
-		t.Error("still marked")
-	}
-
-	// The menu of the server reconnects too.
-	if err := h.tt.RightClick("家里"); err != nil {
-		t.Fatal(err)
-	}
-	if err := h.tt.ChooseMenuItem("重新连接"); err != nil {
-		t.Fatalf("%v; menu %q", err, h.tt.Menu())
-	}
-	h.settle()
-	h.want("文件夹 nas")
 }
 
 // The error over the page can be closed.

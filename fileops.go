@@ -38,7 +38,7 @@ type nasFiles struct {
 // serverClient is a client of a server, nil for a server removed.
 func (a *app) serverClient(server string) (*fileindex.Client, bool) {
 	sv := a.store.Server(server)
-	if sv == nil {
+	if sv == nil || a.serverErr[server] != nil {
 		return nil, false
 	}
 	return fileindex.New(sv.Addr, sv.Token), true

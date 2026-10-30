@@ -13,9 +13,9 @@ import (
 	"testing"
 	"time"
 
-	"filesync/config"
 	"filemanager/remoteclient"
 	"filemanager/remoteclient/fitest"
+	"filesync/config"
 	"github.com/egoist/mygo/ui"
 )
 
@@ -87,7 +87,7 @@ func TestNativeBrowserTreeSearchAndFileOperations(t *testing.T) {
 	h.tt.Key(0, ui.KeyEnter)
 	h.settle()
 	h.want("计划.txt")
-	if g := h.find("计划"); g.total != 1 || h.a.gsearch.scope != h.a.store.Servers[0].ID {
+	if g := h.find("计划"); g.total != 1 || h.a.gsearch.scope != "folder" {
 		t.Fatalf("search %+v", g)
 	}
 	h.tt.Key(ui.Alt, ui.KeyLeft)

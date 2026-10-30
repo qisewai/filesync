@@ -7,8 +7,8 @@ import (
 	"strings"
 	"time"
 
-	"filesync/config"
 	"filemanager/remoteclient"
+	"filesync/config"
 
 	"github.com/egoist/mygo/ui"
 )
@@ -214,12 +214,8 @@ func (a *app) favoriteItems(c *ui.Context) {
 		return
 	}
 	for i, f := range a.store.Favorites {
-		// The servers of favorites are connected to, to tell whether they
-		// can be opened.
-		if sv := a.store.Server(f.Server); sv != nil && sv.Token != "" {
-			if _, ok := a.roots[sv.ID]; !ok {
-				a.loadRoots(sv)
-			}
+		if f.Local == "" && !a.serverConnected(f.Server) {
+			continue
 		}
 		why := a.favoriteProblem(f)
 		chosen := a.favoriteShown(f)

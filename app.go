@@ -8,10 +8,10 @@ import (
 	"strings"
 	"time"
 
-	localindex "filemanager/index"
-	"filesync/config"
 	"filemanager/engine"
+	localindex "filemanager/index"
 	"filemanager/remoteclient"
+	"filesync/config"
 
 	"github.com/egoist/mygo/ui"
 )
@@ -33,8 +33,10 @@ type app struct {
 	maximizeWindow                         func(on bool)
 	// pathEditing is the path being typed in the path bar, nil for none;
 	// pathDirs the local folders it read, kept while it edits.
-	pathEditing *pathEdit
-	pathDirs    map[string]*directoryNode
+	pathEditing    *pathEdit
+	addressRequest uint64
+	addressPending bool
+	pathDirs       map[string]*directoryNode
 
 	// post runs a function on the main thread and draws a new frame:
 	// Window.Update in the app, a queue in tests.
@@ -118,12 +120,11 @@ type app struct {
 	gsearch         *globalSearch
 	searchFocus     ui.Handle
 	searchPageFocus ui.Handle
+	searchInToolbar bool // fixed at frame start so a moving input is built only once
 	focusSearch     bool
 	focusTries      int
 	searchTyping    bool
-	// searchStart is the scope the field of the pages of files searches,
-	// "" for the place shown, "folder" or "all".
-	searchStart string
+
 	// sidebarW is the sidebar's width; sidebarMoved says it was dragged
 	// since the settings were saved.
 	sidebarW      float32

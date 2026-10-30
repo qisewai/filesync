@@ -122,7 +122,7 @@ func (a *app) reloadAdmin() {
 		return
 	}
 	sv := a.store.Server(m.server)
-	if sv == nil || sv.Token == "" {
+	if sv == nil || sv.Token == "" || a.serverErr[sv.ID] != nil {
 		return
 	}
 	if m.cancel != nil {
@@ -327,7 +327,7 @@ func (a *app) adminAction(m *adminPage, fn func(context.Context, *fileindex.Clie
 		return
 	}
 	sv := a.store.Server(m.server)
-	if sv == nil || sv.Token == "" {
+	if sv == nil || sv.Token == "" || a.serverErr[sv.ID] != nil {
 		return
 	}
 	c := fileindex.New(sv.Addr, sv.Token)

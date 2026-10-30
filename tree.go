@@ -8,8 +8,8 @@ import (
 	"strings"
 	"time"
 
-	"filesync/config"
 	"filemanager/remoteclient"
+	"filesync/config"
 
 	"github.com/egoist/mygo/ui"
 )
@@ -148,6 +148,9 @@ func (a *app) directoryView(c *ui.Context, sv *config.Server, root fileindex.Roo
 }
 
 func (a *app) loadDirectory(sv *config.Server, root int64, dir string, n *directoryNode) {
+	if a.serverErr[sv.ID] != nil {
+		return
+	}
 	n.loading, n.loadStart = true, time.Now()
 	n.gen++
 	gen := n.gen

@@ -10,10 +10,9 @@ import (
 	"os"
 	"path"
 	"strings"
-	"time"
 
-	"filesync/config"
 	"filemanager/remoteclient"
+	"filesync/config"
 
 	"github.com/egoist/mygo/ui"
 )
@@ -95,10 +94,6 @@ const (
 	probeUnreachable            // no answer, or an error
 )
 
-// probeTimeout is how long a server may take to answer the dialog: a
-// NAS on the network answers at once.
-const probeTimeout = 6 * time.Second
-
 type serverProbe struct {
 	state probeState
 	err   string
@@ -122,7 +117,7 @@ func (a *app) openPicker(server string, root int64, p string, pick func(server s
 		a.nas.startServer, a.nas.startRoot, a.nas.startPath = server, root, p
 	}
 	for _, sv := range a.store.Servers {
-		a.probe(sv)
+		a.cachePickerServer(sv)
 	}
 }
 
@@ -136,42 +131,16 @@ func (a *app) openPickerIn(server string, root int64, p string, pick func(server
 	a.nas = nasBrowser{open: true, pick: pick, probes: map[string]*serverProbe{}}
 	a.nas.startServer, a.nas.startRoot, a.nas.startPath = server, root, p
 	for _, other := range a.store.Servers {
-		a.probe(other)
+		a.cachePickerServer(other)
 	}
 	a.nasUse(sv)
 }
 
-// probe connects to a server for the dialog choosing a target: it reads
-// its directories when signed in, or checks it answers otherwise.
-func (a *app) probe(sv *config.Server) {
-	b := &a.nas
-	pr := &serverProbe{}
-	b.probes[sv.ID] = pr
-	c := fileindex.New(sv.Addr, sv.Token)
-	go func() {
-		ctx, cancel := context.WithTimeout(context.Background(), probeTimeout)
-		defer cancel()
-		var roots []fileindex.Root
-		var err error
-		if c.Token != "" {
-			roots, err = c.Roots(ctx)
-		} else {
-			_, err = c.Authed(ctx)
-		}
-		a.post(func() {
-			if a.closed || !b.open || b.probes[sv.ID] != pr {
-				return
-			}
-			switch {
-			case errors.Is(err, fileindex.ErrAuth) || err == nil && c.Token == "":
-				pr.state = probeNeedLogin
-			case err != nil:
-				pr.state, pr.err = probeUnreachable, connectError(err)
-			default:
-				pr.state, pr.roots = probeOK, roots
-			}
-		})
-	}()
+// cachePickerServer reuses the last successful connection without network requests.
+func (a *app) cachePickerServer(sv *config.Server) {
+	if a.serverConnected(sv.ID) {
+		a.nas.probes[sv.ID] = &serverProbe{state: probeOK, roots: a.roots[sv.ID]}
+	}
 }
 
 // connectError says why a server could not be reached, shortly.
@@ -237,6 +206,9 @@ func (a *app) nasDo(what string, fn func(ctx context.Context) error, done func(e
 
 // nasUse goes to a server: its directories, once signed in.
 func (a *app) nasUse(sv *config.Server) {
+	if a.nas.pick != nil && !a.serverConnected(sv.ID) {
+		return
+	}
 	b := &a.nas
 	b.server = sv
 	b.client = fileindex.New(sv.Addr, sv.Token)
@@ -318,7 +290,7 @@ func (a *app) nasSignedIn() {
 		}
 	}
 	// The directories the connection read show at once.
-	if pr := b.probes[b.server.ID]; pr != nil && pr.state == probeOK && pr.roots != nil {
+	if pr := b.probes[b.server.ID]; pr != nil && pr.state == probeOK {
 		roots = pr.roots
 		show(nil)
 		return
@@ -425,12 +397,6 @@ func (a *app) nasSaveServer() {
 	a.save()
 	a.serverChanged(sv.ID)
 	b.err = ""
-	if b.pick != nil {
-		// Back to the list, connecting to it at its address.
-		b.screen = screenServers
-		a.probe(sv)
-		return
-	}
 	b.screen = screenServers
 }
 
@@ -517,6 +483,16 @@ func (a *app) nasServers(c *ui.Context) {
 	t := c.Theme()
 	if b.pick != nil {
 		ui.Text(c, "选择一个服务器：").TextColor(t.TextMuted)
+		connected := false
+		for _, sv := range a.store.Servers {
+			if (b.lockServer == "" || b.lockServer == sv.ID) && a.serverConnected(sv.ID) {
+				connected = true
+				break
+			}
+		}
+		if !connected {
+			ui.Text(c, "没有已连接的服务器，请先在服务器管理中手动连接。").FontSize(12).TextColor(t.TextMuted)
+		}
 	}
 	ui.Scroll(c).Grow(1).Border(1, t.Border).Radius(t.Radius * 2).Children(func() {
 		a.discoveredServers(c)
@@ -537,6 +513,9 @@ func (a *app) nasServers(c *ui.Context) {
 			ui.Text(c, "还没有服务器。点“添加服务器”，输入 NAS 上 fileindex 的地址。").TextColor(t.TextMuted).Padding(12)
 		}
 		for _, sv := range a.store.Servers {
+			if b.pick != nil && !a.serverConnected(sv.ID) {
+				continue
+			}
 			if b.lockServer != "" && sv.ID != b.lockServer {
 				continue
 			}
@@ -557,7 +536,13 @@ func (a *app) nasServers(c *ui.Context) {
 					return
 				}
 				if sv.Token != "" {
-					ui.Text(c, "已登录").FontSize(12).TextColor(t.Success)
+					status, color := a.serverState(t, sv)
+					ui.Text(c, status).FontSize(12).TextColor(color)
+					if !a.serverConnected(sv.ID) {
+						if ui.Button(c.Key("reconnect"), "连接").Disabled(a.rootsLoading[sv.ID] != nil).Clicked() {
+							a.reconnect(sv)
+						}
+					}
 				} else {
 					ui.Text(c, "未登录").FontSize(12).TextColor(t.TextMuted)
 				}
@@ -598,6 +583,12 @@ func (a *app) nasServers(c *ui.Context) {
 		}
 	})
 	ui.Row(c).Children(func() {
+		if b.pick != nil {
+			if ui.Button(c, "服务器管理…").Clicked() {
+				a.openServers()
+			}
+			return
+		}
 		if ui.Button(c, "＋ 添加服务器").Clicked() {
 			a.nasStartEdit(nil)
 		}
@@ -610,7 +601,7 @@ func (a *app) probeStatus(c *ui.Context, sv *config.Server) {
 	t := c.Theme()
 	pr := b.probes[sv.ID]
 	if pr == nil {
-		a.probe(sv)
+		a.cachePickerServer(sv)
 		return
 	}
 	switch pr.state {
@@ -632,9 +623,6 @@ func (a *app) probeStatus(c *ui.Context, sv *config.Server) {
 		ui.Text(c, "● 无法连接").FontSize(12).TextColor(t.Danger).Tooltip(pr.err)
 		if ui.Button(c.Key("edit"), "编辑地址").Clicked() {
 			a.nasStartEdit(sv)
-		}
-		if ui.Button(c.Key("retry"), "重试").Clicked() {
-			a.probe(sv)
 		}
 	}
 }
@@ -873,7 +861,7 @@ func (a *app) pickerFavorites(c *ui.Context) {
 		if b.lockServer != "" && f.Server != b.lockServer {
 			continue
 		}
-		if f.Local != "" && b.localDir != nil || f.Local == "" && a.store.Server(f.Server) != nil {
+		if f.Local != "" && b.localDir != nil || f.Local == "" && a.serverConnected(f.Server) {
 			favs = append(favs, f)
 		}
 	}

@@ -46,12 +46,18 @@ func (a *app) filterHits(q string) []filterHit {
 		out = append(out, h)
 	}
 	for _, f := range a.store.Favorites {
+		if f.Local == "" && !a.serverConnected(f.Server) {
+			continue
+		}
 		add(filterHit{loc: favoriteLocation(f), name: f.Name, where: a.favoriteWhere(f), icon: iconStar, color: ui.Hex("#d99a2b"), order: 0})
 	}
 	for _, r := range a.localRoots {
 		add(filterHit{loc: localLocation(r.dir), name: r.name, where: r.dir, icon: iconLaptop, color: ui.Color{}, order: 1})
 	}
 	for _, sv := range a.store.Servers {
+		if !a.serverConnected(sv.ID) {
+			continue
+		}
 		for _, r := range a.roots[sv.ID] {
 			add(filterHit{loc: nasLocation(sv.ID, r.ID, ""), name: r.Name, where: sv.Title(), icon: iconRoots, order: 2})
 		}
@@ -61,6 +67,9 @@ func (a *app) filterHits(q string) []filterHit {
 			continue
 		}
 		server, root, ok := parseTreeKey(key)
+		if ok && !a.serverConnected(server) {
+			continue
+		}
 		for _, d := range n.dirs {
 			if ok {
 				add(filterHit{loc: nasLocation(server, root, d.Path), name: d.Name, where: a.nasWhere(server, root, parentDir(d.Path)), icon: iconFolder, color: folderColor, order: 3})

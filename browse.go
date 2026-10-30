@@ -78,7 +78,7 @@ func (a *app) brClient() (*fileindex.Client, *config.Server) {
 		return nil, nil
 	}
 	sv := a.store.Server(a.br.server)
-	if sv == nil {
+	if sv == nil || a.serverErr[sv.ID] != nil {
 		return nil, nil
 	}
 	return fileindex.New(sv.Addr, sv.Token), sv
@@ -538,7 +538,7 @@ func (a *app) thumb(e fileindex.Entry) *ui.Bitmap {
 // or for none.
 func (a *app) serverThumb(server string, e fileindex.Entry) *ui.Bitmap {
 	sv := a.store.Server(server)
-	if e.IsDir || sv == nil || !a.thumbExt(server, e.Ext) {
+	if e.IsDir || sv == nil || a.serverErr[server] != nil || !a.thumbExt(server, e.Ext) {
 		return nil
 	}
 	c := fileindex.New(sv.Addr, sv.Token)
@@ -557,7 +557,7 @@ func (a *app) serverThumb(server string, e fileindex.Entry) *ui.Bitmap {
 }
 
 func (a *app) thumbExt(server, ext string) bool {
-	if ext == "" {
+	if ext == "" || a.serverErr[server] != nil {
 		return false
 	}
 	exts := a.thumbExts[server]

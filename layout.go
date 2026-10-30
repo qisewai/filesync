@@ -6,13 +6,19 @@ import (
 	"fmt"
 	"strings"
 
-	"filesync/config"
 	"filemanager/remoteclient"
+	"filesync/config"
 
 	"github.com/egoist/mygo/ui"
 )
 
 func (a *app) view(c *ui.Context) {
+	// Try saved sessions once, even with a collapsed or filtered sidebar.
+	for _, sv := range a.store.Servers {
+		if _, attempted := a.roots[sv.ID]; !attempted {
+			a.loadRoots(sv)
+		}
+	}
 	theme := appTheme(c.Theme())
 	if s := c.Preferences().TextScale; a.plainText && s > 0 && s != 1 {
 		theme.FontSize /= s
@@ -22,6 +28,7 @@ func (a *app) view(c *ui.Context) {
 	a.searchShortcuts(c)
 	a.tabShortcuts(c)
 	a.clipShortcuts(c)
+	a.searchTyping = false
 	c.OnShortcut(ui.Ctrl, ui.KeyB, a.toggleSidebar)
 	c.OnShortcut(ui.Ctrl, ui.KeyI, a.toggleDetails)
 	// Keep the window outline and viewer backdrop the same with either
@@ -194,6 +201,9 @@ func (a *app) serverList(c *ui.Context) {
 		return
 	}
 	for _, sv := range a.store.Servers {
+		if !a.serverConnected(sv.ID) {
+			continue
+		}
 		node := ui.TreeItem(c.Key("server/"+sv.ID), "", a.sectionOpen("server/"+sv.ID), func() {
 			a.serverItems(c, sv)
 		})
@@ -353,7 +363,7 @@ func (a *app) serverMenu(m *ui.Menu, sv *config.Server) {
 	} else if m.Item("重新连接").Disabled(a.rootsLoading[sv.ID] != nil).Chosen() {
 		a.reconnect(sv)
 	}
-	if sv.Token != "" {
+	if a.serverConnected(sv.ID) {
 		m.Separator()
 		if m.Item("目录管理…").Chosen() {
 			a.openAdmin(sv.ID, "roots")
@@ -428,9 +438,17 @@ func (a *app) goPlace(place string) {
 	}
 }
 
-// loadRoots reads a server's roots, once.
+// serverConnected is true only after the saved session has answered successfully.
+func (a *app) serverConnected(id string) bool {
+	sv := a.store.Server(id)
+	_, known := a.roots[id]
+	return sv != nil && sv.Token != "" && known && a.serverErr[id] == nil && a.rootsLoading[id] == nil
+}
+
+// loadRoots reads a server's roots, once. Failed attempts remain latched until
+// reconnect or a deliberate session/address change clears their state.
 func (a *app) loadRoots(sv *config.Server) {
-	if a.rootsLoading[sv.ID] != nil {
+	if sv.Token == "" || a.serverErr[sv.ID] != nil || a.rootsLoading[sv.ID] != nil {
 		return
 	}
 	c := fileindex.New(sv.Addr, sv.Token)
