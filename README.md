@@ -144,7 +144,7 @@ NAS 浏览需要更新 fileindex，使其包含三个已登录只读接口：
 百万项模拟数据的测量命令：
 
 ```sh
-go test ./localindex -run '^$' -bench BenchmarkMillion -benchmem
+(cd ../filemanager && go test ./index -run '^$' -bench BenchmarkMillion -benchmem)
 ```
 
 ## 传输方式
@@ -208,7 +208,7 @@ fileindex/  fileindex 客户端和备份目标：浏览、管理、扫描、查�
             fitest/ 测试用的模拟 fileindex 服务器
 config/     服务器、任务和运行记录的读写
 localtrash/ 把本机文件移入系统回收站（Linux freedesktop、Windows 回收站）
-localindex/ 本机索引：扫描、二进制快照、操作日志、实时增量层、名称匹配和全局排序分页
+../filemanager/index/ 共用索引：扫描、二进制快照、操作日志、实时增量层、名称匹配和排序分页
 local*.go   本机浏览、本机索引与范围设置、创建备份任务
 favorites.go 收藏：侧边栏、添加移除、重命名排序、选择目录对话框中的收藏
 pathbar.go  路径栏：逐级跳转、子文件夹下拉、输入路径
@@ -233,3 +233,25 @@ job.go      预览、执行进度、结果页面
 runlog.go   每次运行的日志文件
 main.go     窗口和系统接口（目录选择对话框、打开文件和网页、防止休眠）
 ```
+
+## FileManager 后台迁移（进行中）
+
+本机目录列表、侧栏展开和路径补全现在经 FileManager 独立进程读取。
+桌面版本需要与 `filemanager` 后台一起构建；两个工程与 `fileindex` 并列放置。
+
+```sh
+./scripts/build-desktop.sh
+./build/filesync
+```
+
+开发时使用 `go run .`，需通过 `FILESYNC_FILEMANAGER` 指定已编译后台的绝对路径。
+正式运行默认寻找前台可执行文件旁的 `filemanager`，不会从 PATH 随意启动同名程序。
+后台通过用户私有 Unix socket 通信，继承当前用户权限；前台退出或异常断开拥有者管道时后台停止。
+
+迁移仍在进行：索引与复制移动原语已抽取，本机浏览和基础文件修改已后台化；索引编排、复制移动任务、备份和跨端传输仍有前台执行路径。后台按 `/v1/info` 声明实际能力。用户级单实例复用、持久化任务和完整取消协议待后续接入。
+
+Linux 已有真实子进程集成测试；Windows 目前仅要求可编译，尚未提供命名管道适配。
+
+### 本机后台迁移进度
+
+本机新建、重命名、永久删除、移入系统回收站，以及上传完成后的源文件回收，已通过配套 FileManager 后台执行。后台操作证据保存在配置目录 `filemanager/mutations.log`，独立于索引快照。相同日志只允许一个后台进程持有；重复启动会明确报错。前台索引回放桥接仍保留，复制移动任务与索引编排尚待继续迁移。详细边界见 `../filemanager/README.md`。

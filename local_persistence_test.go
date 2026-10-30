@@ -9,8 +9,8 @@ import (
 	"strings"
 	"testing"
 
+	localindex "filemanager/index"
 	"filesync/config"
-	"filesync/localindex"
 )
 
 func restoreLocalHarness(t *testing.T, store *config.Store, cache, root string) *harness {

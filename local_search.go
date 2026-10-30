@@ -10,9 +10,9 @@ import (
 	"slices"
 	"strings"
 
+	localindex "filemanager/index"
 	"filesync/config"
 	"filesync/fileindex"
-	"filesync/localindex"
 	"github.com/egoist/mygo/ui"
 )
 

@@ -6,8 +6,8 @@ import (
 	"path/filepath"
 	"testing"
 
+	localindex "filemanager/index"
 	"filesync/config"
-	"filesync/localindex"
 )
 
 func TestLocalOperationsRefreshActiveSearchWithoutManualScan(t *testing.T) {

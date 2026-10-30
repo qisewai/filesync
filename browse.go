@@ -9,10 +9,9 @@ import (
 	"strings"
 	"time"
 
+	localindex "filemanager/index"
 	"filesync/config"
 	"filesync/fileindex"
-	"filesync/localindex"
-	"filesync/localtrash"
 
 	"github.com/egoist/mygo/ui"
 )
@@ -733,7 +732,7 @@ func (a *app) startUploadTo(server string, root int64, where, dir string, files 
 				if broken[filepath.Base(f)] {
 					failed = append(failed, filepath.Base(f)+"：没有完整上传，保留在本机")
 				} else {
-					opErr, logErr := loggedLocalOperation(operationLog, "trash", f, "", func() error { return localtrash.Move(f) })
+					opErr, logErr := loggedLocalOperation(operationLog, "trash", f, "", func() error { return a.localMutation("trash", f, "") })
 					if terr := errors.Join(opErr, logErr); terr != nil {
 						failed = append(failed, filepath.Base(f)+"：已上传，本机处理结果："+terr.Error())
 					}

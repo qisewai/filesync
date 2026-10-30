@@ -13,8 +13,8 @@ import (
 
 	"github.com/egoist/mygo/ui"
 
+	localindex "filemanager/index"
 	"filesync/fileindex"
-	"filesync/localindex"
 )
 
 // The properties of a file or folder, of a server or of this computer.

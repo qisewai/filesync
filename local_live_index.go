@@ -6,7 +6,7 @@ import (
 	"slices"
 	"strings"
 
-	"filesync/localindex"
+	localindex "filemanager/index"
 )
 
 // UI state stays on the UI thread; filesystem reconciliation runs in one

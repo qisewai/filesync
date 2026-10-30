@@ -2,7 +2,11 @@ package main
 
 import (
 	"context"
+	"filemanager/api"
+	fmclient "filemanager/client"
+	fmservice "filemanager/service"
 	"net"
+	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"strings"
@@ -30,6 +34,19 @@ type harness struct {
 func newHarness(t *testing.T, store *config.Store) *harness {
 	rollNumbers = false
 	h := &harness{t: t, a: newApp(store), queue: make(chan func(), 1024)}
+	backend, err := fmservice.New([]api.Root{{ID: "local", Path: string(filepath.Separator)}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := backend.EnableWrites(filepath.Join(t.TempDir(), "mutations.log")); err != nil {
+		t.Fatal(err)
+	}
+	if err := backend.EnableDesktopTrash(); err != nil {
+		t.Fatal(err)
+	}
+	server := httptest.NewServer(backend.Handler())
+	h.a.backend = fmclient.New(server.URL, server.Client())
+	t.Cleanup(func() { server.Close(); backend.Close() })
 	h.a.post = func(fn func()) { h.queue <- fn }
 	h.a.noEvents = true
 	h.a.discover = func(context.Context, func([]fileindex.DiscoveredServer)) error { return nil }

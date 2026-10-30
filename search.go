@@ -10,8 +10,8 @@ import (
 	"strings"
 	"time"
 
+	localindex "filemanager/index"
 	"filesync/fileindex"
-	"filesync/localindex"
 
 	"github.com/egoist/mygo/ui"
 )

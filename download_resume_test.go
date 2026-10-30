@@ -12,9 +12,9 @@ import (
 	"testing"
 	"time"
 
+	localindex "filemanager/index"
 	"filesync/config"
 	"filesync/fileindex"
-	"filesync/localindex"
 )
 
 func waitDownload(t *testing.T, h *harness) {

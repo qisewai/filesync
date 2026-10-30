@@ -2,25 +2,28 @@ package main
 
 import (
 	"context"
+	fmclient "filemanager/client"
 	"fmt"
 	"path"
 	"strings"
 	"time"
 
+	localindex "filemanager/index"
 	"filesync/config"
 	"filesync/engine"
 	"filesync/fileindex"
-	"filesync/localindex"
 
 	"github.com/egoist/mygo/ui"
 )
 
 // app is the window's state.
 type app struct {
-	lan      *lanDiscovery
-	discover func(context.Context, func([]fileindex.DiscoveredServer)) error
-	store    *config.Store
-	favs     favorites
+	backend    *fmclient.Client
+	backendErr error
+	lan        *lanDiscovery
+	discover   func(context.Context, func([]fileindex.DiscoveredServer)) error
+	store      *config.Store
+	favs       favorites
 	// hiddenTitleBar is whether the window started without the system's
 	// title bar: the toolbar takes its place, beside the window controls,
 	// which it draws itself with ownControls. maximized is whether the

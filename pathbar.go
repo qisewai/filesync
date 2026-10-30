@@ -375,7 +375,7 @@ func (a *app) localFolders(dir string) ([]fileindex.Entry, bool) {
 		n = &directoryNode{loading: true}
 		a.pathDirs[dir] = n
 		go func() {
-			items, err := readLocal(dir, true, true)
+			items, err := a.readLocal(dir, true, true)
 			a.post(func() {
 				n.loading, n.loaded, n.dirs = false, true, items
 				if err != nil {

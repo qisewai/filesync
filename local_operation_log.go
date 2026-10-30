@@ -4,7 +4,7 @@ import (
 	"fmt"
 	"path/filepath"
 
-	"filesync/localindex"
+	localindex "filemanager/index"
 )
 
 // operationLog is called on the UI thread; background tasks receive the

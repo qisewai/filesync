@@ -4,14 +4,12 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"io"
-	"io/fs"
 	"os"
 	"path/filepath"
 	"strings"
-	"syscall"
 
-	"filesync/localtrash"
+	"filemanager/api"
+	fmfs "filemanager/fs"
 
 	"github.com/egoist/mygo/ui"
 )
@@ -89,7 +87,7 @@ func (a *app) localMkdir(dir string) {
 		if err != nil {
 			return err
 		}
-		opErr, logErr := loggedLocalOperation(log, "mkdir", "", p, func() error { return os.Mkdir(p, 0o755) })
+		opErr, logErr := loggedLocalOperation(log, "mkdir", "", p, func() error { return a.localMutation("mkdir", "", p) })
 		if logErr != nil {
 			a.errorMsg = logErr.Error()
 		}
@@ -119,7 +117,7 @@ func (a *app) localRename(p string) {
 		if err != nil {
 			return err
 		}
-		opErr, logErr := loggedLocalOperation(log, "rename", p, to, func() error { return os.Rename(p, to) })
+		opErr, logErr := loggedLocalOperation(log, "rename", p, to, func() error { return a.localMutation("rename", p, to) })
 		if logErr != nil {
 			a.errorMsg = logErr.Error()
 		}
@@ -160,9 +158,9 @@ func (a *app) localDelete(paths []string, forever bool) {
 			}
 			opErr, logErr := loggedLocalOperation(log, action, p, "", func() error {
 				if forever {
-					return os.RemoveAll(p)
+					return a.localMutation("delete", p, "")
 				}
-				return localtrash.Move(p)
+				return a.localMutation("trash", p, "")
 			})
 			if err := errors.Join(opErr, logErr); err != nil {
 				failed = append(failed, filepath.Base(p)+"："+err.Error())
@@ -299,145 +297,38 @@ func numbered(dir, name string) string {
 	}
 }
 
-// treeSize is the size of the files below p, links not followed.
-func treeSize(p string) int64 {
-	var n int64
-	filepath.WalkDir(p, func(_ string, d fs.DirEntry, err error) error {
-		if err == nil && d.Type().IsRegular() {
-			if fi, err := d.Info(); err == nil {
-				n += fi.Size()
-			}
-		}
-		return nil
-	})
-	return n
-}
-
-// moveTree moves from to to: a rename where it can, else a copy, the
-// source removed once all of it was copied.
+// Compatibility wrappers keep UI orchestration separate from the shared core.
+func treeSize(p string) int64 { return fmfs.TreeSize(p) }
 func moveTree(ctx context.Context, from, to string, progress func(int64, string)) error {
-	return moveTreeChecked(ctx, from, to, progress, nil)
+	return fmfs.MoveTree(ctx, from, to, progress)
 }
 func moveTreeChecked(ctx context.Context, from, to string, progress func(int64, string), guard func(string) error) error {
-	if guard != nil {
-		if err := guard(to); err != nil {
-			return err
-		}
-	}
-	if _, err := os.Lstat(to); err != nil {
-		if err := os.Rename(from, to); err == nil {
-			progress(treeSize(to), filepath.Base(to))
-			return nil
-		} else if !isCrossDevice(err) {
-			return err
-		}
-	} else if fi, err := os.Lstat(from); err == nil && !fi.IsDir() {
-		// A file over one: renamed over it, as replacing it.
-		if err := os.Rename(from, to); err == nil {
-			progress(fi.Size(), filepath.Base(to))
-			return nil
-		}
-	}
-	if err := copyTreeChecked(ctx, from, to, progress, guard); err != nil {
-		return err
-	}
-	return os.RemoveAll(from)
+	return fmfs.MoveTreeChecked(ctx, from, to, progress, guard)
 }
-
-func isCrossDevice(err error) bool {
-	var le *os.LinkError
-	return errors.As(err, &le) && errors.Is(le.Err, syscall.EXDEV)
-}
-
-// copyTree copies from to to, folders merged, files replaced, links as
-// links, keeping times and permissions.
 func copyTree(ctx context.Context, from, to string, progress func(int64, string)) error {
-	return copyTreeChecked(ctx, from, to, progress, nil)
+	return fmfs.CopyTree(ctx, from, to, progress)
 }
 func copyTreeChecked(ctx context.Context, from, to string, progress func(int64, string), guard func(string) error) error {
-	return filepath.WalkDir(from, func(p string, d fs.DirEntry, err error) error {
-		if err != nil {
-			return err
-		}
-		if err := ctx.Err(); err != nil {
-			return err
-		}
-		rel, _ := filepath.Rel(from, p)
-		dst := filepath.Join(to, rel)
-		if guard != nil {
-			if err := guard(dst); err != nil {
-				return err
-			}
-		}
-		info, err := d.Info()
-		if err != nil {
-			return err
-		}
-		switch {
-		case d.IsDir():
-			if err := os.MkdirAll(dst, info.Mode().Perm()|0o700); err != nil {
-				return err
-			}
-			return nil
-		case d.Type()&fs.ModeSymlink != 0:
-			target, err := os.Readlink(p)
-			if err != nil {
-				return err
-			}
-			os.Remove(dst)
-			return os.Symlink(target, dst)
-		case !d.Type().IsRegular():
-			return nil // devices, pipes: left out
-		}
-		if err := copyFile(ctx, p, dst, info, func(n int64) { progress(n, d.Name()) }); err != nil {
-			return err
-		}
-		return nil
-	})
+	return fmfs.CopyTreeChecked(ctx, from, to, progress, guard)
 }
 
-// copyFile copies a file, through a temporary file beside the copy, which
-// replaces what was there once whole.
-func copyFile(ctx context.Context, from, to string, info fs.FileInfo, progress func(int64)) error {
-	in, err := os.Open(from)
-	if err != nil {
-		return err
-	}
-	defer in.Close()
-	tmp := to + ".filesync-part"
-	out, err := os.OpenFile(tmp, os.O_WRONLY|os.O_CREATE|os.O_TRUNC, info.Mode().Perm())
-	if err != nil {
-		return err
-	}
-	buf := make([]byte, 1<<20)
-	for {
-		if err := ctx.Err(); err != nil {
-			out.Close()
-			os.Remove(tmp)
-			return err
+// The foreground journal remains a temporary bridge to live index replay.
+// Filesystem execution and its independent durable evidence belong to backend.
+func (a *app) localMutation(action, source, target string) error {
+	if a.backend == nil {
+		if a.backendErr != nil {
+			return a.backendErr
 		}
-		n, rerr := in.Read(buf)
-		if n > 0 {
-			if _, werr := out.Write(buf[:n]); werr != nil {
-				out.Close()
-				os.Remove(tmp)
-				return werr
-			}
-			progress(int64(n))
-		}
-		if rerr == io.EOF {
-			break
-		}
-		if rerr != nil {
-			out.Close()
-			os.Remove(tmp)
-			return rerr
-		}
+		return errors.New("本机后台不可用")
 	}
-	if err := out.Close(); err != nil {
-		os.Remove(tmp)
-		return err
+	location := func(p string) api.Location {
+		if p == "" {
+			return api.Location{}
+		}
+		return api.Location{Root: "local", Path: filepath.ToSlash(strings.TrimPrefix(filepath.Clean(p), string(filepath.Separator)))}
 	}
-	os.Chtimes(tmp, info.ModTime(), info.ModTime())
-	return os.Rename(tmp, to)
+	ctx, cancel := context.WithTimeout(context.Background(), requestTimeout)
+	defer cancel()
+	_, err := a.backend.Mutate(ctx, api.MutationRequest{Action: action, Source: location(source), Target: location(target)})
+	return err
 }

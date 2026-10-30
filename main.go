@@ -5,13 +5,18 @@
 package main
 
 import (
+	"context"
+	"filemanager/localprocess"
+	"fmt"
 	"log"
 	"os"
+	"path/filepath"
 	"runtime"
 	"strings"
+	"time"
 
+	localindex "filemanager/index"
 	"filesync/config"
-	"filesync/localindex"
 
 	"github.com/egoist/mygo"
 	"github.com/egoist/mygo/ui"
@@ -54,6 +59,23 @@ func main() {
 		log.Fatalf("无法读取设置 %s: %v", dir, err)
 	}
 	a := newApp(store)
+	backendExe := os.Getenv("FILESYNC_FILEMANAGER")
+	if backendExe == "" {
+		self, e := os.Executable()
+		if e == nil {
+			backendExe = filepath.Join(filepath.Dir(self), "filemanager")
+		}
+	}
+	backendCtx, backendCancel := context.WithTimeout(context.Background(), 15*time.Second)
+	backend, backendErr := localprocess.StartWritable(backendCtx, backendExe, "/", filepath.Join(dir, "filemanager", "mutations.log"))
+	backendCancel()
+	if backendErr != nil {
+		a.backendErr = fmt.Errorf("本机后台启动失败，请检查配套 filemanager 程序：%w", backendErr)
+		a.errorMsg = a.backendErr.Error()
+	} else {
+		a.backend = backend.Client
+		defer backend.Close()
+	}
 	defer func() {
 		a.stopBackground()
 		if a.transferHistory != nil {

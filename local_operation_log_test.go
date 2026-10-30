@@ -7,8 +7,8 @@ import (
 	"path/filepath"
 	"testing"
 
+	localindex "filemanager/index"
 	"filesync/config"
-	"filesync/localindex"
 )
 
 func TestLocalOperationsWriteIntentsAndOutcomes(t *testing.T) {

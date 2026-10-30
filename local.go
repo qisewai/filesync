@@ -3,6 +3,7 @@ package main
 import (
 	"bufio"
 	"context"
+	"filemanager/api"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -197,31 +198,16 @@ func (a *app) onNetwork(dir string) bool {
 // probeSubdirs reports, of the first directories of dirs, which hold
 // directories of their own: the sidebar shows the others as leaves, with
 // no arrow to open. Those on the network are not read, nor asked about.
-func probeSubdirs(dirs []fileindex.Entry, hidden bool, network func(string) bool) map[string]bool {
+func (a *app) probeSubdirs(dirs []fileindex.Entry, hidden bool, network func(string) bool) map[string]bool {
 	out := map[string]bool{}
 	for _, e := range dirs[:min(len(dirs), 300)] {
 		if network(e.Path) {
 			continue
 		}
-		f, err := os.Open(e.Path)
-		if err != nil {
-			continue // shown openable, which tells why it cannot be read
+		children, err := a.readLocalProbe(e.Path, true, hidden, true)
+		if err == nil {
+			out[e.Path] = len(children) > 0
 		}
-		has := false
-		for !has {
-			ents, err := f.ReadDir(64)
-			for _, d := range ents {
-				if (hidden || !strings.HasPrefix(d.Name(), ".")) && (d.IsDir() || d.Type()&os.ModeSymlink != 0) {
-					has = true // a link may be to a directory
-					break
-				}
-			}
-			if err != nil {
-				break
-			}
-		}
-		f.Close()
-		out[e.Path] = has
 	}
 	return out
 }
@@ -260,8 +246,8 @@ func (a *app) openLocal(dir string, choose ...string) {
 	hidden := b.hidden
 	network := a.networkTest()
 	go func() {
-		items, err := readLocal(dir, false, hidden)
-		probed := probeSubdirs(dirsOf(items), hidden, network)
+		items, err := a.readLocal(dir, false, hidden)
+		probed := a.probeSubdirs(dirsOf(items), hidden, network)
 		a.post(func() {
 			if a.closed || a.local != b || b.gen != gen {
 				return
@@ -289,45 +275,35 @@ func (a *app) openLocal(dir string, choose ...string) {
 
 // readLocal lists a directory, directories first then by name; with
 // dirsOnly only its directories.
-func readLocal(dir string, dirsOnly, hidden bool) ([]fileindex.Entry, error) {
-	ents, err := os.ReadDir(dir)
+func (a *app) readLocal(dir string, dirsOnly, hidden bool) ([]fileindex.Entry, error) {
+	return a.readLocalProbe(dir, dirsOnly, hidden, false)
+}
+
+func (a *app) readLocalProbe(dir string, dirsOnly, hidden, probe bool) ([]fileindex.Entry, error) {
+	if a.backend == nil {
+		if a.backendErr != nil {
+			return nil, a.backendErr
+		}
+		return nil, fmt.Errorf("本机 FileManager 后台未连接")
+	}
+	abs, err := filepath.Abs(dir)
 	if err != nil {
 		return nil, err
 	}
-	out := make([]fileindex.Entry, 0, len(ents))
-	for _, d := range ents {
-		name := d.Name()
-		if !hidden && strings.HasPrefix(name, ".") {
-			continue
-		}
-		p := filepath.Join(dir, name)
-		e := fileindex.Entry{Name: name, Path: p, Parent: dir, IsDir: d.IsDir()}
-		if info, err := d.Info(); err == nil {
-			if info.Mode()&os.ModeSymlink != 0 {
-				// A link to a directory opens as one.
-				if st, err := os.Stat(p); err == nil && st.IsDir() {
-					e.IsDir = true
-				}
-			}
-			e.Size, e.MTime = info.Size(), info.ModTime().Unix()
-		}
-		if dirsOnly && !e.IsDir {
-			continue
-		}
-		if !e.IsDir {
-			e.Ext = extOf(name)
-		}
-		out = append(out, e)
+	ctx, cancel := context.WithTimeout(context.Background(), requestTimeout)
+	defer cancel()
+	entries, err := a.backend.List(ctx, api.ListRequest{Location: api.Location{Root: "local", Path: strings.TrimPrefix(filepath.ToSlash(abs), "/")}, Hidden: hidden, DirsOnly: dirsOnly, Probe: probe})
+	if err != nil {
+		return nil, err
 	}
-	slices.SortStableFunc(out, func(x, y fileindex.Entry) int {
-		if x.IsDir != y.IsDir {
-			if x.IsDir {
-				return -1
-			}
-			return 1
+	out := make([]fileindex.Entry, 0, len(entries))
+	for _, e := range entries {
+		ext := ""
+		if !e.IsDir {
+			ext = extOf(e.Name)
 		}
-		return strings.Compare(strings.ToLower(x.Name), strings.ToLower(y.Name))
-	})
+		out = append(out, fileindex.Entry{Name: e.Name, Path: filepath.Join(string(filepath.Separator), filepath.FromSlash(e.Path)), Parent: abs, IsDir: e.IsDir, Link: e.Link, Size: e.Size, MTime: e.MTime, Ext: ext})
+	}
 	return out, nil
 }
 
@@ -735,8 +711,8 @@ func (a *app) loadLocalDirectory(top, dir string, n *directoryNode) {
 	hidden := a.local != nil && a.local.hidden
 	network := a.networkTest()
 	go func() {
-		items, err := readLocal(dir, true, hidden)
-		probed := probeSubdirs(items, hidden, network)
+		items, err := a.readLocal(dir, true, hidden)
+		probed := a.probeSubdirs(items, hidden, network)
 		a.post(func() {
 			if a.closed || a.tree[key] != n || n.gen != gen {
 				return

@@ -32,3 +32,7 @@ require (
 	go4.org v0.0.0-20260112195520-a5071408f32f // indirect
 	golang.org/x/net v0.59.0 // indirect
 )
+
+require filemanager v0.0.0
+
+replace filemanager => ../filemanager
