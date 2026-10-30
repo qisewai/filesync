@@ -63,7 +63,7 @@ func TestLocalMoveRecordsDirectoryOperation(t *testing.T) {
 	h := newHarness(t, &config.Store{Dir: t.TempDir()})
 	h.a.localCachePath = filepath.Join(t.TempDir(), "index.bin")
 	h.a.localTransfer([]string{source}, true, target)
-	h.settle()
+	h.waitTransfers()
 	if _, err := os.Stat(filepath.Join(target, "source", "nested", "file.txt")); err != nil {
 		t.Fatal(err)
 	}

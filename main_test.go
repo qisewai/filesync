@@ -41,6 +41,9 @@ func newHarness(t *testing.T, store *config.Store) *harness {
 	if err := backend.EnableWrites(filepath.Join(t.TempDir(), "mutations.log")); err != nil {
 		t.Fatal(err)
 	}
+	if err := backend.EnableLocalTransfers(); err != nil {
+		t.Fatal(err)
+	}
 	if err := backend.EnableDesktopTrash(); err != nil {
 		t.Fatal(err)
 	}

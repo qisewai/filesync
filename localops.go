@@ -227,13 +227,12 @@ func (a *app) localTransfer(files []string, move bool, dir string) bool {
 		tr.localDir = dir
 		ctx, cancel := context.WithCancel(context.Background())
 		tr.cancel = cancel
+		cachePath := a.localCachePath
 		go func() {
-			var total int64
-			for _, it := range items {
-				total += treeSize(it.from)
-			}
-			a.post(func() { tr.total = total })
+			defer cancel()
 			var failed []string
+			var total int64
+			estimate := func(n int64) { total += n; v := total; a.post(func() { tr.total = v }) }
 			var done int64
 			progress := func(n int64, current string) {
 				done += n
@@ -250,10 +249,7 @@ func (a *app) localTransfer(files []string, move bool, dir string) bool {
 					action = "move"
 				}
 				opErr, logErr := loggedLocalOperation(log, action, it.from, it.to, func() error {
-					if move {
-						return moveTreeChecked(ctx, it.from, it.to, progress, log.CheckWritePath)
-					}
-					return copyTreeChecked(ctx, it.from, it.to, progress, log.CheckWritePath)
+					return a.backendTransfer(ctx, it.from, it.to, move, len(taken) > 0, cachePath, progress, estimate)
 				})
 				e := errors.Join(opErr, logErr)
 				if errors.Is(e, context.Canceled) {
