@@ -11,7 +11,7 @@ import (
 	"unicode"
 	"unicode/utf8"
 
-	"github.com/grandcat/zeroconf"
+	"filemanager/internal/zeroconf"
 )
 
 const DiscoveryService = "_fileindex._tcp"

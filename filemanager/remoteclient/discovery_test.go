@@ -7,7 +7,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/grandcat/zeroconf"
+	"filemanager/internal/zeroconf"
 	"github.com/miekg/dns"
 )
 
