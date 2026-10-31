@@ -152,14 +152,15 @@ func TestPathBar(t *testing.T) {
 		t.Fatalf("went to %q, %s", h.a.br.path, h.a.errorMsg)
 	}
 
-	// Unknown paths are search text, without validation errors while typing.
+	// An invalid address reports an error and keeps the current directory.
 	h.click("编辑路径")
 	h.tt.Key(ui.Ctrl, ui.KeyA)
 	h.tt.Type("家里/nas/照片/没有")
 	h.click("前往")
-	if !h.a.onSearch() || h.a.gsearch.scope != "folder" || h.a.errorMsg != "" {
+	if !h.a.onRoot() || h.a.br.path != "照片/2026" || h.a.errorMsg == "" {
 		t.Fatalf("invalid path: %s, %q", h.a.location(), h.a.errorMsg)
 	}
+	h.a.errorMsg = ""
 	h.a.showDirectory(h.a.store.Servers[0].ID, h.a.roots[h.a.store.Servers[0].ID][0], "照片/2026")
 	h.settle()
 

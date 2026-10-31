@@ -116,7 +116,7 @@ func (a *app) cacheDirectories(server string, root int64, dir string, items []fi
 func (a *app) directoryView(c *ui.Context, sv *config.Server, root fileindex.Root, dir, name string) {
 	key := treeKey(sv.ID, root.ID, dir)
 	n := a.treeNode(sv.ID, root.ID, dir)
-	item := ui.TreeItem(c.Key(key), "", n.openState(), n.children(func() {
+	item := a.animatedTreeItem(c.Key(key), "", n.openState(), n.children(func() {
 		if n.due() {
 			a.loadDirectory(sv, root.ID, dir, n)
 		}

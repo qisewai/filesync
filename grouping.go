@@ -49,7 +49,7 @@ type groupRow struct {
 // for navigation and icon actions.
 func groupMenu(m *ui.Menu, g *fileGrouping) {
 	m.Submenu("分组依据", func(m *ui.Menu) {
-		for _, by := range []string{"", colName, "类型", colTime, colSize} {
+		for _, by := range []string{"", colName, colType, colTime, colSize} {
 			name := by
 			if name == "" {
 				name = "无分组"
@@ -87,7 +87,7 @@ func groupMenu(m *ui.Menu, g *fileGrouping) {
 
 func entryGroup(e fileindex.Entry, by string, now time.Time) (string, int) {
 	switch by {
-	case "类型":
+	case colType:
 		if e.IsDir {
 			return "文件夹", 0
 		}

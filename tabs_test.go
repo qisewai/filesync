@@ -149,12 +149,12 @@ func TestDetailsPanel(t *testing.T) {
 	h.want("TXT 文件")
 	h.want("1 字节")
 	h.click("隐藏详情")
-	if !h.a.detailsHidden || h.tt.HasText("TXT 文件") {
+	if _, visible := h.tt.Find("详情"); !h.a.detailsHidden || visible {
 		t.Fatal("details still shown")
 	}
 	h.tt.Key(ui.Ctrl, ui.KeyI)
 	h.settle()
-	h.want("TXT 文件")
+	h.want("详情")
 }
 
 // The filter of the sidebar finds the folders read in its tree.

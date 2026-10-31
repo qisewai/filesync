@@ -145,19 +145,24 @@ func (a *app) searchField(c *ui.Context, key, label string, query *string, scope
 	// The rest of the toolbar, as wide as it is.
 	box := ui.Row(c.Key(key+"-box")).Grow(1).Shrink(1).MinWidth(260).AlignItems(ui.Center).Gap(6).
 		Padding(3, 6, 3, 3).Radius(t.Radius).Background(t.Surface).Border(1, t.Border).Cursor(ui.CursorText)
+	if menu == nil {
+		box.MinWidth(0)
+	}
 	if big {
 		box.Height(50).Padding(0, 16, 0, 8).Gap(10).Radius(25).Background(t.Background)
 	}
 	box.Children(func() {
-		chip := ui.ButtonBase(c.Key(key+"-scope")).Padding(2, 6).Gap(4).AlignItems(ui.Center).Radius(t.Radius * 0.75).
-			Background(t.Accent.Alpha(0.1)).Label("搜索范围：" + scope).Tooltip("选择搜索范围").Menu(menu)
-		if big {
-			chip.Padding(6, 12).Radius(17)
+		if menu != nil {
+			chip := ui.ButtonBase(c.Key(key+"-scope")).Padding(2, 6).Gap(4).AlignItems(ui.Center).Radius(t.Radius * 0.75).
+				Background(t.Accent.Alpha(0.1)).Label("搜索范围：" + scope).Tooltip("选择搜索范围").Menu(menu)
+			if big {
+				chip.Padding(6, 12).Radius(17)
+			}
+			chip.Children(func() {
+				ui.Text(c, scope).FontSize(12).SingleLine().MaxWidth(110).TextColor(t.Accent)
+				ui.Icon(c, iconChevronDown).FontSize(11).TextColor(t.Accent)
+			})
 		}
-		chip.Children(func() {
-			ui.Text(c, scope).FontSize(12).SingleLine().MaxWidth(110).TextColor(t.Accent)
-			ui.Icon(c, iconChevronDown).FontSize(11).TextColor(t.Accent)
-		})
 		size := float32(14)
 		if big {
 			size = 18
@@ -373,6 +378,11 @@ func (a *app) newSearch() *globalSearch {
 // openSearch shows the page of the search, searching q in the scope.
 func (a *app) openSearch(q string) {
 	s := a.newSearch()
+	if s.scope == "folder" {
+		s.closeSearch()
+		s.scope, s.folder = "all", nil
+		s.groups = nil
+	}
 	a.place = "search"
 	if s.query != q || len(s.groups) == 0 {
 		s.query = q
@@ -433,6 +443,10 @@ func (a *app) setScope(scope string) {
 		return
 	}
 	s.scope = scope
+	if s.group(scope) == nil {
+		a.runSearch(0)
+		return
+	}
 	s.sel.Clear()
 	s.cursor = -1
 	a.showResults()
@@ -449,6 +463,8 @@ func (s *globalSearch) sortKey() string {
 		return "size"
 	case colTime:
 		return "mtime"
+	case colType:
+		return "ext"
 	case colWhere:
 		return "path"
 	}
@@ -501,6 +517,16 @@ func (a *app) runSearch(wait time.Duration) {
 		s.sort.group.table.ScrollTo(0, ui.Start)
 		s.sort.group.grid.ScrollTo(0, ui.Start)
 		s.awaitTop = true
+		if s.scope == "folder" && s.folder != nil {
+			f := s.folder
+			if f.source == localPlace {
+				a.ensureLocalIndex()
+			}
+			g := &searchGroup{key: "folder", source: f.source, name: a.scopeName("folder")}
+			a.searchIn(ctx, g, q, f)
+			a.showResults()
+			return
+		}
 		if f := s.folder; f != nil {
 			g := &searchGroup{key: "folder", source: f.source, name: a.scopeName("folder")}
 			a.searchIn(ctx, g, q, f)
@@ -1006,6 +1032,9 @@ func (a *app) searchFiles(server string, root int64, dir string) *nasFiles {
 // indexNotice tells, on the page of the search, that the files of this
 // computer cannot be found before their index is built.
 func (a *app) indexNotice(c *ui.Context) {
+	if a.onFolderSearch() && a.gsearch.folder.source != localPlace {
+		return
+	}
 	m := a.localIdx
 	if m == nil || m.status.Count > 0 || m.running || m.loading {
 		return
@@ -1056,14 +1085,14 @@ func (a *app) searchEmpty(c *ui.Context) {
 // its field in the middle, as a search engine's first page.
 func (a *app) searchLanding() bool {
 	s := a.gsearch
-	return a.onSearch() && strings.TrimSpace(s.query) == "" && !s.filter.active()
+	return a.onSearch() && !a.onFolderSearch() && strings.TrimSpace(s.query) == "" && !s.filter.active()
 }
 
 // searchBar is the field of the page of the search.
 func (a *app) searchBar(c *ui.Context, large bool) {
 	wasLanding := a.searchLanding()
 	s := a.gsearch
-	placeholder := "输入路径或搜索文件，支持 * 和 ?"
+	placeholder := "搜索文件，支持 * 和 ?"
 	if s.filter.regex {
 		placeholder = "输入正则表达式"
 	}
@@ -1080,12 +1109,8 @@ func (a *app) searchBar(c *ui.Context, large bool) {
 	case changed:
 		a.runSearch(250 * time.Millisecond)
 	case submitted:
-		if s.filter.regex {
-			a.remember(s.query)
-			a.runSearch(0)
-		} else {
-			a.submitLocation(s.query)
-		}
+		a.remember(s.query)
+		a.runSearch(0)
 	}
 }
 

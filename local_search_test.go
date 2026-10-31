@@ -54,6 +54,8 @@ func (h *harness) find(q string) *searchGroup {
 		h.tt.Key(ui.Ctrl, ui.KeyF)
 		h.tt.Type(q)
 		h.tt.Key(0, ui.KeyEnter)
+	} else if h.a.onFolderSearch() {
+		h.replaceField("搜索当前文件夹", q)
 	} else {
 		h.replaceField("全局搜索", q)
 	}
@@ -115,30 +117,30 @@ func TestLocalSearchManualWorkflow(t *testing.T) {
 	h.want("本机还没有建立索引，搜不到本机的文件。建立索引只读取文件名、大小和修改时间。")
 	h.click("建立索引")
 	s := h.a.gsearch
-	g = s.group(localPlace)
+	g = s.group(s.scope)
 	if g.total != 3 || len(s.items) != 3 || m.status.Count != 5 {
 		t.Fatalf("total %d, index %+v", g.total, m.status)
 	}
 	h.want("位置")
 	h.captureLocal("search")
 	h.replaceField("扩展名", "PDF")
-	if g = s.group(localPlace); g.total != 2 || s.items[0].Name != "项目 报告2.pdf" {
+	if g = s.group(s.scope); g.total != 2 || s.items[0].Name != "项目 报告2.pdf" {
 		t.Fatalf("filter %+v", s.items)
 	}
-	h.replaceField("全局搜索", "项目 10")
-	if g = s.group(localPlace); g.total != 1 {
+	h.replaceField("搜索当前文件夹", "项目 10")
+	if g = s.group(s.scope); g.total != 1 {
 		t.Fatalf("AND: %d", g.total)
 	}
 	// The index changes only as it is updated, and the search follows.
 	localWrite(t, root, "新项目10.pdf", 8)
 	h.a.runSearch(0)
 	h.settle()
-	if g = s.group(localPlace); g.total != 1 {
+	if g = s.group(s.scope); g.total != 1 {
 		t.Fatal("searched again without an update of the index")
 	}
 	h.a.startLocalScan()
 	h.settle()
-	if g = s.group(localPlace); g.total != 2 {
+	if g = s.group(s.scope); g.total != 2 {
 		t.Fatalf("after the update: %d", g.total)
 	}
 	// Back is the folder the search began in.
@@ -217,7 +219,7 @@ func TestLocalSearchPagesAndGlobalSort(t *testing.T) {
 	s.filter.kind = "文档"
 	h.a.runSearch(0)
 	h.settle()
-	h.chooseSearchScope("此文件夹 · " + filepath.Base(root))
+	// The file-browser search remains fixed to its originating folder.
 	if g := s.group("folder"); s.scope != "folder" || g.total != n {
 		t.Fatalf("scoped type result %+v", g)
 	}

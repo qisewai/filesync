@@ -568,6 +568,8 @@ func (s *Server) search(w http.ResponseWriter, r *http.Request) {
 			c = cmp.Compare(a.Size, b.Size)
 		case "mtime":
 			c = cmp.Compare(a.MTime, b.MTime)
+		case "ext":
+			c = strings.Compare(a.Ext, b.Ext)
 		case "path":
 			c = strings.Compare(strings.ToLower(a.Path), strings.ToLower(b.Path))
 		default:

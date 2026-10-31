@@ -75,7 +75,7 @@ func TestDeleteForever(t *testing.T) {
 	h.tt.Type("临")
 	h.tt.Key(0, ui.KeyEnter)
 	h.settle()
-	h.click("全局搜索")
+	h.click("搜索当前文件夹")
 	h.tt.Key(0, ui.KeyDelete)
 	h.settle()
 	if h.a.deleting != nil || !h.a.onSearch() {

@@ -219,7 +219,7 @@ func (a *app) favoriteItems(c *ui.Context) {
 		}
 		why := a.favoriteProblem(f)
 		chosen := a.favoriteShown(f)
-		item := ui.TreeItem(c.Key(fmt.Sprintf("favorite/%d", i)), "", nil, nil)
+		item := a.animatedTreeItem(c.Key(fmt.Sprintf("favorite/%d", i)), "", nil, nil)
 		tip := a.favoriteWhere(f)
 		item.Children(func() {
 			svg := iconFolder

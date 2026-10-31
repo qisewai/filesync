@@ -522,9 +522,10 @@ func (a *app) showFolderProps() {
 // fileColumns are the columns of a table of files, each sorting it.
 func fileColumns() []ui.TableColumn {
 	return []ui.TableColumn{
-		{Title: colName, Sortable: true},
-		{Title: colSize, Width: 90, Align: ui.End, Sortable: true},
-		{Title: colTime, Width: 140, Sortable: true},
+		{Title: colName, MinWidth: 150, Sortable: true},
+		{Title: "修改日期", ID: colTime, Width: 170, Sortable: true},
+		{Title: colType, Width: 125, Sortable: true},
+		{Title: colSize, Width: 100, Align: ui.End, Sortable: true},
 	}
 }
 

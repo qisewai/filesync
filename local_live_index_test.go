@@ -24,7 +24,7 @@ func TestLocalOperationsRefreshActiveSearchWithoutManualScan(t *testing.T) {
 		t.Fatal(err)
 	}
 	h.settle()
-	g := h.a.gsearch.group(localPlace)
+	g := h.a.gsearch.group("folder")
 	if g == nil || g.total != 1 || g.hits[0].e.Path != filepath.Join(root, "report-renamed.txt") {
 		t.Fatalf("search not refreshed: %+v", g)
 	}
@@ -33,13 +33,13 @@ func TestLocalOperationsRefreshActiveSearchWithoutManualScan(t *testing.T) {
 		t.Fatal(err)
 	}
 	h.settle()
-	if g = h.a.gsearch.group(localPlace); g.total != 2 {
+	if g = h.a.gsearch.group("folder"); g.total != 2 {
 		t.Fatalf("mkdir missing: %+v", g)
 	}
 	h.a.localDelete([]string{filepath.Join(root, "report-renamed.txt")}, true)
 	h.a.asking.action()
 	h.settle()
-	if g = h.a.gsearch.group(localPlace); g.total != 1 || g.hits[0].e.Name != "report-folder" {
+	if g = h.a.gsearch.group("folder"); g.total != 1 || g.hits[0].e.Name != "report-folder" {
 		t.Fatalf("delete still visible: %+v", g)
 	}
 	if h.a.localIdx.status.Count != 1 || !h.a.localIdx.status.Delta {

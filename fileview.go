@@ -127,12 +127,15 @@ func (a *app) fileTableCell(c *ui.Context, v *fileView, row, col int) {
 			}
 		})
 	case 1:
+		ui.Text(c, e.ModTime().Format("2006-01-02 15:04")).SingleLine().FontFeatures("tnum").TextColor(muted)
+	case 2:
+		kind := fileTypeLabel(e)
+		ui.Text(c, kind).SingleLine().Tooltip(kind).TextColor(muted)
+	case 3:
 		if !e.IsDir {
 			ui.Text(c, formatBytes(e.Size)).FontFeatures("tnum").TextColor(muted)
 		}
-	case 2:
-		ui.Text(c, e.ModTime().Format("2006-01-02 15:04")).FontFeatures("tnum").TextColor(muted)
-	case 3:
+	case 4:
 		where := v.where(e)
 		ui.Text(c, where).SingleLine().Tooltip(where).TextColor(muted)
 	}

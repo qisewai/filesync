@@ -651,7 +651,7 @@ func (a *app) invalidateLocalTree() {
 func (a *app) localDirectoryView(c *ui.Context, top, dir, name string, svg *ui.SVG) {
 	key := localKey(top, dir)
 	n := a.localNode(top, dir)
-	item := ui.TreeItem(c.Key(key), "", n.openState(), n.children(func() {
+	item := a.animatedTreeItem(c.Key(key), "", n.openState(), n.children(func() {
 		if !n.loaded && !n.loading {
 			a.loadLocalDirectory(top, dir, n)
 		}

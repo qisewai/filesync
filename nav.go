@@ -41,7 +41,16 @@ func (a *app) location() string {
 	case a.place == "backup":
 		return "/backup"
 	case a.place == "search" && a.gsearch != nil:
-		return "/search?q=" + url.QueryEscape(a.gsearch.query) + "&in=" + url.QueryEscape(a.gsearch.scope)
+		loc := "/search?q=" + url.QueryEscape(a.gsearch.query) + "&in=" + url.QueryEscape(a.gsearch.scope)
+		if a.onFolderSearch() {
+			loc += "&from=" + url.QueryEscape(a.gsearch.folder.location())
+			if a.gsearch.filter.regex {
+				loc += "&regex=1"
+			}
+			f := a.gsearch.filter
+			loc += "&kind=" + url.QueryEscape(f.kind) + "&exts=" + url.QueryEscape(f.exts) + "&when=" + url.QueryEscape(f.when) + "&size=" + url.QueryEscape(f.size)
+		}
+		return loc
 	case a.place == localPlace && a.local != nil:
 		return localLocation(a.local.dir)
 	case a.admin != nil && a.place == adminPlace(a.admin.server, a.admin.tab):
@@ -79,6 +88,16 @@ func (a *app) goLocation(loc string) {
 		a.place = "backup"
 		a.taskShown = q.Get("task")
 	case parts[0] == "search":
+		if q.Get("in") == "folder" && q.Get("from") != "" {
+			if f := a.folderAt(q.Get("from")); f != nil {
+				s := a.newSearch()
+				s.folder, s.scope, s.query = f, "folder", q.Get("q")
+				s.filter = searchFilter{regex: q.Get("regex") == "1", kind: q.Get("kind"), exts: q.Get("exts"), when: q.Get("when"), size: q.Get("size")}
+				a.place = "search"
+				a.runSearch(0)
+				return
+			}
+		}
 		a.openSearch(q.Get("q"))
 		if in := q.Get("in"); in != "" {
 			a.setScope(in)
@@ -131,6 +150,10 @@ func (a *app) followHistory() {
 // recordHistory adds the place shown to the history, as the app went
 // there: the first replaces the empty page the router starts with.
 func (a *app) recordHistory() {
+	if !a.onSearch() && a.gsearch != nil && a.gsearch.scope == "folder" && (len(a.gsearch.groups) > 0 || a.gsearch.cancel != nil || a.gsearch.debounce != nil) {
+		a.gsearch.closeSearch()
+		a.gsearch.groups = nil
+	}
 	if !a.onArchive() && a.arc != nil && a.arc.loading && a.arc.cancel != nil {
 		a.arc.cancel()
 		a.arc.gen++
@@ -141,8 +164,12 @@ func (a *app) recordHistory() {
 		return
 	}
 	// The search as it is typed is one place.
-	searching := strings.HasPrefix(loc, "/search") && strings.HasPrefix(a.navShown, "/search")
-	if a.nav.Location() == "/" && !a.nav.CanGoBack() || searching {
+	before, _ := url.Parse(a.navShown)
+	after, _ := url.Parse(loc)
+	searching := before.Path == "/search" && after.Path == "/search" && before.Query().Get("from") == after.Query().Get("from")
+	// The initial empty search landing is not a file-browsing history entry.
+	leavingLanding := before.Path == "/search" && before.Query().Get("q") == "" && !a.nav.CanGoBack() && (a.onLocal() || a.onRoot())
+	if a.nav.Location() == "/" && !a.nav.CanGoBack() || searching || leavingLanding {
 		a.nav.Replace(loc)
 	} else {
 		a.nav.Push(loc)
@@ -222,6 +249,8 @@ func (a *app) topBar(c *ui.Context) {
 				a.browserPath(c)
 			case a.onAdmin():
 				a.adminHeader(c)
+			case a.onFolderSearch():
+				a.folderSearchPath(c)
 			case a.onSearch():
 				if a.searchInToolbar {
 					a.searchBar(c, false)
@@ -235,13 +264,14 @@ func (a *app) topBar(c *ui.Context) {
 			switch {
 			case a.onArchive():
 				ui.Text(c, "压缩包内容只读 · 搜索不包含包内文件").FontSize(12).TextColor(t.TextMuted).Shrink(1)
-			case a.onLocal(), a.onRoot():
+			case a.onLocal(), a.onRoot(), a.onFolderSearch():
+				a.folderSearchBar(c)
 			case a.onSearch():
 			default:
 				a.anywhereSearch(c)
 			}
 		})
-		if a.onSearch() || a.onLocal() || a.onRoot() {
+		if a.onSearch() && !a.onFolderSearch() {
 			search.Width(0).MinWidth(0)
 		}
 		if a.addressPending {
@@ -308,6 +338,9 @@ func (a *app) anywhereSearch(c *ui.Context) {
 // none.
 func (a *app) upward() func() {
 	switch {
+	case a.onFolderSearch():
+		origin := a.gsearch.folder.location()
+		return func() { a.goLocation(origin) }
 	case a.onArchive():
 		return a.archiveUp
 	case a.onLocal():

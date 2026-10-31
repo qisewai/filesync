@@ -116,6 +116,7 @@ func TestServerSearchScopeAndFilters(t *testing.T) {
 	if s.scope != "folder" || g.total != 1 {
 		t.Fatalf("current folder: %q %d", s.scope, g.total)
 	}
+	h.click("搜索")
 	h.chooseSearchScope("家里")
 	roots := map[string]bool{}
 	for _, e := range s.items {
@@ -134,12 +135,7 @@ func TestServerSearchScopeAndFilters(t *testing.T) {
 	s.filter = searchFilter{}
 	h.a.runSearch(0)
 	h.settle()
-	h.chooseSearchScope("此文件夹 · 项目")
-	if g = s.group("folder"); g.total != 1 || s.items[0].Name != "年度报告.pdf" {
-		t.Fatalf("the folder: %+v", s.items)
-	}
-	// A folder found in another root opens there.
-	h.chooseSearchScope("家里")
+	// Global search can find a folder in another root.
 	s.filter.kind = "文件夹"
 	h.a.runSearch(0)
 	h.replaceField("全局搜索", "")
@@ -219,6 +215,8 @@ func TestSearchResultOperations(t *testing.T) {
 		t.Fatal("the search did not follow")
 	}
 
+	h.a.openSearch("报告")
+	h.settle()
 	h.chooseSearchScope("家里")
 	choose("报告封面.jpg")
 	h.tt.Key(0, ui.KeyDelete)

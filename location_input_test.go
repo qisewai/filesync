@@ -2,6 +2,7 @@ package main
 
 import (
 	"filemanager/remoteclient/fitest"
+	"filesync/config"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -15,67 +16,169 @@ import (
 
 func (h *harness) submitAddress(text string) {
 	h.t.Helper()
-	h.tt.Key(ui.Ctrl, ui.KeyF)
+	h.tt.Key(ui.Ctrl, ui.KeyL)
+	h.tt.Key(ui.Ctrl, ui.KeyA)
 	h.tt.Type(text)
 	h.tt.Key(0, ui.KeyEnter)
 	h.settle()
 }
 
-func TestUnifiedAddressLocalNavigationAndFolderSearch(t *testing.T) {
-	root := t.TempDir()
-	localWrite(t, root, "inside/report.txt", 1)
-	localWrite(t, root, "outside/report.txt", 1)
-	h := localSearchHarness(t, root)
-	h.indexMenu("更新索引")
-	h.submitAddress(filepath.Join(root, "inside"))
-	if !h.a.onLocal() || h.a.local.dir != filepath.Join(root, "inside") {
-		t.Fatal("existing directory did not navigate")
-	}
-	h.submitAddress("report.txt")
-	if !h.a.onLocal() || !h.a.local.sel.Has(filepath.Join(root, "inside/report.txt")) {
-		t.Fatal("existing file was not revealed")
-	}
-	h.submitAddress("report*")
-	if !h.a.onSearch() || h.a.gsearch.scope != "folder" || len(h.a.gsearch.items) != 1 {
-		t.Fatalf("folder search: %+v", h.a.gsearch)
-	}
-	// The same field in search results also accepts paths.
-	h.replaceField("全局搜索", root)
-	h.tt.Key(0, ui.KeyEnter)
-	h.settle()
-	if !h.a.onLocal() || h.a.local.dir != root {
-		t.Fatal("search field did not accept a path")
-	}
-	h.submitAddress(filepath.Join(root, "missing"))
-	if !h.a.onSearch() || h.a.gsearch.query != filepath.Join(root, "missing") || h.a.errorMsg != "" {
-		t.Fatal("missing path did not become a search")
+func TestFolderSearchKeepsFocusAfterClearing(t *testing.T) {
+	for _, remote := range []bool{false, true} {
+		for _, method := range []string{"backspace", "select-all", "escape", "clear-button"} {
+			name := "local/" + method
+			if remote {
+				name = "remote/" + method
+			}
+			t.Run(name, func(t *testing.T) {
+				var h *harness
+				if remote {
+					h = browserHarness(t, fitest.New(t))
+				} else {
+					h = localSearchHarness(t, t.TempDir())
+				}
+				origin := h.a.location()
+				h.tt.Key(ui.Ctrl, ui.KeyF)
+				h.tt.Type("abc")
+				h.settle()
+				switch method {
+				case "backspace":
+					for range 3 {
+						h.tt.Key(0, ui.KeyBackspace)
+					}
+				case "select-all":
+					h.tt.Key(ui.Ctrl, ui.KeyA)
+					h.tt.Key(0, ui.KeyBackspace)
+				case "escape":
+					h.tt.Key(0, ui.KeyEscape)
+				case "clear-button":
+					if err := h.tt.Click("清除搜索"); err != nil {
+						t.Fatal(err)
+					}
+				}
+				// No click or focus shortcut between clearing and typing again.
+				if h.a.location() != origin || !h.tt.Focused("搜索当前文件夹") {
+					t.Fatalf("clear lost directory or focus: %s", h.a.location())
+				}
+				h.tt.Type("xyz")
+				h.settle()
+				if !h.a.onFolderSearch() || h.a.gsearch.query != "xyz" || h.a.gsearch.folder.location() != origin {
+					t.Fatal("typing after clear did not start a new search in the same folder")
+				}
+			})
+		}
 	}
 }
 
-func TestUnifiedAddressRemoteNavigationAndFolderSearch(t *testing.T) {
+func TestSeparateAddressAndLocalFolderSearch(t *testing.T) {
+	root := t.TempDir()
+	localWrite(t, root, "inside/report.txt", 1)
+	localWrite(t, root, "inside/deep/report2.txt", 1)
+	localWrite(t, root, "outside/report.txt", 1)
+	h := localSearchHarness(t, root)
+	h.indexMenu("更新索引")
+	dir := filepath.Join(root, "inside")
+	h.submitAddress(dir)
+	if !h.a.onLocal() || h.a.local.dir != dir {
+		t.Fatal("address did not navigate")
+	}
+	h.submitAddress("report.txt")
+	if !h.a.onLocal() || !h.a.local.sel.Has(filepath.Join(dir, "report.txt")) {
+		t.Fatal("file was not revealed")
+	}
+	h.tt.Key(ui.Ctrl, ui.KeyF)
+	h.tt.Type("report*")
+	h.tt.Key(0, ui.KeyEnter)
+	h.settle()
+	if !h.a.onFolderSearch() || len(h.a.gsearch.items) != 2 || len(h.a.gsearch.groups) != 1 {
+		t.Fatalf("folder search escaped scope: %+v", h.a.gsearch)
+	}
+	if _, ok := h.tt.Find("编辑路径"); !ok {
+		t.Fatal("search lost address bar")
+	}
+	if h.tt.HasText("全局搜索") || h.tt.HasText("搜索范围：全部位置") {
+		t.Fatal("folder search has global scope controls")
+	}
+	if out := os.Getenv("FILESYNC_SPLIT_SEARCH_SNAPSHOT"); out != "" {
+		saveResumeSnapshot(t, h, out)
+	}
+	h.tt.Key(ui.Alt, ui.KeyLeft)
+	h.settle()
+	if !h.a.onLocal() || h.a.local.dir != dir {
+		t.Fatal("back did not return to browsing")
+	}
+	h.tt.Key(ui.Alt, ui.KeyRight)
+	h.settle()
+	if !h.a.onFolderSearch() || h.a.gsearch.folder.dir != dir || len(h.a.gsearch.items) != 2 {
+		t.Fatal("forward lost search origin")
+	}
+	// Visiting a different folder must not replace the origin saved in history.
+	h.submitAddress(filepath.Join(root, "outside"))
+	h.tt.Key(ui.Alt, ui.KeyLeft)
+	h.settle()
+	if !h.a.onFolderSearch() || h.a.gsearch.folder.dir != dir || len(h.a.gsearch.items) != 2 {
+		t.Fatal("history reused the newer browser folder")
+	}
+	h.click("清除搜索")
+	if !h.a.onLocal() || h.a.local.dir != dir {
+		t.Fatal("clear opened global search")
+	}
+	h.submitAddress(filepath.Join(root, "missing"))
+	if !h.a.onLocal() || h.a.errorMsg == "" {
+		t.Fatal("invalid address became search")
+	}
+}
+
+func TestFirstDirectoryDoesNotKeepSearchLanding(t *testing.T) {
+	h := newHarness(t, &config.Store{Dir: t.TempDir()})
+	h.settle()
+	root := t.TempDir()
+	h.a.openLocal(root)
+	h.settle()
+	if h.a.nav.CanGoBack() {
+		t.Fatal("initial global search landing remained in file history")
+	}
+	os.Mkdir(filepath.Join(root, "child"), 0755)
+	h.a.openLocal(filepath.Join(root, "child"))
+	h.settle()
+	h.tt.Key(ui.Alt, ui.KeyLeft)
+	h.settle()
+	if !h.a.onLocal() || h.a.local.dir != root || h.a.nav.CanGoBack() {
+		t.Fatal("back did not stop at the first browsed directory")
+	}
+}
+
+func TestSeparateAddressAndRemoteFolderSearch(t *testing.T) {
 	h, f, _ := searchHarness(t)
-	os.MkdirAll(filepath.Join(f.Root, "other"), 0755)
-	os.WriteFile(filepath.Join(f.Root, "other", "报告.pdf"), []byte("other"), 0644)
+	os.MkdirAll(filepath.Join(f.Root, "项目", "nested"), 0755)
+	os.WriteFile(filepath.Join(f.Root, "项目", "nested", "报告.txt"), []byte("nested"), 0644)
 	sv := h.a.store.Servers[0]
 	h.a.goPlace(rootPlace(sv.ID, 1))
 	h.settle()
 	h.submitAddress(sv.Title() + "/nas/项目")
 	if !h.a.onRoot() || h.a.br.path != "项目" {
-		t.Fatalf("NAS path did not navigate: location=%s edit=%+v error=%s", h.a.location(), h.a.pathEditing, h.a.errorMsg)
+		t.Fatal("remote address did not navigate")
 	}
-	h.submitAddress("年度报告.pdf")
-	if !h.a.onRoot() || !h.a.br.sel.Has("项目/年度报告.pdf") {
-		t.Fatalf("NAS file was not revealed: location=%s edit=%+v selected=%v error=%s", h.a.location(), h.a.pathEditing, h.a.br.sel, h.a.errorMsg)
-	}
-	h.submitAddress("报告")
-	if !h.a.onSearch() || h.a.gsearch.scope != "folder" || len(h.a.gsearch.items) != 1 {
-		t.Fatal("NAS search escaped current folder")
-	}
-	h.replaceField("全局搜索", sv.Title()+"/nas/不存在")
+	h.tt.Key(ui.Ctrl, ui.KeyF)
+	h.tt.Type("报告")
 	h.tt.Key(0, ui.KeyEnter)
 	h.settle()
-	if !h.a.onSearch() || h.a.errorMsg != "" || h.a.gsearch.folder.dir != "项目" {
-		t.Fatal("invalid NAS path did not retain search folder")
+	if !h.a.onFolderSearch() || len(h.a.gsearch.items) != 2 || len(h.a.gsearch.groups) != 1 {
+		t.Fatal("remote search escaped folder or omitted descendants")
+	}
+	h.tt.Key(ui.Alt, ui.KeyLeft)
+	h.settle()
+	if !h.a.onRoot() || h.a.br.path != "项目" {
+		t.Fatal("back did not return to remote browsing")
+	}
+	h.tt.Key(ui.Alt, ui.KeyRight)
+	h.settle()
+	if !h.a.onFolderSearch() || h.a.gsearch.folder.dir != "项目" {
+		t.Fatal("forward lost remote origin")
+	}
+	h.submitAddress(sv.Title() + "/nas/不存在")
+	if !h.a.onFolderSearch() || h.a.errorMsg == "" {
+		t.Fatal("invalid remote address changed search")
 	}
 }
 

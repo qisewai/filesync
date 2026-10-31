@@ -65,12 +65,6 @@ func (a *app) pathBar(c *ui.Context, key, label string, crumbs []crumb, text str
 		a.addressPending = false
 		a.pathEditing, a.pathDirs = &pathEdit{key: key, text: text, open: true}, nil
 	}
-	if a.focusSearch {
-		a.addressRequest++
-		a.addressPending = false
-		a.focusSearch = false
-		a.pathEditing, a.pathDirs = &pathEdit{key: key, open: true}, nil
-	}
 	if e := a.pathEditing; e != nil && e.key == key {
 		a.pathEditor(c, e, label)
 		return
@@ -98,8 +92,8 @@ func (a *app) pathBar(c *ui.Context, key, label string, crumbs []crumb, text str
 		}
 	})
 	// The rest of the bar edits the path.
-	blank := ui.ButtonBase(c.Key(key + "/blank")).Grow(1).MinWidth(16).Height(28).Label("编辑路径").Tooltip("输入路径或搜索当前文件夹（Ctrl+L / Ctrl+F）").OnClick(edit)
-	blank.Children(func() { ui.Text(c, "输入路径或搜索…").FontSize(12).TextColor(t.TextMuted).SingleLine() })
+	blank := ui.ButtonBase(c.Key(key + "/blank")).Grow(1).MinWidth(16).Height(28).Label("编辑路径").Tooltip("输入路径（Ctrl+L）").OnClick(edit)
+	blank.Children(func() { ui.Text(c, "输入路径…").FontSize(12).TextColor(t.TextMuted).SingleLine() })
 	if blank.Hovered() {
 		blank.Background(t.SurfaceHover.Alpha(0.5))
 	}
@@ -216,7 +210,7 @@ func (a *app) pathEditor(c *ui.Context, e *pathEdit, label string) {
 		border := t.Accent
 
 		in := cb.Input.Grow(1).Shrink(1).MinWidth(80).Padding(5, 8).Radius(t.Radius).Background(t.Surface).Border(1, border).
-			Label("编辑" + label).Placeholder("输入路径，或搜索当前文件夹（支持 * 和 ?）").AutoFocus()
+			Label("编辑" + label).Placeholder("输入文件夹路径").AutoFocus()
 		if e.open {
 			e.open = false
 			cb.SetOpen(true)
@@ -267,7 +261,7 @@ func (a *app) pathEditor(c *ui.Context, e *pathEdit, label string) {
 			a.pathEditing = nil
 		}
 
-		goBtn := iconButton(c, "go", iconNext, "前往", "前往路径或搜索（Enter）", false, func() {
+		goBtn := iconButton(c, "go", iconNext, "前往", "前往路径（Enter）", false, func() {
 			a.pathEditing = nil
 			a.submitLocation(e.text)
 		})

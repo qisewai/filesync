@@ -169,7 +169,7 @@ func (a *app) sidebar(c *ui.Context) {
 func (a *app) sidebarTree(c *ui.Context) {
 	{
 		{
-			ui.Tree(c.Key("servers-tree"), func() {
+			a.animatedTree(c.Key("servers-tree"), func() {
 				a.navItem(c, "search", iconSearch, "搜索", func() {
 					query := ""
 					if a.gsearch != nil {
@@ -178,11 +178,11 @@ func (a *app) sidebarTree(c *ui.Context) {
 					a.openSearch(query)
 					a.focusSearch = true
 				})
-				favs := ui.TreeItem(c.Key("favorites"), "", a.sectionOpen("favorites"), func() { a.favoriteItems(c) })
+				favs := a.animatedTreeItem(c.Key("favorites"), "", a.sectionOpen("favorites"), func() { a.favoriteItems(c) })
 				// The sections, and the servers, have no page: a click opens
 				// or closes them, as their arrows do.
 				favs.Children(func() { sectionTitle(c, "收藏") }).Label("收藏").OnClick(a.toggleSection("favorites"))
-				local := ui.TreeItem(c.Key("local"), "", a.sectionOpen("local"), func() { a.localItems(c) })
+				local := a.animatedTreeItem(c.Key("local"), "", a.sectionOpen("local"), func() { a.localItems(c) })
 				local.Children(func() { sectionTitle(c, "本机") }).Label("本机").OnClick(a.toggleSection("local"))
 				a.serverList(c)
 				bk := a.navItem(c, "backup", iconBackup, "备份任务", func() { a.place = "backup" })
@@ -206,7 +206,7 @@ func (a *app) serverList(c *ui.Context) {
 		if !a.serverConnected(sv.ID) {
 			continue
 		}
-		node := ui.TreeItem(c.Key("server/"+sv.ID), "", a.sectionOpen("server/"+sv.ID), func() {
+		node := a.animatedTreeItem(c.Key("server/"+sv.ID), "", a.sectionOpen("server/"+sv.ID), func() {
 			a.serverItems(c, sv)
 		})
 		tip := sv.Addr
@@ -279,7 +279,7 @@ func (a *app) navItem(c *ui.Context, place string, svg *ui.SVG, label string, ac
 	if selected {
 		color = t.AccentText // on the accent of the item chosen
 	}
-	item := ui.TreeItem(c.Key("nav/"+place), "", nil, nil)
+	item := a.animatedTreeItem(c.Key("nav/"+place), "", nil, nil)
 	item.Children(func() { labeled(c, svg, label, color) }).Label(label)
 	return item.Selected(selected).OnClick(action)
 }

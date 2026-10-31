@@ -51,6 +51,7 @@ func sortRows[T any](s *tableSort, rows []T, cursor *int, key func(T) any, compa
 const (
 	colName  = "名称"
 	colSize  = "大小"
+	colType  = "类型"
 	colTime  = "修改时间"
 	colWhere = "位置"
 )
@@ -75,6 +76,8 @@ func compareEntries(x, y fileindex.Entry, column string, desc bool) int {
 		c = cmp.Compare(x.Size, y.Size)
 	case colTime:
 		c = cmp.Compare(x.MTime, y.MTime)
+	case colType:
+		c = strings.Compare(fileExtension(x.Name), fileExtension(y.Name))
 	case colWhere:
 		c = naturalCompare(path.Join(x.RootName, x.Parent), path.Join(y.RootName, y.Parent))
 	}

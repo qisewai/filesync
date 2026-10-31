@@ -18,6 +18,9 @@ import (
 
 // app is the window's state.
 type app struct {
+	treeKeyboard   *animatedTreeStateList
+	treeBuildStack []*animatedTreeState // UI-build-only ancestors; never stores elements
+
 	updatesReady bool
 	sharing      *sharingState
 	backend      *fmclient.Client

@@ -77,6 +77,7 @@ func newHarness(t *testing.T, store *config.Store) *harness {
 // dialog is under way.
 func (h *harness) settle() {
 	h.t.Helper()
+	h.tt.Frame() // Apply router changes before deciding whether requests are idle.
 	deadline := time.After(10 * time.Second)
 	for {
 		select {
@@ -88,6 +89,7 @@ func (h *harness) settle() {
 		default:
 			if (h.a.lan == nil || !h.a.lan.busy) && (h.a.arc == nil || !h.a.arc.loading) && !h.a.busy() && (h.a.local == nil || !h.a.local.loading) && (h.a.localIdx == nil || !h.a.localIdx.running && !h.a.localIdx.loading && !h.a.localIdx.saving && !h.a.localIdx.liveRunning && (h.a.localIdx.draft == nil || !h.a.localIdx.draft.picking)) && h.a.nas.busy == "" && !h.probing() && len(h.a.rootsLoading) == 0 && !h.treeLoading() && (h.a.br == nil || !h.a.br.loading && !h.a.br.operating && !h.a.br.quiet && !h.a.br.refreshPending) && (h.a.gsearch == nil || !h.a.gsearch.busy()) && (h.a.preview == nil || !h.a.preview.loading) && (h.a.recycle == nil || !h.a.recycle.loading && !h.a.recycle.operating) && (h.a.admin == nil || !h.a.admin.loading && !h.a.admin.busy && !h.a.admin.historyLoading && (h.a.admin.draft == nil || h.a.admin.draft.picker == nil || !h.a.admin.draft.picker.loading)) && len(h.queue) == 0 && !h.a.localOpLogLoading && !h.a.addressPending {
 				h.tt.Frame()
+				h.tt.Advance(treeMotion + time.Millisecond)
 				return
 			}
 			time.Sleep(time.Millisecond)
@@ -115,6 +117,8 @@ func (h *harness) treeLoading() bool {
 
 func (h *harness) click(label string) {
 	h.t.Helper()
+	// Tester time stands still: finish layout motion before targeting a row.
+	h.tt.Advance(treeMotion + time.Millisecond)
 	if err := h.tt.Click(label); err != nil {
 		h.t.Fatalf("%v; texts %q", err, h.tt.Texts())
 	}

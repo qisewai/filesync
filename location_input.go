@@ -11,7 +11,7 @@ import (
 	fileindex "filemanager/remoteclient"
 )
 
-// submitLocation resolves the shared address/search field only on submission.
+// submitLocation navigates the address field only on submission.
 // An asynchronous NAS reply must not replace a newer submission or navigation.
 func (a *app) submitLocation(input string) {
 	q := strings.TrimSpace(input)
@@ -31,18 +31,7 @@ func (a *app) submitLocation(input string) {
 	case a.onSearch():
 		folder = a.gsearch.folder
 	}
-	fallback := func() {
-		if a.onSearch() {
-			a.gsearch.query = q
-			if folder != nil {
-				a.gsearch.scope = "folder"
-			}
-			a.remember(q)
-			a.runSearch(0)
-		} else {
-			a.searchFrom(q, "folder")
-		}
-	}
+	fallback := func() { a.errorMsg = "路径不存在或无法访问：" + q }
 	p := q
 	if p == "~" || strings.HasPrefix(p, "~/") {
 		if home, err := os.UserHomeDir(); err == nil {
