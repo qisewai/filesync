@@ -1,7 +1,7 @@
 {
   "name": "FileSync",
   "identifier": "com.ning.filesync",
-  "version": "0.1.2",
+  "version": "0.1.3",
   "out": "build",
   "updates": {
     "publicKey": "xFnyO//PboUAVtZP7lfRe3+8ZeWoS3q6LUAwglYZnvI=",

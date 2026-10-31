@@ -348,12 +348,17 @@ func (s *Service) list(w http.ResponseWriter, req *http.Request) {
 				continue
 			}
 			fi, err := r.handle.Lstat(actual)
-			if errors.Is(err, fs.ErrNotExist) {
+			// A child may disappear or deny metadata access (for example Windows
+			// compatibility junctions). Neither should hide its readable siblings.
+			if errors.Is(err, fs.ErrNotExist) || errors.Is(err, fs.ErrPermission) || metadataLocked(err) {
 				continue
 			}
 			if err != nil {
 				fail(w, err)
 				return
+			}
+			if !q.Hidden && hiddenFileInfo(fi) {
+				continue
 			}
 			e := entry(r, filepath.FromSlash(name), fi)
 			if !q.DirsOnly || e.IsDir {
