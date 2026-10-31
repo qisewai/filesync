@@ -354,6 +354,7 @@ func (a *app) statusBar(c *ui.Context) {
 			a.searchStatus(c)
 		}
 		ui.Spacer(c)
+		a.filenameFilterStatus(c)
 		a.clipIndicator(c)
 		a.transferIndicator(c)
 		if a.onLocal() {

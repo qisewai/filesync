@@ -16,7 +16,9 @@ import (
 // tableSort is the column a table's rows are sorted by, which a click on
 // its header changes, and the order the rows were last put in.
 type tableSort struct {
+	revision    uint64
 	by, applied ui.SortOrder
+	group       fileGrouping
 }
 
 // stale reports whether the rows are not yet in the order asked.
@@ -84,6 +86,7 @@ func compareEntries(x, y fileindex.Entry, column string, desc bool) int {
 
 // sortEntries puts files in the order s asks, directories first.
 func sortEntries(s *tableSort, es []fileindex.Entry, cursor *int) {
+	s.revision++
 	desc := s.by.Descending
 	sortRows(s, es, cursor, func(e fileindex.Entry) any { return entryKey(e) }, func(x, y fileindex.Entry, column string) int {
 		return compareEntries(x, y, column, desc)

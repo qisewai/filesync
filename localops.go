@@ -180,7 +180,12 @@ func (a *app) localDelete(paths []string, forever bool) {
 // their own folder, a copy takes a numbered name, a move does nothing;
 // names taken elsewhere are asked about, files then replaced and folders
 // merged.
-func (a *app) localTransfer(files []string, move bool, dir string) bool {
+type localTransferCallbacks struct {
+	started  func()
+	finished func(bool)
+}
+
+func (a *app) localTransfer(files []string, move bool, dir string, callbacks ...localTransferCallbacks) bool {
 	if len(files) == 0 {
 		return false
 	}
@@ -225,6 +230,11 @@ func (a *app) localTransfer(files []string, move bool, dir string) bool {
 		}
 		tr := a.addTransfer(kind, title+" → "+dir)
 		tr.localDir = dir
+		for _, cb := range callbacks {
+			if cb.started != nil {
+				cb.started()
+			}
+		}
 		ctx, cancel := context.WithCancel(context.Background())
 		tr.cancel = cancel
 		cachePath := a.localCachePath
@@ -262,6 +272,11 @@ func (a *app) localTransfer(files []string, move bool, dir string) bool {
 			}
 			a.post(func() {
 				a.finishTransfer(tr, err, failed)
+				for _, cb := range callbacks {
+					if cb.finished != nil {
+						cb.finished(tr.state == "done")
+					}
+				}
 				a.localChanged(dir)
 				if move {
 					a.localChanged(filepath.Dir(items[0].from))

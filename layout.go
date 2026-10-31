@@ -25,10 +25,12 @@ func (a *app) view(c *ui.Context) {
 	}
 	c.SetTheme(theme)
 	a.followHistory()
+	a.applyFilenameFilter()
 	a.searchShortcuts(c)
 	a.tabShortcuts(c)
+	a.searchTyping = a.searchTyping || a.filenameFilterFocused(c)
 	a.clipShortcuts(c)
-	a.searchTyping = false
+	a.searchTyping = a.filenameFilterFocused(c)
 	c.OnShortcut(ui.Ctrl, ui.KeyB, a.toggleSidebar)
 	c.OnShortcut(ui.Ctrl, ui.KeyI, a.toggleDetails)
 	// Keep the window outline and viewer backdrop the same with either

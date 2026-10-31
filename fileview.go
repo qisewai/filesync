@@ -21,6 +21,7 @@ import (
 // computer and of a server, listed or found, look and act alike. The page
 // keeps the state, and says what its files do.
 type fileView struct {
+	filter  *filenameFilter
 	key     string // of the table and the grid
 	label   string // for assistive technology
 	items   []fileindex.Entry
@@ -54,13 +55,18 @@ type fileView struct {
 // zone, which it returns for the page's menu and the files dropped on it.
 func (a *app) fileList(c *ui.Context, v *fileView) ui.Element {
 	t := c.Theme()
+	if v.sort.group.by == "" || len(v.items) == 0 {
+		v.sort.group.releaseProjection()
+	}
 	return ui.Column(c).Grow(1).MinHeight(0).Radius(t.Radius*2).Border(1, t.Border).Clip().Children(func() {
 		if v.loading && len(v.items) == 0 {
 			ui.Column(c).Grow(1).Center().Children(func() { ui.Spinner(c).FontSize(22).Label("正在读取") })
 			return
 		}
 		grayChoice(c, func() {
-			if v.grid {
+			if v.sort.group.by != "" && len(v.items) > 0 {
+				a.groupedFiles(c, v)
+			} else if v.grid {
 				a.fileGrid(c, v)
 			} else {
 				a.fileTable(c, v)
@@ -70,7 +76,6 @@ func (a *app) fileList(c *ui.Context, v *fileView) ui.Element {
 }
 
 func (a *app) fileTable(c *ui.Context, v *fileView) {
-	t := c.Theme()
 	if v.sort.stale() {
 		v.resort()
 	}
@@ -79,42 +84,18 @@ func (a *app) fileTable(c *ui.Context, v *fileView) {
 		cols = append(cols, ui.TableColumn{Title: colWhere, Width: 220, Sortable: true})
 	}
 	table := ui.Table(c.Key(v.key), v.list, cols, len(v.items), func(row, col int) {
-		e := v.items[row]
-		muted := t.TextMuted
-		if k, ok := v.list.Key(row).(string); ok && v.sel.Has(k) {
-			muted = t.AccentText.Alpha(0.85)
-		}
-		switch col {
-		case 0:
-			name := ui.Row(c).Gap(8).AlignItems(ui.Center)
-			if v.cut != nil && v.cut(e) {
-				name.Opacity(0.45)
-			}
-			name.Children(func() {
-				fileIcon(c, e, 16)
-				ui.Text(c, e.Name).SingleLine().Grow(1).Shrink(1)
-				if e.Encrypted {
-					ui.Badge(c, "已加密")
-				} else if e.Link {
-					ui.Badge(c, "符号链接")
-				}
-			})
-		case 1:
-			if !e.IsDir {
-				ui.Text(c, formatBytes(e.Size)).FontFeatures("tnum").TextColor(muted)
-			}
-		case 2:
-			ui.Text(c, e.ModTime().Format("2006-01-02 15:04")).FontFeatures("tnum").TextColor(muted)
-		case 3:
-			where := v.where(e)
-			ui.Text(c, where).SingleLine().Tooltip(where).TextColor(muted)
-		}
+		a.fileTableCell(c, v, row, col)
 	}).Grow(1).Label(v.label)
 	table.Children(func() {
 		if !v.loading && len(v.items) == 0 {
-			v.empty()
+			if v.filter != nil && v.filter.query != "" {
+				emptyState(c, iconSearch, "没有匹配的文件", "清空过滤条件或按 Esc 恢复全部文件。", nil)
+			} else {
+				v.empty()
+			}
 		}
 	})
+	bindFilenameFilter(table, v.filter)
 	if table.Submitted() && *v.cursor >= 0 && *v.cursor < len(v.items) {
 		v.open(v.items[*v.cursor])
 	}
@@ -123,36 +104,57 @@ func (a *app) fileTable(c *ui.Context, v *fileView) {
 	}
 }
 
-func (a *app) fileGrid(c *ui.Context, v *fileView) {
-	last := -1
-	grid := ui.GridView(c.Key(v.key+"-grid"), v.gridSt, len(v.items), gridCell, 132, func(i int) {
-		e := v.items[i]
-		last = max(last, i)
-		cell := ui.Column(c).Grow(1).Padding(6).Gap(4).AlignItems(ui.Center)
+func (a *app) fileTableCell(c *ui.Context, v *fileView, row, col int) {
+	t := c.Theme()
+	e := v.items[row]
+	muted := t.TextMuted
+	if k, ok := v.list.Key(row).(string); ok && v.sel.Has(k) {
+		muted = t.AccentText.Alpha(0.85)
+	}
+	switch col {
+	case 0:
+		name := ui.Row(c).Gap(8).AlignItems(ui.Center)
 		if v.cut != nil && v.cut(e) {
-			cell.Opacity(0.45)
+			name.Opacity(0.45)
 		}
-		cell.Children(func() {
-			if bmp := v.thumb(e); bmp != nil {
-				ui.Image(c, bmp).Size(96, 84).Fit(ui.Contain).Radius(4)
-			} else {
-				ui.Column(c).Size(96, 84).Center().Children(func() { fileIcon(c, e, 48) })
-			}
-			ui.Text(c, breakable(e.Name)).FontSize(12).MaxLines(2).TextAlign(ui.Center).
-				Width(gridCell - 12).MinWidth(0).Clip().Label(e.Name)
+		name.Children(func() {
+			fileIcon(c, e, 16)
+			ui.Text(c, e.Name).SingleLine().Grow(1).Shrink(1)
 			if e.Encrypted {
 				ui.Badge(c, "已加密")
 			} else if e.Link {
 				ui.Badge(c, "符号链接")
 			}
-		}).Tooltip(e.Name)
+		})
+	case 1:
+		if !e.IsDir {
+			ui.Text(c, formatBytes(e.Size)).FontFeatures("tnum").TextColor(muted)
+		}
+	case 2:
+		ui.Text(c, e.ModTime().Format("2006-01-02 15:04")).FontFeatures("tnum").TextColor(muted)
+	case 3:
+		where := v.where(e)
+		ui.Text(c, where).SingleLine().Tooltip(where).TextColor(muted)
+	}
+}
+
+func (a *app) fileGrid(c *ui.Context, v *fileView) {
+	last := -1
+	grid := ui.GridView(c.Key(v.key+"-grid"), v.gridSt, len(v.items), gridCell, 132, func(i int) {
+		last = max(last, i)
+		a.fileGridCell(c, v, i)
 	}).Grow(1).Padding(8).Label(v.label)
+	bindFilenameFilter(grid, v.filter)
 	if grid.Submitted() && *v.cursor >= 0 && *v.cursor < len(v.items) {
 		v.open(v.items[*v.cursor])
 	}
 	grid.Children(func() {
 		if !v.loading && len(v.items) == 0 {
-			v.empty()
+			if v.filter != nil && v.filter.query != "" {
+				emptyState(c, iconSearch, "没有匹配的文件", "清空过滤条件或按 Esc 恢复全部文件。", nil)
+			} else {
+				v.empty()
+			}
 		}
 	})
 	if last >= 0 && v.gridLast != nil {
@@ -161,6 +163,28 @@ func (a *app) fileGrid(c *ui.Context, v *fileView) {
 	if v.visible != nil && v.gridLast != nil {
 		v.visible(0, *v.gridLast)
 	}
+}
+
+func (a *app) fileGridCell(c *ui.Context, v *fileView, i int) {
+	e := v.items[i]
+	cell := ui.Column(c).Grow(1).Padding(6).Gap(4).AlignItems(ui.Center)
+	if v.cut != nil && v.cut(e) {
+		cell.Opacity(0.45)
+	}
+	cell.Children(func() {
+		if bmp := v.thumb(e); bmp != nil {
+			ui.Image(c, bmp).Size(96, 84).Fit(ui.Contain).Radius(4)
+		} else {
+			ui.Column(c).Size(96, 84).Center().Children(func() { fileIcon(c, e, 48) })
+		}
+		ui.Text(c, breakable(e.Name)).FontSize(12).MaxLines(2).TextAlign(ui.Center).
+			Width(gridCell - 12).MinWidth(0).Clip().Label(e.Name)
+		if e.Encrypted {
+			ui.Badge(c, "已加密")
+		} else if e.Link {
+			ui.Badge(c, "符号链接")
+		}
+	}).Tooltip(e.Name)
 }
 
 // filesSize is the size of the files among es.

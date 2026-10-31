@@ -20,6 +20,7 @@ const requestTimeout = 20 * time.Second
 
 // browser shows a directory of a root of a server.
 type browser struct {
+	filter filenameFilter
 	server string // the server's ID
 	root   fileindex.Root
 	path   string // in the root, with slashes
@@ -94,6 +95,7 @@ func (a *app) browse(p string, choose ...string) {
 	a.thumbs = map[string]*thumbOf{}
 	if b.path != p {
 		b.items = nil
+		b.filter = filenameFilter{}
 		b.sel.Clear()
 		b.cursor = -1
 	}
@@ -161,6 +163,7 @@ func (a *app) load(fetch func(ctx context.Context, c *fileindex.Client) ([]filei
 			a.cacheDirectories(b.server, b.root.ID, b.path, items)
 			sortEntries(&b.sort, items, nil)
 			b.items = items
+			b.filter.source(items)
 			b.sel.Clear()
 			b.cursor = -1
 			for i, e := range items {
@@ -246,6 +249,7 @@ func (a *app) reloadQuietly() {
 				at = b.items[b.cursor].Path
 			}
 			b.items = items
+			b.filter.source(items)
 			b.sel.Clear()
 			b.cursor = -1
 			for i, e := range items {
@@ -351,7 +355,8 @@ func (a *app) browserView(c *ui.Context) {
 
 	// The files, which take files dropped on them.
 	zone := a.fileList(c, &fileView{
-		key: "files", label: "文件", items: b.items, sel: &b.sel, cursor: &b.cursor,
+		filter: &b.filter,
+		key:    "files", label: "文件", items: b.items, sel: &b.sel, cursor: &b.cursor,
 		list: &b.list, gridSt: &b.gridState, grid: b.grid, sort: &b.sort,
 		loading:  b.loading,
 		where:    func(e fileindex.Entry) string { return path.Join(e.RootName, e.Parent) },
@@ -377,7 +382,10 @@ func (a *app) browserView(c *ui.Context) {
 			zone.Border(2, t.Accent)
 		}
 	}
-	zone.ContextMenu(func(m *ui.Menu) { a.entryMenu(c, m, b.chosen(), writable) })
+	zone.ContextMenu(func(m *ui.Menu) {
+		groupMenu(m, &b.sort.group)
+		a.entryMenu(c, m, b.chosen(), writable)
+	})
 
 	a.browserDialogs(c)
 }
@@ -686,7 +694,7 @@ func (a *app) startUpload(files []string) {
 // startUploadTo sends files and folders of this computer into dir of a
 // root of a server, where showing it; with move, what landed whole then
 // goes to the trash of this computer. after runs once it ended well.
-func (a *app) startUploadTo(server string, root int64, where, dir string, files []string, move bool, after func()) {
+func (a *app) startUploadTo(server string, root int64, where, dir string, files []string, move bool, after func(), callbacks ...localTransferCallbacks) {
 	sv := a.store.Server(server)
 	if sv == nil || len(files) == 0 {
 		return
@@ -710,6 +718,11 @@ func (a *app) startUploadTo(server string, root int64, where, dir string, files 
 		kind = "移动"
 	}
 	tr := a.addTransfer(kind, title+" → "+where)
+	for _, cb := range callbacks {
+		if cb.started != nil {
+			cb.started()
+		}
+	}
 	tr.server = server
 	ctx, cancel := context.WithCancel(context.Background())
 	tr.cancel = cancel
@@ -742,6 +755,11 @@ func (a *app) startUploadTo(server string, root int64, where, dir string, files 
 		a.post(func() {
 			tr.after = after
 			a.finishTransfer(tr, err, failed)
+			for _, cb := range callbacks {
+				if cb.finished != nil {
+					cb.finished(tr.state == "done")
+				}
+			}
 			if move {
 				a.localChanged(filepath.Dir(files[0]))
 			}

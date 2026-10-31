@@ -10,8 +10,8 @@ import (
 	"strconv"
 	"strings"
 
-	"filemanager/remoteclient"
 	archiveio "filemanager/archive"
+	"filemanager/remoteclient"
 	"github.com/egoist/mygo/ui"
 )
 
@@ -65,6 +65,9 @@ func (a *app) archiveBrowse(dir string, choose ...string) {
 	if b.cancel != nil {
 		b.cancel()
 	}
+	if b.path != p {
+		b.filter = filenameFilter{}
+	}
 	b.path = p
 	b.items = nil
 	b.sel.Clear()
@@ -114,6 +117,7 @@ func (a *app) archiveBrowse(dir string, choose ...string) {
 			}
 			sortEntries(&b.sort, items, nil)
 			b.items = items
+			b.filter.source(items)
 			for i, e := range items {
 				if len(choose) > 0 && e.Name == choose[0] {
 					b.sel.Add(e.Path)
@@ -230,12 +234,13 @@ func (a *app) archiveView(c *ui.Context) {
 	if b.sequential {
 		notice(c, c.Theme().TextMuted, "此格式按顺序读取，靠后的文件打开较慢。音视频需下载后打开；搜索不包含压缩包内文件。")
 	}
-	zone := a.fileList(c, &fileView{key: "archive-files", label: "压缩包文件", items: b.items, sel: &b.sel, cursor: &b.cursor, list: &b.list, gridSt: &b.gridState, grid: b.grid, sort: &b.sort, loading: b.loading, thumb: func(fileindex.Entry) *ui.Bitmap { return nil }, open: a.archiveOpen, resort: func() { sortEntries(&b.sort, b.items, &b.cursor) }, gridLast: &b.gridLast, empty: func() {
+	zone := a.fileList(c, &fileView{filter: &b.filter, key: "archive-files", label: "压缩包文件", items: b.items, sel: &b.sel, cursor: &b.cursor, list: &b.list, gridSt: &b.gridState, grid: b.grid, sort: &b.sort, loading: b.loading, thumb: func(fileindex.Entry) *ui.Bitmap { return nil }, open: a.archiveOpen, resort: func() { sortEntries(&b.sort, b.items, &b.cursor) }, gridLast: &b.gridLast, empty: func() {
 		if !b.loading && b.err == "" {
 			emptyFolder(c, "")
 		}
 	}})
 	zone.ContextMenu(func(m *ui.Menu) {
+		groupMenu(m, &b.sort.group)
 		chosen := b.chosen()
 		if b.loading {
 			return
@@ -368,6 +373,7 @@ func (a *app) archiveMenu(c *ui.Context, m *ui.Menu, chosen []fileindex.Entry) {
 	if m.Item("复制").Shortcut(ui.Ctrl, ui.KeyC).Chosen() {
 		a.copyChosen(c, false)
 	}
+
 	if m.Item("解压到…").Chosen() {
 		a.archiveExtract(chosen)
 	}

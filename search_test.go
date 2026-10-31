@@ -96,11 +96,11 @@ func TestSearchEverywhere(t *testing.T) {
 	}
 
 	// A place's tab shows all its results, in place.
-	h.click("搜索范围 本机")
+	h.chooseSearchScope("本机")
 	if !h.a.onSearch() || s.scope != localPlace || len(s.items) != 1 || s.items[0].Name != "本机报告.pdf" {
 		t.Fatalf("local: %q, %+v", h.a.location(), s.items)
 	}
-	h.click("搜索范围 全部位置")
+	h.chooseSearchScope("全部位置")
 	if len(s.items) != 4 {
 		t.Fatalf("all: %d", len(s.items))
 	}
@@ -116,7 +116,7 @@ func TestServerSearchScopeAndFilters(t *testing.T) {
 	if s.scope != "folder" || g.total != 1 {
 		t.Fatalf("current folder: %q %d", s.scope, g.total)
 	}
-	h.click("搜索范围 家里")
+	h.chooseSearchScope("家里")
 	roots := map[string]bool{}
 	for _, e := range s.items {
 		roots[e.RootName] = true
@@ -134,12 +134,12 @@ func TestServerSearchScopeAndFilters(t *testing.T) {
 	s.filter = searchFilter{}
 	h.a.runSearch(0)
 	h.settle()
-	h.click("搜索范围 此文件夹 · 项目")
+	h.chooseSearchScope("此文件夹 · 项目")
 	if g = s.group("folder"); g.total != 1 || s.items[0].Name != "年度报告.pdf" {
 		t.Fatalf("the folder: %+v", s.items)
 	}
 	// A folder found in another root opens there.
-	h.click("搜索范围 家里")
+	h.chooseSearchScope("家里")
 	s.filter.kind = "文件夹"
 	h.a.runSearch(0)
 	h.replaceField("全局搜索", "")
@@ -219,7 +219,7 @@ func TestSearchResultOperations(t *testing.T) {
 		t.Fatal("the search did not follow")
 	}
 
-	h.click("搜索范围 家里")
+	h.chooseSearchScope("家里")
 	choose("报告封面.jpg")
 	h.tt.Key(0, ui.KeyDelete)
 	h.want("1 项会移到 fileindex 的回收站，可以在左侧的回收站中恢复。")
@@ -230,7 +230,7 @@ func TestSearchResultOperations(t *testing.T) {
 	}
 
 	// Of two roots, or of a server and this computer: only where they are.
-	h.click("搜索范围 全部位置")
+	h.chooseSearchScope("全部位置")
 	choose("旧报告.pdf", "本机报告.pdf")
 	h.tt.Key(ui.Ctrl, ui.KeyC)
 	if !strings.Contains(h.a.errorMsg, "来自不同位置") {

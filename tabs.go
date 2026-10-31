@@ -178,6 +178,11 @@ func (a *app) closeTab(i int) {
 
 // stopTabWork cancels what a tab closed was reading.
 func (a *app) stopTabWork(t *tabState, shown bool) {
+	if shown {
+		a.gsearch.closeSearch()
+	} else {
+		t.gsearch.closeSearch()
+	}
 	br, local, admin, recycle, arc := t.br, t.local, t.admin, t.recycle, t.arc
 	if shown {
 		br, local, admin, recycle, arc = a.br, a.local, a.admin, a.recycle, a.arc

@@ -36,6 +36,16 @@ func (h *harness) indexMenu(item string) {
 	h.settle()
 }
 
+// chooseSearchScope uses the single scope selector beside the search field.
+func (h *harness) chooseSearchScope(name string) {
+	h.t.Helper()
+	h.click("搜索范围：" + h.a.scopeName(h.a.gsearch.scope))
+	if err := h.tt.ChooseMenuItem(name); err != nil {
+		h.t.Fatalf("%v; menu %q", err, h.tt.Menu())
+	}
+	h.settle()
+}
+
 // find searches q from the field of the toolbar of the page shown, on the
 // page of the search, and returns the results of the place shown.
 func (h *harness) find(q string) *searchGroup {
@@ -207,7 +217,7 @@ func TestLocalSearchPagesAndGlobalSort(t *testing.T) {
 	s.filter.kind = "文档"
 	h.a.runSearch(0)
 	h.settle()
-	h.click("搜索范围 此文件夹 · " + filepath.Base(root))
+	h.chooseSearchScope("此文件夹 · " + filepath.Base(root))
 	if g := s.group("folder"); s.scope != "folder" || g.total != n {
 		t.Fatalf("scoped type result %+v", g)
 	}

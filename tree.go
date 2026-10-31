@@ -285,6 +285,7 @@ func (a *app) directoryMenu(c *ui.Context, m *ui.Menu, sv *config.Server, root f
 	if m.Item("复制").Chosen() {
 		a.setClip(c.Services(), &fileClip{files: a.nasFilesAt(sv.ID, root, e.Parent), es: []fileindex.Entry{e}, from: a.nasWhere(sv.ID, root.ID, e.Parent)})
 	}
+
 	if m.Item("下载到…").Disabled(busy).Chosen() {
 		as(func(e fileindex.Entry) { a.download([]fileindex.Entry{e}) })
 	}

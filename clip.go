@@ -2,10 +2,11 @@ package main
 
 import (
 	"context"
+	"crypto/rand"
+	"crypto/sha256"
+	"encoding/binary"
 	"fmt"
-	"net/url"
 	"path/filepath"
-	"slices"
 	"strings"
 
 	"filemanager/remoteclient"
@@ -26,7 +27,9 @@ import (
 
 // fileClip is what was copied or cut.
 type fileClip struct {
-	move bool
+	signature string
+	busy      bool
+	move      bool
 	// local: files of this computer, es their paths; else files of a
 	// server, or of an archive, which files reads.
 	local bool
@@ -139,70 +142,110 @@ func (a *app) copyChosen(c *ui.Context, move bool) {
 
 // setClip puts cl on the clipboard, and on the system's what of it is of
 // this computer, or the names of the rest.
+const (
+	clipOwner  mt.Format = "application/x-filesync-clipboard-owner"
+	gnomeFiles mt.Format = "x-special/gnome-copied-files"
+	kdeCut     mt.Format = "application/x-kde-cutselection"
+	dropEffect mt.Format = "Preferred DropEffect"
+)
+
+var fileClipFormats = []mt.Format{clipOwner, mt.FileList, mt.URIList, gnomeFiles, kdeCut, dropEffect}
+
 func (a *app) setClip(sv ui.Services, cl *fileClip) {
-	a.clip = cl
-	a.clipSys = ""
+	var data mt.Data
 	if cl.local {
 		paths := make([]string, len(cl.es))
 		for i, e := range cl.es {
 			paths[i] = e.Path
 		}
-		if data, err := systemFiles(paths, cl.move); err == nil {
-			sv.WriteClipboardData(data)
-			a.clipSys = strings.Join(paths, "\n")
+		var err error
+		data, err = systemFiles(paths, cl.move)
+		if err != nil {
+			a.errorMsg = err.Error()
+			return
 		}
-		return
+	} else {
+		var names []string
+		for _, e := range cl.es {
+			names = append(names, e.Name)
+		}
+		data = mt.New(mt.NewItem(mt.Bytes(mt.Text, []byte(strings.Join(names, "\n")))))
 	}
-	var names []string
-	for _, e := range cl.es {
-		names = append(names, e.Name)
-	}
-	sv.WriteClipboard(strings.Join(names, "\n"))
+	token := rand.Text()
+	data = ownedClipboard(data, token)
+	sv.WriteClipboardData(data)
+	a.clip, a.clipSys = cl, token
+	cl.signature = clipboardSignature(data)
 }
 
-// systemFiles is files for the clipboards of file managers: the list of
-// their URIs, and that they were cut, as KDE and GNOME read it.
+// FileList is needed for native Windows CF_HDROP and macOS file URLs;
+// URIList and desktop-specific operation flags cover Linux file managers.
 func systemFiles(paths []string, cut bool) (mt.Data, error) {
-	var uris []string
-	for _, p := range paths {
-		uris = append(uris, (&url.URL{Scheme: "file", Path: p}).String())
+	files, err := mt.FileData(paths...)
+	if err != nil {
+		return mt.Data{}, err
 	}
-	list := strings.Join(uris, "\r\n")
-	op := "copy"
-	kde := "0"
+	list, err := files.Read(mt.URIList)
+	if err != nil {
+		return mt.Data{}, err
+	}
+	op, kde, effect := "copy", "0", uint32(1)
 	if cut {
-		op, kde = "cut", "1"
+		op, kde, effect = "cut", "1", 2
 	}
+	win := make([]byte, 4)
+	binary.LittleEndian.PutUint32(win, effect)
 	return mt.New(mt.NewItem(
-		mt.Bytes(mt.URIList, []byte(list)),
-		mt.Bytes(mt.Format("x-special/gnome-copied-files"), []byte(op+"\n"+strings.Join(uris, "\n"))),
-		mt.Bytes(mt.Format("application/x-kde-cutselection"), []byte(kde)),
+		mt.Bytes(mt.FileList, list), mt.Bytes(mt.URIList, list),
+		mt.Bytes(gnomeFiles, []byte(op+"\n"+strings.ReplaceAll(string(list), "\r\n", "\n"))),
+		mt.Bytes(kdeCut, []byte(kde)), mt.Bytes(dropEffect, win),
 		mt.Bytes(mt.Text, []byte(strings.Join(paths, "\n"))),
 	)), nil
 }
 
-// systemClip is the files of this computer the system's clipboard holds,
-// as another app copied or cut them; nil when it holds none, or what the
-// app put there itself.
-func (a *app) systemClip(sv ui.Services) *fileClip {
-	formats := sv.ClipboardFormats()
-	if !slices.Contains(formats, mt.URIList) && !slices.Contains(formats, mt.FileList) {
+func clipboardSignature(data mt.Data) string {
+	h := sha256.New()
+	for _, format := range fileClipFormats {
+		if b, err := data.Read(format); err == nil {
+			fmt.Fprintf(h, "%s:%d:", format, len(b))
+			h.Write(b)
+		}
+	}
+	return fmt.Sprintf("%x", h.Sum(nil))
+}
+
+func decodeSystemClip(data mt.Data) *fileClip {
+	files, _ := data.Files()
+	op := ""
+	if b, err := data.Read(gnomeFiles); err == nil {
+		head, body, ok := strings.Cut(strings.ReplaceAll(string(b), "\r\n", "\n"), "\n")
+		if ok && (head == "copy" || head == "cut") {
+			op = head
+			if len(files) == 0 {
+				files, _ = mt.New(mt.NewItem(mt.Bytes(mt.URIList, []byte(body)))).Files()
+			}
+		}
+	}
+	if len(files) == 0 {
 		return nil
 	}
-	data := sv.ReadClipboardData(mt.URIList, mt.FileList,
-		mt.Format("application/x-kde-cutselection"), mt.Format("x-special/gnome-copied-files"))
-	files, err := data.Files()
-	if err != nil || len(files) == 0 || strings.Join(files, "\n") == a.clipSys {
-		return nil
+	cl := &fileClip{local: true, from: filepath.Dir(files[0]), signature: clipboardSignature(data)}
+	if b, err := data.Read(kdeCut); err == nil {
+		cl.move = strings.TrimSpace(string(b)) == "1"
 	}
-	cl := &fileClip{local: true, from: filepath.Dir(files[0])}
-	if b, err := data.Read(mt.Format("application/x-kde-cutselection")); err == nil && strings.TrimSpace(string(b)) == "1" {
-		cl.move = true
+	if op != "" {
+		cl.move = op == "cut"
 	}
-	if b, err := data.Read(mt.Format("x-special/gnome-copied-files")); err == nil && strings.HasPrefix(string(b), "cut") {
-		cl.move = true
+	if b, err := data.Read(dropEffect); err == nil && len(b) == 4 {
+		cl.move = binary.LittleEndian.Uint32(b) == 2
 	}
+	seen := map[string]bool{}
 	for _, f := range files {
+		f = filepath.Clean(f)
+		if seen[f] {
+			continue
+		}
+		seen[f] = true
 		cl.es = append(cl.es, fileindex.Entry{Name: filepath.Base(f), Path: f})
 	}
 	return cl
@@ -229,14 +272,27 @@ func (a *app) pasteTargetShown() (pasteTarget, string) {
 // clipNow is what a paste pastes: what another app put on the system's
 // clipboard since, else what the app copied or cut.
 func (a *app) clipNow(sv ui.Services) *fileClip {
-	if cl := a.systemClip(sv); cl != nil {
-		return cl
+	data := sv.ReadClipboardData(fileClipFormats...)
+	if token, err := data.Read(clipOwner); err == nil && a.clipSys != "" && string(token) == a.clipSys {
+		return a.clip
 	}
-	return a.clip
+	external := decodeSystemClip(data)
+	if external != nil && a.clip != nil && external.signature == a.clip.signature {
+		return a.clip
+	}
+	a.clip, a.clipSys = external, ""
+	return external
 }
 
-// hasPaste reports whether there is something to paste.
-func (a *app) hasPaste(sv ui.Services) bool { return a.clip != nil || a.systemClip(sv) != nil }
+func (a *app) hasPaste(sv ui.Services) bool { return a.clipNow(sv) != nil }
+
+func (a *app) clearClip(sv ui.Services, cl *fileClip) {
+	if cl == nil || a.clipNow(sv) != cl {
+		return
+	}
+	sv.WriteClipboardData(mt.Data{})
+	a.clip, a.clipSys = nil, ""
+}
 
 // pasteShown pastes into the folder shown.
 func (a *app) pasteShown(c *ui.Context) {
@@ -252,7 +308,7 @@ func (a *app) pasteShown(c *ui.Context) {
 // the clipboard: its files are no longer where it says.
 func (a *app) paste(sv ui.Services, t pasteTarget) {
 	cl := a.clipNow(sv)
-	if cl == nil || len(cl.es) == 0 {
+	if cl == nil || len(cl.es) == 0 || cl.busy {
 		return
 	}
 	kind := "复制"
@@ -266,15 +322,31 @@ func (a *app) paste(sv ui.Services, t pasteTarget) {
 		for i, e := range cl.es {
 			paths[i] = e.Path
 		}
-		if !a.localTransfer(paths, cl.move, t.local) {
-			return
-		}
+		a.localTransfer(paths, cl.move, t.local, localTransferCallbacks{
+			started: func() { cl.busy = true },
+			finished: func(ok bool) {
+				cl.busy = false
+				if ok && cl.move {
+					a.clearClip(sv, cl)
+				}
+			},
+		})
+		return
 	case cl.local:
 		paths := make([]string, len(cl.es))
 		for i, e := range cl.es {
 			paths[i] = e.Path
 		}
-		a.uploadInto(paths, cl.move, t.server, t.root, t.rootName, t.dir)
+		a.uploadInto(paths, cl.move, t.server, t.root, t.rootName, t.dir, localTransferCallbacks{
+			started: func() { cl.busy = true },
+			finished: func(ok bool) {
+				cl.busy = false
+				if ok && cl.move {
+					a.clearClip(sv, cl)
+				}
+			},
+		})
+		return
 	case t.local != "":
 		a.downloadInto(cl.files, cl.move, cl.es, t.local)
 	case cl.archive() || t.server != cl.files.server:
@@ -352,7 +424,7 @@ func (a *app) nasChanged(server string, root int64, dir string) {
 // uploadInto uploads files of this computer into dir of a root of a
 // server, asking first to replace what it has of the same names; with
 // move, what landed whole then goes to the trash of this computer.
-func (a *app) uploadInto(files []string, move bool, server string, root int64, rootName, dir string) {
+func (a *app) uploadInto(files []string, move bool, server string, root int64, rootName, dir string, callbacks ...localTransferCallbacks) {
 	c, ok := a.serverClient(server)
 	if !ok {
 		return
@@ -384,7 +456,7 @@ func (a *app) uploadInto(files []string, move bool, server string, root int64, r
 				}
 			}
 			start := func() {
-				a.startUploadTo(server, root, a.target(server, rootName, dir), dir, files, move, func() { a.nasChanged(server, root, dir) })
+				a.startUploadTo(server, root, a.target(server, rootName, dir), dir, files, move, func() { a.nasChanged(server, root, dir) }, callbacks...)
 			}
 			if len(taken) == 0 {
 				start()
@@ -426,6 +498,7 @@ func (a *app) clipItems(c *ui.Context, m *ui.Menu, es []fileindex.Entry) {
 		if m.Item("复制").Shortcut(ui.Ctrl, ui.KeyC).Chosen() {
 			a.copyChosen(c, false)
 		}
+
 	}
 	paste := a.hasPaste(c.Services())
 	_, why := a.pasteTargetShown()
@@ -475,6 +548,7 @@ func (a *app) clipIndicator(c *ui.Context) {
 		verb = "已剪切"
 	}
 	text := fmt.Sprintf("%s %d 项", verb, len(cl.es))
+
 	chip := ui.Row(c.Key("clip-indicator")).Gap(6).AlignItems(ui.Center).Padding(2, 4, 2, 8).Radius(t.Radius).Background(t.Surface).
 		Tooltip(fmt.Sprintf("%s：%s\n来自 %s\n在目标文件夹按 Ctrl+V 粘贴", verb, cl.title(), cl.from))
 	chip.Children(func() {
@@ -485,7 +559,7 @@ func (a *app) clipIndicator(c *ui.Context) {
 		ui.Icon(c, svg).FontSize(12).TextColor(t.TextMuted)
 		ui.Text(c, text).FontSize(12).SingleLine().TextColor(t.TextMuted)
 		ui.ButtonBase(c.Key("clip-clear")).Size(16, 16).Radius(4).Label("清空剪贴板").Tooltip("清空").OnClick(func() {
-			a.clip, a.clipSys = nil, ""
+			a.clearClip(c.Services(), cl)
 		}).Children(func() { ui.Icon(c, iconClose).FontSize(9).TextColor(t.TextMuted) })
 	})
 }
@@ -504,4 +578,14 @@ func (a *app) nasFilesAt(server string, root fileindex.Root, dir string) *nasFil
 		changed: func(string) { a.nasChanged(server, root.ID, dir) },
 		clear:   func() {},
 	}
+}
+
+func ownedClipboard(data mt.Data, token string) mt.Data {
+	reps := []mt.Representation{mt.Bytes(clipOwner, []byte(token))}
+	for _, format := range data.Formats() {
+		if b, err := data.Read(format); err == nil {
+			reps = append(reps, mt.Bytes(format, b))
+		}
+	}
+	return mt.New(mt.NewItem(reps...))
 }

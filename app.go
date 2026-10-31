@@ -82,9 +82,8 @@ type app struct {
 	detailProps *propsDialog
 	// naming asks for a name, as of a new folder of this computer.
 	naming *nameAsk
-	// clip is what was copied or cut (clip.go); clipSys the files of this
-	// computer it put on the system's clipboard, to tell them from what
-	// another app puts there.
+	// clip is the current file selection; clipSys identifies our system
+	// clipboard ownership, independently of filenames and copy/cut mode.
 	clip        *fileClip
 	clipSys     string
 	detailKey   string
@@ -681,6 +680,10 @@ func (a *app) stopBackground() {
 		a.save()
 	}
 	a.closed = true
+	a.gsearch.closeSearch()
+	for _, tab := range a.tabs {
+		tab.gsearch.closeSearch()
+	}
 	if a.localOpLog != nil {
 		a.localOpLog.Close()
 		a.localOpLog = nil

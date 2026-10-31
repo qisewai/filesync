@@ -12,8 +12,8 @@ import (
 	"strings"
 	"time"
 
-	"filesync/config"
 	"filemanager/remoteclient"
+	"filesync/config"
 
 	"github.com/egoist/mygo/ui"
 )
@@ -24,6 +24,7 @@ const localPlace = "local"
 // localBrowser shows a directory of this computer, to back up what is
 // chosen in it.
 type localBrowser struct {
+	filter  filenameFilter
 	dir     string
 	items   []fileindex.Entry // Path is the full path
 	loading bool
@@ -235,6 +236,7 @@ func (a *app) openLocal(dir string, choose ...string) {
 	a.place = localPlace
 	if b.dir != dir {
 		b.items = nil
+		b.filter = filenameFilter{}
 		b.sel.Clear()
 		b.cursor = -1
 	}
@@ -260,6 +262,7 @@ func (a *app) openLocal(dir string, choose ...string) {
 			a.cacheLocal(dir, items, probed)
 			sortEntries(&b.sort, items, nil)
 			b.items = items
+			b.filter.source(items)
 			// The selection keeps what is still there.
 			for p := range b.sel.All() {
 				if !slices.ContainsFunc(items, func(e fileindex.Entry) bool { return e.Path == p }) {
@@ -368,7 +371,8 @@ func (a *app) localView(c *ui.Context) {
 		}
 	}
 	zone := a.fileList(c, &fileView{
-		key: "local-files", label: "本机文件", items: b.items, sel: &b.sel, cursor: &b.cursor,
+		filter: &b.filter,
+		key:    "local-files", label: "本机文件", items: b.items, sel: &b.sel, cursor: &b.cursor,
 		list: &b.list, gridSt: &b.gridSt, grid: b.grid, sort: &b.sort,
 		loading:  b.loading,
 		thumb:    a.localThumb,
@@ -383,6 +387,7 @@ func (a *app) localView(c *ui.Context) {
 		},
 	})
 	zone.ContextMenu(func(m *ui.Menu) {
+		groupMenu(m, &b.sort.group)
 		es := b.chosen()
 		if busy {
 			es = nil

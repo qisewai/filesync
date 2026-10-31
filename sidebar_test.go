@@ -21,7 +21,12 @@ func TestStartsOnTheSearch(t *testing.T) {
 		t.Fatalf("started on %q", h.a.location())
 	}
 	h.want("一个搜索框，找遍本机和所有 NAS")
-	h.want("在 家里 中搜索")
+	if _, ok := h.tt.Find("搜索范围：全部位置"); !ok {
+		t.Fatal("missing search field scope selector")
+	}
+	if _, ok := h.tt.Find("在 家里 中搜索"); ok {
+		t.Fatal("duplicate scope selector on search landing")
+	}
 	if h.tt.HasText("首页") || h.tt.HasText("隐藏详情") {
 		t.Fatal("a home page, or the details, beside the search")
 	}

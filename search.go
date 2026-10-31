@@ -398,6 +398,7 @@ func (a *app) searchFrom(q, scope string) {
 	}
 	s.scope = scope
 	s.filter = searchFilter{}
+	s.releaseResults()
 	s.groups = nil
 	a.place = "search"
 	s.query = q
@@ -436,6 +437,8 @@ func (a *app) setScope(scope string) {
 	s.cursor = -1
 	a.showResults()
 	s.list.ScrollTo(0, ui.Start)
+	s.sort.group.table.ScrollTo(0, ui.Start)
+	s.sort.group.grid.ScrollTo(0, ui.Start)
 	s.awaitTop = true
 }
 
@@ -457,6 +460,7 @@ func (s *globalSearch) sortKey() string {
 func (a *app) runSearch(wait time.Duration) {
 	s := a.gsearch
 	s.gen++
+	s.releaseResults()
 	gen := s.gen
 	if s.debounce != nil {
 		s.debounce.Stop()
@@ -494,6 +498,8 @@ func (a *app) runSearch(wait time.Duration) {
 		s.cursor = -1
 		s.sort.applied = s.sort.by
 		s.list.ScrollTo(0, ui.Start)
+		s.sort.group.table.ScrollTo(0, ui.Start)
+		s.sort.group.grid.ScrollTo(0, ui.Start)
 		s.awaitTop = true
 		if f := s.folder; f != nil {
 			g := &searchGroup{key: "folder", source: f.source, name: a.scopeName("folder")}
@@ -572,6 +578,15 @@ func (a *app) searchIn(ctx context.Context, g *searchGroup, q string, f *searchF
 				es, err = res.Page(ctx, 0, searchPageSize)
 			}
 			a.post(func() {
+				if a.closed || a.gsearch != s || s.gen != gen || ctx.Err() != nil || err != nil {
+					if res != nil {
+						go res.Close()
+					}
+					if !a.closed && a.gsearch == s && s.gen == gen {
+						done(nil, 0, err)
+					}
+					return
+				}
 				g.local = res
 				done(localHits(es), res.Total(), err)
 			})
@@ -627,7 +642,7 @@ func serverHits(server string, es []fileindex.Entry) []searchHit {
 func (a *app) moreResults() {
 	s := a.gsearch
 	g := s.group(s.scope)
-	if g == nil || g.loading || g.more || g.err != "" || len(g.hits) >= g.total {
+	if g == nil || g.loading || g.more || g.err != "" || len(g.hits) >= g.total || g.local == nil && g.client == nil {
 		return
 	}
 	g.more = true
@@ -670,6 +685,7 @@ func (a *app) moreResults() {
 // order of the table.
 func (a *app) showResults() {
 	s := a.gsearch
+	s.sort.revision++
 	s.hits = s.hits[:0]
 	if g := s.group(s.scope); g != nil {
 		s.hits = append(s.hits, g.hits...)
@@ -820,7 +836,7 @@ func (a *app) searchPage(c *ui.Context) {
 		ui.Text(c, s.queryError).TextColor(c.Theme().Danger)
 	}
 	if len(s.groups) > 0 {
-		a.searchScopes(c)
+		a.searchNotices(c)
 	}
 	a.indexNotice(c)
 	// The filters, over the results.
@@ -873,6 +889,7 @@ func (a *app) searchPage(c *ui.Context) {
 		empty:    func() { a.searchEmpty(c) },
 	})
 	zone.ContextMenu(func(m *ui.Menu) {
+		groupMenu(m, &s.sort.group)
 		if n == 1 {
 			if m.Item("打开").Chosen() {
 				a.openHit(chosen[0], false)
@@ -1011,74 +1028,22 @@ func (a *app) hitThumb(h searchHit) *ui.Bitmap {
 	return a.serverThumb(h.source, h.e)
 }
 
-// searchScopes are the tabs of the scopes of the search, with how many
-// each found; a click shows one, in place.
-func (a *app) searchScopes(c *ui.Context) {
+// searchNotices keeps query failures and partial-result hints visible without
+// duplicating the scope selector in the search field.
+func (a *app) searchNotices(c *ui.Context) {
 	s := a.gsearch
-	t := c.Theme()
-	ui.Row(c).Gap(6).Wrap().AlignItems(ui.Center).Children(func() {
-		tab := func(key, name string, svg *ui.SVG, total int, loading bool, err string) {
-			on := s.scope == key
-			chip := ui.ButtonBase(c.Key("scope/"+key)).Padding(4, 12).Gap(6).AlignItems(ui.Center).Radius(99).
-				Border(1, t.Border).Label("搜索范围 " + name)
-			switch {
-			case on:
-				chip.Background(t.Accent.Alpha(0.12)).BorderColor(t.Accent.Alpha(0.5))
-			case chip.Hovered():
-				chip.Background(t.SurfaceHover)
-			}
-			chip.Children(func() {
-				color := t.TextMuted
-				if on {
-					color = t.Accent
-				}
-				ui.Icon(c, svg).FontSize(13).TextColor(color)
-				label := ui.Text(c, name).FontSize(12).SingleLine()
-				if on {
-					label.TextColor(t.Accent).Bold()
-				}
-				switch {
-				case loading:
-					ui.Spinner(c).FontSize(11).Label("正在搜索 " + name)
-				case err != "":
-					ui.Icon(c, iconAlert).FontSize(12).TextColor(t.Danger).Tooltip(err)
-				default:
-					rolling(ui.Text(c, groupDigits(int64(total))).FontSize(12).FontFeatures("tnum").TextColor(color))
-				}
-			})
-			if chip.Clicked() {
-				a.setScope(key)
-			}
+	partial := false
+	for _, g := range s.groups {
+		if s.scope == "all" && g.key == "folder" || s.scope != "all" && g.key != s.scope {
+			continue
 		}
-		if g := s.group("folder"); g != nil {
-			tab("folder", g.name, iconFolder, g.total, g.loading, g.err)
+		if g.err != "" {
+			ui.Text(c, g.name+"："+g.err).FontSize(12).TextColor(c.Theme().Danger)
 		}
-		total, loading := 0, false
-		for _, g := range s.groups {
-			if g.key != "folder" {
-				total += g.total
-				loading = loading || g.loading
-			}
-		}
-		tab("all", "全部位置", iconSearch, total, loading, "")
-		for _, g := range s.groups {
-			if g.key == "folder" {
-				continue
-			}
-			svg := iconServer
-			if g.source == localPlace {
-				svg = iconLaptop
-			}
-			tab(g.key, g.name, svg, g.total, g.loading, g.err)
-		}
-	})
-	if s.scope == "all" {
-		for _, g := range s.groups {
-			if g.key != "folder" && g.total > len(g.hits) {
-				ui.Text(c, fmt.Sprintf("“全部位置”中每处先显示前 %d 项，选择一个位置查看它的全部结果。", searchPageSize)).FontSize(12).TextColor(t.TextMuted)
-				break
-			}
-		}
+		partial = partial || g.total > len(g.hits)
+	}
+	if s.scope == "all" && partial {
+		ui.Text(c, fmt.Sprintf("每个位置先显示前 %d 项，可在搜索框左侧选择位置查看全部结果。", searchPageSize)).FontSize(12).TextColor(c.Theme().TextMuted)
 	}
 }
 
@@ -1135,43 +1100,10 @@ func searchLogo(c *ui.Context) {
 }
 
 // searchLandingBelow is, under the field of the page without a search,
-// where to search, the recent searches, and what keeps files from being
-// found.
+// the recent searches and what keeps files from being found.
 func (a *app) searchLandingBelow(c *ui.Context) {
 	s := a.gsearch
 	t := c.Theme()
-	// The places, as the chip of the field chooses them.
-	ui.Row(c.Key("landing-scopes")).Gap(8).Wrap().Justify(ui.Center).MaxWidth(680).Children(func() {
-		pill := func(key, name string, svg *ui.SVG) {
-			on := s.scope == key
-			p := ui.ButtonBase(c.Key("landing-scope/"+key)).Padding(6, 14).Gap(6).AlignItems(ui.Center).Radius(99).
-				Border(1, t.Border).Label("在 " + name + " 中搜索").OnClick(func() {
-				a.setScope(key)
-				a.focusSearch = true
-			})
-			switch {
-			case on:
-				p.Background(t.Accent.Alpha(0.1)).BorderColor(t.Accent.Alpha(0.4))
-			case p.Hovered():
-				p.Background(t.SurfaceHover)
-			}
-			p.Children(func() {
-				color := t.TextMuted
-				if on {
-					color = t.Accent
-				}
-				ui.Icon(c, svg).FontSize(13).TextColor(color)
-				ui.Text(c, name).FontSize(12).SingleLine().TextColor(color)
-			})
-		}
-		pill("all", "全部位置", iconSearch)
-		pill(localPlace, "本机", iconLaptop)
-		for _, sv := range a.store.Servers {
-			if a.serverConnected(sv.ID) {
-				pill(sv.ID, sv.Title(), iconServer)
-			}
-		}
-	})
 	if recent := a.store.RecentSearches; len(recent) > 0 {
 		ui.Row(c.Key("landing-recent")).Gap(6).Wrap().Justify(ui.Center).AlignItems(ui.Center).MaxWidth(620).Children(func() {
 			ui.Text(c, "最近").FontSize(12).TextColor(t.TextMuted).Margin(0, 4, 0, 0)
@@ -1252,4 +1184,34 @@ func hitLocation(h searchHit) string {
 		return nasLocation(h.source, e.Root, e.Path)
 	}
 	return nasLocation(h.source, e.Root, e.Parent)
+}
+
+// releaseResults does not block the UI on backend RPC. In-flight pages use
+// the query context and generation fence and cannot replace a newer query.
+func (s *globalSearch) releaseResults() {
+	if s == nil {
+		return
+	}
+	for _, g := range s.groups {
+		if g.local != nil {
+			r := g.local
+			g.local = nil
+			go r.Close()
+		}
+	}
+}
+func (s *globalSearch) closeSearch() {
+	if s == nil {
+		return
+	}
+	s.gen++
+	if s.cancel != nil {
+		s.cancel()
+		s.cancel = nil
+	}
+	if s.debounce != nil {
+		s.debounce.Stop()
+		s.debounce = nil
+	}
+	s.releaseResults()
 }

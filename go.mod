@@ -17,6 +17,7 @@ require (
 	github.com/klauspost/compress v1.20.1 // indirect
 	github.com/klauspost/pgzip v1.2.7 // indirect
 	github.com/miekg/dns v1.1.73 // indirect
+	github.com/mozillazg/go-pinyin v0.21.0
 	github.com/nwaples/rardecode/v2 v2.4.4 // indirect
 	github.com/pierrec/lz4/v4 v4.1.27 // indirect
 	github.com/spf13/afero v1.15.0 // indirect
