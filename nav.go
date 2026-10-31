@@ -387,6 +387,7 @@ func (a *app) statusBar(c *ui.Context) {
 			a.searchStatus(c)
 		}
 		ui.Spacer(c)
+		iconButton(c, "toggle-terminal", iconTerminal, "显示或隐藏终端", "本地终端（Ctrl+J）", false, a.toggleTerminal)
 		a.filenameFilterStatus(c)
 		a.clipIndicator(c)
 		a.transferIndicator(c)

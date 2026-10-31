@@ -26,13 +26,18 @@ func (a *app) view(c *ui.Context) {
 	c.SetTheme(theme)
 	a.followHistory()
 	a.applyFilenameFilter()
-	a.searchShortcuts(c)
-	a.tabShortcuts(c)
-	a.searchTyping = a.searchTyping || a.filenameFilterFocused(c)
-	a.clipShortcuts(c)
+	if !a.terminalPanel.focus.Focused(c) {
+		a.searchShortcuts(c)
+		a.tabShortcuts(c)
+		a.searchTyping = a.searchTyping || a.filenameFilterFocused(c)
+		a.clipShortcuts(c)
+	}
 	a.searchTyping = a.filenameFilterFocused(c) || a.sidebarFilterInput.Focused(c)
-	c.OnShortcut(ui.Ctrl, ui.KeyB, a.toggleSidebar)
-	c.OnShortcut(ui.Ctrl, ui.KeyI, a.toggleDetails)
+	c.OnShortcut(ui.Ctrl, ui.KeyJ, a.toggleTerminal)
+	if !a.terminalPanel.focus.Focused(c) {
+		c.OnShortcut(ui.Ctrl, ui.KeyB, a.toggleSidebar)
+		c.OnShortcut(ui.Ctrl, ui.KeyI, a.toggleDetails)
+	}
 	// Keep the window outline and viewer backdrop the same with either
 	// layout. A collapsed sidebar takes no room and has no resize handle.
 	content := ui.Row(c.Key("main-content")).Fill().Children(func() {
@@ -94,6 +99,7 @@ func (a *app) pagePane(c *ui.Context) {
 				a.page(c)
 			})
 		})
+		a.terminalView(c)
 		a.statusBar(c)
 	})
 }

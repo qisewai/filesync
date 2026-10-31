@@ -18,6 +18,7 @@ import (
 
 // app is the window's state.
 type app struct {
+	terminalPanel  terminalPanelState
 	treeKeyboard   *animatedTreeStateList
 	treeBuildStack []*animatedTreeState // UI-build-only ancestors; never stores elements
 
@@ -677,6 +678,8 @@ func (a *app) maybeClose() {
 }
 
 func (a *app) stopBackground() {
+	a.terminalPanel.disposed = true
+	a.closeTerminal()
 	if s := a.sharing; s != nil {
 		if s.cancel != nil {
 			s.cancel()
