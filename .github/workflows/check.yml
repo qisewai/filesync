@@ -28,5 +28,5 @@ jobs:
           cache-dependency-path: |
             go.sum
             filemanager/go.sum
-      - run: go -C filemanager test ./localpath ./localprocess -timeout 5m
+      - run: go -C filemanager test ./localpath ./localprocess ./internal/winrename -timeout 5m
       - run: go build -o build/FileSync.exe .

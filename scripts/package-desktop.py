@@ -58,11 +58,13 @@ def main():
         resources = app / 'resources'
         resources.mkdir(exist_ok=True)
         helper = resources / ('filemanager.exe' if goos == 'windows' else 'filemanager')
-        env = {**os.environ, 'GOOS': goos, 'GOARCH': goarch, 'CGO_ENABLED': '0'}
+        # Staging intentionally excludes .git; do not probe the caller's VCS.
+        build_env = {**os.environ, 'GOFLAGS': os.environ.get('GOFLAGS', '') + ' -buildvcs=false'}
+        env = {**build_env, 'GOOS': goos, 'GOARCH': goarch, 'CGO_ENABLED': '0'}
         subprocess.run(['go', 'build', '-trimpath'] + (['-ldflags=-H=windowsgui'] if goos == 'windows' else []) + ['-o', str(helper), './cmd/filemanager'],
                        cwd=app / 'filemanager', env=env, check=True)
         subprocess.run(['go', 'tool', 'mygo', 'build', '-platform', args.platform, '-o', str(out)]
-                       + (['-upload'] if args.upload else []), cwd=app, check=True)
+                       + (['-upload'] if args.upload else []), cwd=app, env=build_env, check=True)
 
 
 if __name__ == '__main__':

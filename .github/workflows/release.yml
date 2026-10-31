@@ -63,7 +63,7 @@ jobs:
             filemanager/go.sum
       - name: Test Windows paths and real backend lifecycle
         working-directory: filemanager
-        run: go test ./localpath ./localprocess -timeout 5m
+        run: go test ./localpath ./localprocess ./internal/winrename -timeout 5m
   release:
     permissions:
       contents: write

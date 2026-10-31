@@ -237,7 +237,7 @@ main.go     窗口和系统接口（目录选择对话框、打开文件和网�
 ## FileManager 后台迁移（进行中）
 
 本机目录列表、侧栏展开和路径补全现在经 FileManager 独立进程读取。
-桌面版本需要与 `filemanager` 后台一起构建；两个工程与 `fileindex` 并列放置。
+桌面版本需要与 `filemanager` 后台一起构建；后台源码已纳入本仓库的 `filemanager/` 目录。
 
 ```sh
 ./scripts/build-desktop.sh
@@ -252,7 +252,7 @@ main.go     窗口和系统接口（目录选择对话框、打开文件和网�
 
 本机后台操作证据位于配置目录 `filemanager/mutations.log`，独立于索引快照。复制移动任务支持持久化结果查询及取消；备份和跨端传输当前仍是请求流，尚未统一重连查询。用户级单实例复用、事件游标、外部变化监听仍待完成；FileIndex 搜索核心已切换到共用树索引。完整边界见 `./filemanager/README.md`。
 
-Linux 支持真实后台子进程；Windows 尚未提供 IPC 运行适配，交叉编译不代表可运行。
+Linux 与 Windows 均通过独立后台子进程工作；Windows 的盘符与 IPC 适配见下文，实机界面验证仍待完成。
 
 ### 文件名模式搜索
 
