@@ -42,6 +42,7 @@ func (a *app) animatedTreeItem(c *ui.Context, label string, open *bool, children
 		ui.Box(c).Size(theme.Space(4), theme.Space(4)).Shrink(0).Role(ui.RoleNone)
 		ui.Text(c, label).SingleLine()
 	})
+	a.bindSidebarTyping(c, item)
 	state := ui.Local(item, "tree-motion", func() animatedTreeState { return animatedTreeState{} })
 	state.first = nil
 	tree := a.treeKeyboard
@@ -79,6 +80,11 @@ func (a *app) animatedTreeItem(c *ui.Context, label string, open *bool, children
 	})
 	if !branch {
 		return item
+	}
+	// Row double-clicks toggle the branch; the disclosure has its own hit
+	// target, so arrow clicks do not also toggle the row.
+	if item.DoubleClicked() {
+		*open = !*open
 	}
 	item.Expanded(*open).OnShortcut(0, forth, func() {
 		if !*open {

@@ -259,9 +259,9 @@ func TestServerNameWithoutSlash(t *testing.T) {
 	}
 }
 
-// The sections and the servers have no page: a click opens or closes
-// them. A folder clicked opens, and shows its folders.
-func TestSidebarClicksOpen(t *testing.T) {
+// Sections toggle through their arrows; directory rows navigate without
+// expanding, and local roots share the favorites section's level.
+func TestSidebarArrowOnlyExpansion(t *testing.T) {
 	f := fitest.New(t)
 	os.MkdirAll(filepath.Join(f.Root, "照片", "2026"), 0755)
 	store := signedIn(t, f)
@@ -272,27 +272,37 @@ func TestSidebarClicksOpen(t *testing.T) {
 	h.a.localRoots = []localRoot{{"临时", local}}
 	h.settle()
 
-	for _, key := range []string{"favorites", "local", "servers"} {
+	if _, ok := h.tt.Find("本机"); ok {
+		t.Fatal("obsolete local grouping is visible")
+	}
+	favoriteRow, _ := h.tt.Find("收藏")
+	localRow, _ := h.tt.Find("本机文件夹 临时")
+	if favoriteRow.X != localRow.X {
+		t.Fatal("favorites and local places are not peers")
+	}
+	h.click("收藏")
+	h.click("家里")
+	for _, key := range []string{"favorites", "server/" + store.Servers[0].ID} {
 		if !*h.a.sectionOpen(key) {
 			t.Fatalf("%s starts closed", key)
 		}
 	}
-	h.click("收藏")
+	h.treeArrow("收藏", 0)
 	if *h.a.sectionOpen("favorites") {
 		t.Fatal("收藏 did not close")
 	}
-	h.click("收藏")
+	h.treeArrow("收藏", 0)
 	if !*h.a.sectionOpen("favorites") {
 		t.Fatal("收藏 did not open")
 	}
-	h.click("家里")
+	h.treeArrow("家里", 0)
 	if *h.a.sectionOpen("server/" + store.Servers[0].ID) {
 		t.Fatal("家里 did not close")
 	}
 	if h.tt.HasText("文件夹 照片") {
 		t.Fatal("closed server still shows its folders")
 	}
-	h.click("家里")
+	h.treeArrow("家里", 0)
 	h.want("文件夹 nas")
 	// Signed-out servers stay in management, not the navigation tree.
 	if h.tt.HasText("公司") {
@@ -306,16 +316,27 @@ func TestSidebarClicksOpen(t *testing.T) {
 	h.a.nas.open = false
 	h.tt.Frame()
 
-	// A local folder clicked opens and shows its folders.
+	// Clicking a row navigates without expanding it; only its arrow toggles.
 	h.click("本机文件夹 临时")
+	if h.a.localNode(local, local).open {
+		t.Fatal("selection expanded local root")
+	}
+	h.treeArrow("本机文件夹 临时", 0)
 	h.want("本机文件夹 项目")
 	h.click("本机文件夹 项目")
 	if h.a.local.dir != filepath.Join(local, "项目") {
 		t.Fatalf("opened %q", h.a.local.dir)
 	}
+	if h.a.localNode(local, filepath.Join(local, "项目")).open {
+		t.Fatal("selection expanded directory")
+	}
+	h.treeArrow("本机文件夹 项目", 1)
 	h.want("本机文件夹 代码")
-	// A server is a section of its own, closed by a click.
-	h.click("家里")
+	if out := os.Getenv("FILESYNC_SIDEBAR_SNAPSHOT"); out != "" {
+		saveResumeSnapshot(t, h, out)
+	}
+	// A server section closes through its arrow.
+	h.treeArrow("家里", 0)
 	if *h.a.sectionOpen("server/" + h.a.store.Servers[0].ID) || h.tt.HasText("文件夹 照片") {
 		t.Fatal("the server's section did not close")
 	}

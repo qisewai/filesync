@@ -808,3 +808,15 @@ func TestSidebarDrags(t *testing.T) {
 		t.Fatalf("saved %v, dragged to %v", again.SidebarWidth, h.a.sidebarW)
 	}
 }
+
+// treeArrow targets the disclosure, separately from the row's navigation action.
+func (h *harness) treeArrow(label string, depth int) {
+	h.t.Helper()
+	h.tt.Advance(treeMotion + time.Millisecond)
+	r, ok := h.tt.Find(label)
+	if !ok {
+		h.t.Fatalf("missing tree row %q", label)
+	}
+	h.tt.ClickAt(r.X+15+20*float32(depth), r.Y+r.H/2)
+	h.settle()
+}

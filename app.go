@@ -135,7 +135,11 @@ type app struct {
 	sidebarMoved  bool
 	sidebarHidden bool
 	// sidebarFilter is what the filter at the sidebar's foot looks for.
-	sidebarFilter string
+	sidebarFilter       string
+	sidebarFilterInput  ui.Handle
+	sidebarFilterResult ui.Handle
+	sidebarFocus        ui.Handle
+	sidebarFilterFocus  bool
 	// detailsW and detailsHidden are the details panel's width, and
 	// whether it is hidden.
 	detailsW      float32

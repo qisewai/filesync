@@ -27,6 +27,8 @@ func browserHarness(t *testing.T, f *fitest.Server) *harness {
 	if roots := h.a.roots[sv.ID]; len(roots) > 0 {
 		h.a.goPlace(rootPlace(sv.ID, roots[0].ID))
 		h.settle()
+		h.a.treeNode(sv.ID, roots[0].ID, "").open = true
+		h.settle()
 	}
 	return h
 }
@@ -74,6 +76,7 @@ func TestNativeBrowserTreeSearchAndFileOperations(t *testing.T) {
 	os.WriteFile(filepath.Join(f.Root, "项目", "其他.txt"), []byte("other"), 0644)
 	h := browserHarness(t, f)
 	h.click("文件夹 项目")
+	h.treeArrow("文件夹 项目", 2)
 	h.want("报告.txt")
 	h.more("新建文件夹…")
 	h.tt.Type("新目录")

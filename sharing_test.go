@@ -78,6 +78,7 @@ func TestPeerInvitationBrowseAndDownload(t *testing.T) {
 	h.a.goPlace(rootPlace(sv.ID, 1))
 	h.settle()
 	h.want("共享资料")
+	h.treeArrow("文件夹 共享磁盘", 1)
 	h.click("文件夹 共享资料")
 	h.want("中文.txt")
 	h.clickPage("中文.txt")

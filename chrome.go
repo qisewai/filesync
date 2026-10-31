@@ -56,18 +56,12 @@ const (
 // mainPane is what is right of the sidebar: the pages, and the details.
 func (a *app) mainPane(c *ui.Context) {
 	ui.Row(c.Key("main-pane")).Grow(1).Shrink(1).MinWidth(0).Fill().Children(func() {
-		if !a.detailsShown(c) {
-			a.pagePane(c)
-			return
+		a.pagePane(c)
+		shown := a.detailsShown(c)
+		if shown {
+			a.panelDivider(c, "详情栏宽度", &a.detailsW, minDetails, min(maxDetails, a.mainWidth(c)-minPageWidth), true)
 		}
-		w := a.mainWidth(c)
-		first := max(w-a.detailsW, 240)
-		split := ui.Split(c.Key("details-split"), &first, func() { a.pagePane(c) }, func() { a.detailsPane(c) }).Fill()
-		if split.Changed() {
-			a.detailsW = min(max(w-first, minDetails), maxDetails)
-			a.store.DetailsWidth = a.detailsW
-			a.sidebarMoved = true
-		}
+		animatedPanel(c, "details-panel", shown, a.detailsW, func() { a.detailsPane(c) })
 	})
 }
 

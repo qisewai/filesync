@@ -33,6 +33,7 @@ func TestTabsOpenSwitchAndKeepTheirPlaces(t *testing.T) {
 	if h.a.nav.CanGoBack() {
 		t.Error("a new tab has the history of the one it came from")
 	}
+	h.treeArrow("文件夹 照片", 2)
 	h.click("文件夹 2025")
 	if h.a.br.path != "照片/2025" {
 		t.Fatalf("went to %q", h.a.br.path)
@@ -102,6 +103,7 @@ func TestTabsNewAndClose(t *testing.T) {
 func TestTabMenu(t *testing.T) {
 	_, h := tabsFixture(t)
 	h.menu("文件夹 照片", "在新标签页中打开")
+	h.treeArrow("文件夹 照片", 2)
 	h.menu("文件夹 2025", "在新标签页中打开")
 	if len(h.a.tabs) != 3 {
 		t.Fatalf("%d tabs", len(h.a.tabs))
@@ -161,7 +163,9 @@ func TestDetailsPanel(t *testing.T) {
 // The filter of the sidebar finds the folders read in its tree.
 func TestSidebarFilter(t *testing.T) {
 	_, h := tabsFixture(t)
-	h.typeInto("过滤侧边栏", "照")
+	h.click("文件夹 文档")
+	h.tt.Type("zhao")
+	h.settle()
 	h.want("找到的文件夹")
 	h.click("照片 · 家里 › nas")
 	h.settle()
@@ -169,8 +173,9 @@ func TestSidebarFilter(t *testing.T) {
 		t.Fatalf("went to %q", h.a.br.path)
 	}
 	h.click("清除过滤")
-	h.typeInto("过滤侧边栏", "没有这个")
-	h.want("没有找到名称包含“没有这个”的文件夹。只在已展开过的目录中查找。")
+	h.tt.Type("没有这个")
+	h.settle()
+	h.want("没有找到名称以“没有这个”开头的文件夹。支持英文或拼音前缀，只在已读取的目录中查找。")
 }
 
 // Overflow keeps the selected tab and the window actions reachable.

@@ -30,22 +30,17 @@ func (a *app) view(c *ui.Context) {
 	a.tabShortcuts(c)
 	a.searchTyping = a.searchTyping || a.filenameFilterFocused(c)
 	a.clipShortcuts(c)
-	a.searchTyping = a.filenameFilterFocused(c)
+	a.searchTyping = a.filenameFilterFocused(c) || a.sidebarFilterInput.Focused(c)
 	c.OnShortcut(ui.Ctrl, ui.KeyB, a.toggleSidebar)
 	c.OnShortcut(ui.Ctrl, ui.KeyI, a.toggleDetails)
 	// Keep the window outline and viewer backdrop the same with either
 	// layout. A collapsed sidebar takes no room and has no resize handle.
-	content := ui.Box(c.Key("main-content")).Fill().Children(func() {
-		if a.sidebarHidden {
-			a.mainPane(c)
-			return
+	content := ui.Row(c.Key("main-content")).Fill().Children(func() {
+		animatedPanel(c, "sidebar-panel", !a.sidebarHidden, a.sidebarW, func() { a.sidebar(c) })
+		if !a.sidebarHidden {
+			a.panelDivider(c, "侧边栏宽度", &a.sidebarW, minSidebar, maxSidebar, false)
 		}
-		split := ui.Split(c.Key("main-split"), &a.sidebarW, func() { a.sidebar(c) }, func() { a.mainPane(c) }).Fill()
-		if split.Changed() {
-			a.sidebarW = min(max(a.sidebarW, minSidebar), maxSidebar)
-			a.store.SidebarWidth = a.sidebarW
-			a.sidebarMoved = true
-		}
+		a.mainPane(c)
 	})
 	// A frameless window has no shadow on Wayland: an outline tells it
 	// from what is behind it.
@@ -87,7 +82,7 @@ func (a *app) view(c *ui.Context) {
 }
 
 func (a *app) pagePane(c *ui.Context) {
-	ui.Column(c.Key("page-pane")).Grow(1).Shrink(1).MinWidth(0).Fill().Children(func() {
+	ui.Column(c.Key("page-pane")).Label("文件浏览区域").Grow(1).Shrink(1).MinWidth(0).Fill().Children(func() {
 		a.tabBar(c)
 		a.topBar(c)
 		a.nav.View(c, func(r *ui.Route) {
@@ -146,7 +141,9 @@ func rootPlace(server string, root int64) string { return fmt.Sprintf("root/%s/%
 
 func (a *app) sidebar(c *ui.Context) {
 	t := c.Theme()
-	ui.Column(c).Fill().Background(t.Surface).Children(func() {
+	sidebar := ui.Column(c).Fill().Background(t.Surface).Focusable().Bind(&a.sidebarFocus).Label("侧边栏")
+	a.bindSidebarTyping(c, sidebar)
+	sidebar.Children(func() {
 		a.sidebarHead(c)
 		ui.Scroll(c).Grow(1).MinHeight(0).Padding(8, 8).Children(func() {
 			if strings.TrimSpace(a.sidebarFilter) != "" {
@@ -179,11 +176,8 @@ func (a *app) sidebarTree(c *ui.Context) {
 					a.focusSearch = true
 				})
 				favs := a.animatedTreeItem(c.Key("favorites"), "", a.sectionOpen("favorites"), func() { a.favoriteItems(c) })
-				// The sections, and the servers, have no page: a click opens
-				// or closes them, as their arrows do.
-				favs.Children(func() { sectionTitle(c, "收藏") }).Label("收藏").OnClick(a.toggleSection("favorites"))
-				local := a.animatedTreeItem(c.Key("local"), "", a.sectionOpen("local"), func() { a.localItems(c) })
-				local.Children(func() { sectionTitle(c, "本机") }).Label("本机").OnClick(a.toggleSection("local"))
+				favs.Children(func() { labeled(c, iconStar, "收藏", c.Theme().TextMuted) }).Label("收藏")
+				a.localItems(c)
 				a.serverList(c)
 				bk := a.navItem(c, "backup", iconBackup, "备份任务", func() { a.place = "backup" })
 				a.backupMark(c, bk)
@@ -219,22 +213,6 @@ func (a *app) serverList(c *ui.Context) {
 			a.serverMark(c, sv)
 		}).Label(sv.Title()).Tooltip(tip)
 		node.ContextMenu(func(m *ui.Menu) { a.serverMenu(m, sv) })
-		// Signed out, a click signs in; else it opens or closes it.
-		node.OnClick(func() {
-			if sv.Token == "" {
-				a.openLogin(sv.ID, func() {})
-				return
-			}
-			a.toggleSection("server/" + sv.ID)()
-		})
-	}
-}
-
-// toggleSection opens a branch of the sidebar, or closes it.
-func (a *app) toggleSection(key string) func() {
-	return func() {
-		open := a.sectionOpen(key)
-		*open = !*open
 	}
 }
 

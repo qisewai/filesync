@@ -6,6 +6,7 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"unicode"
 
 	"filesync/config"
 
@@ -13,7 +14,7 @@ import (
 )
 
 // The filter at the foot of the sidebar: typed, the sidebar lists the
-// folders it knows whose names hold what was typed (the favorites, the
+// folders it knows whose names start with the typed text or pinyin (the favorites, the
 // places of this computer, the roots of the servers and the folders read
 // in its tree), each going there.
 
@@ -30,7 +31,7 @@ type filterHit struct {
 // maxFilterHits keeps the list short: what is typed narrows it.
 const maxFilterHits = 200
 
-// filterHits are the folders known whose names hold q.
+// filterHits match the same English/pinyin prefixes as the file browser.
 func (a *app) filterHits(q string) []filterHit {
 	q = strings.ToLower(strings.TrimSpace(q))
 	if q == "" {
@@ -39,7 +40,7 @@ func (a *app) filterHits(q string) []filterHit {
 	seen := map[string]bool{}
 	var out []filterHit
 	add := func(h filterHit) {
-		if seen[h.loc] || !strings.Contains(strings.ToLower(h.name), q) {
+		if seen[h.loc] || !filenameMatches(h.name, q) {
 			return
 		}
 		seen[h.loc] = true
@@ -148,21 +149,25 @@ func (a *app) sidebarFilterResults(c *ui.Context) {
 	t := c.Theme()
 	hits := a.filterHits(a.sidebarFilter)
 	if len(hits) == 0 {
-		ui.Text(c, "没有找到名称包含“"+strings.TrimSpace(a.sidebarFilter)+"”的文件夹。只在已展开过的目录中查找。").
+		ui.Text(c, "没有找到名称以“"+strings.TrimSpace(a.sidebarFilter)+"”开头的文件夹。支持英文或拼音前缀，只在已读取的目录中查找。").
 			FontSize(12).TextColor(t.TextMuted).Padding(8, 10)
 		return
 	}
 	shown := a.location()
 	ui.Column(c.Key("filter-hits")).Gap(1).Label("找到的文件夹").Children(func() {
-		for _, h := range hits {
+		for i, h := range hits {
 			item := ui.ButtonBase(c.Key("filter/"+h.loc)).Padding(5, 8).Gap(8).AlignItems(ui.Center).Radius(t.Radius).
 				Label(h.name + " · " + h.where).Tooltip(h.where).OnClick(func() { a.goLocation(h.loc) })
+			if i == 0 {
+				item.Bind(&a.sidebarFilterResult)
+			}
 			switch {
 			case h.loc == shown:
 				item.Background(chosenGray(t))
 			case item.Hovered():
 				item.Background(t.SurfaceHover)
 			}
+			a.bindSidebarTyping(c, item)
 			item.ContextMenu(func(m *ui.Menu) {
 				if m.Item("打开").Chosen() {
 					a.goLocation(h.loc)
@@ -191,29 +196,37 @@ func (a *app) sidebarFilterResults(c *ui.Context) {
 func (a *app) sidebarFoot(c *ui.Context) {
 	t := c.Theme()
 	ui.Row(c.Key("sidebar-foot")).Padding(8).Gap(4).AlignItems(ui.Center).BorderWidth(1, 0, 0, 0).BorderColor(t.Border).Children(func() {
-		box := ui.Row(c.Key("sidebar-filter-box")).Grow(1).Shrink(1).MinWidth(0).Gap(6).AlignItems(ui.Center).
-			Padding(4, 8).Radius(t.Radius).Background(t.Background).Border(1, t.Border).Cursor(ui.CursorText)
-		var in ui.Element
-		box.Children(func() {
-			ui.Icon(c, iconSearch).FontSize(13).TextColor(t.TextMuted)
-			in = ui.TextInputBase(c.Key("sidebar-filter"), &a.sidebarFilter).Label("过滤侧边栏").Placeholder("过滤").
-				FontSize(13).Grow(1).Shrink(1).MinWidth(0)
-			if a.sidebarFilter != "" {
-				ui.ButtonBase(c.Key("sidebar-filter-clear")).Size(16, 16).Radius(8).Background(t.TextMuted.Alpha(0.3)).
-					Label("清除过滤").OnClick(func() { a.sidebarFilter = "" }).Children(func() {
-					ui.Icon(c, iconClose).FontSize(9).TextColor(t.Background)
+		if a.sidebarFilter == "" {
+			ui.Spacer(c)
+		} else {
+			in := ui.TextInput(c.Key("sidebar-filter"), &a.sidebarFilter).Bind(&a.sidebarFilterInput).
+				Label("过滤侧边栏").Placeholder("英文 / 拼音前缀").FontSize(13).Grow(1).Shrink(1).MinWidth(0).
+				OnTextKey(func(k ui.TextKey) bool {
+					if k.Key == ui.KeyEscape && k.Mods == 0 {
+						k.SetText("")
+						a.clearSidebarFilter(c)
+						return true
+					}
+					if k.Mods == 0 && (k.Key == ui.KeyEnter || k.Key == ui.KeyDown) && len(a.filterHits(a.sidebarFilter)) > 0 {
+						a.sidebarFilterResult.Focus(c)
+						return true
+					}
+					return false
 				})
+			if a.sidebarFilterFocus {
+				in.Focus()
+				n := len([]rune(a.sidebarFilter))
+				in.SetTextSelection(n, n)
+				a.sidebarFilterFocus = false
 			}
-		})
-		if in.Focused() {
-			box.BorderColor(t.Accent)
-			a.searchTyping = true
-			if in.Shortcut(0, ui.KeyEscape) {
-				a.sidebarFilter = ""
+			if in.Changed() {
+				if a.sidebarFilter == "" {
+					a.clearSidebarFilter(c)
+				}
+				c.Invalidate()
 			}
-		}
-		if box.Clicked() {
-			in.Focus()
+			a.searchTyping = a.searchTyping || in.Focused()
+			flatIcon(c, "sidebar-filter-clear", iconClose, "清除过滤", "清除过滤（Esc）", false, func() { a.clearSidebarFilter(c) })
 		}
 		settings := flatIcon(c, "settings", iconGear, "设置", "服务器、本机索引与其他设置", false, func() { a.place = "settings" })
 		if a.place == "settings" {
@@ -224,4 +237,35 @@ func (a *app) sidebarFoot(c *ui.Context) {
 			a.nasStartEdit(nil)
 		})
 	})
+}
+
+// Typing belongs to the focused sidebar node, never the address/search fields
+// or the file list. Once started, the normal text input handles IME and editing.
+func (a *app) bindSidebarTyping(c *ui.Context, e ui.Element) {
+	if a.sidebarFilter != "" {
+		e.OnShortcut(0, ui.KeyEscape, func() { a.clearSidebarFilter(c) })
+	}
+	e.HandleInput(func(ev ui.InputEvent) bool {
+		if ev.Kind != ui.InputText {
+			return false
+		}
+		text := strings.Map(func(r rune) rune {
+			if unicode.IsControl(r) {
+				return -1
+			}
+			return r
+		}, ev.Text)
+		if text == "" {
+			return false
+		}
+		a.sidebarFilter += text
+		a.sidebarFilterFocus = true
+		return true
+	}).TextCaret(ui.Rect{X: 8, Y: 8, H: 20}).InputMethod(false)
+}
+
+func (a *app) clearSidebarFilter(c *ui.Context) {
+	a.sidebarFilter = ""
+	a.sidebarFilterFocus = false
+	a.sidebarFocus.Focus(c)
 }

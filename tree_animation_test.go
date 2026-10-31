@@ -107,3 +107,57 @@ func TestTreeMotion(t *testing.T) {
 		})
 	}
 }
+
+func TestTreeDoubleClickTogglesOnlyBranches(t *testing.T) {
+	a := &app{}
+	open := false
+	clicks := 0
+	tt := ui.NewTester(func(c *ui.Context) {
+		a.animatedTree(c, func() {
+			a.animatedTreeItem(c.Key("branch"), "Branch", &open, func() {
+				a.animatedTreeItem(c.Key("leaf"), "Leaf", nil, nil)
+			}).OnClick(func() { clicks++ })
+		})
+	}, 300, 200)
+	tt.Frame()
+	click := func(label string) {
+		t.Helper()
+		if err := tt.Click(label); err != nil {
+			t.Fatal(err)
+		}
+	}
+	click("Branch")
+	if open || clicks != 1 {
+		t.Fatal("single click must only navigate")
+	}
+	tt.Advance(50 * time.Millisecond)
+	click("Branch")
+	tt.Advance(treeMotion)
+	if !open || !tt.HasText("Leaf") {
+		t.Fatal("double click did not expand")
+	}
+	click("Leaf")
+	tt.Advance(50 * time.Millisecond)
+	click("Leaf")
+	if !open {
+		t.Fatal("leaf double click affected parent")
+	}
+	tt.Advance(time.Second)
+	click("Branch")
+	if !open {
+		t.Fatal("single click collapsed branch")
+	}
+	tt.Advance(50 * time.Millisecond)
+	click("Branch")
+	tt.Advance(treeMotion)
+	if open || tt.HasText("Leaf") {
+		t.Fatal("double click did not collapse")
+	}
+	tt.Advance(time.Second)
+	before := clicks
+	click("展开或收起")
+	tt.Advance(treeMotion)
+	if !open || clicks != before {
+		t.Fatal("arrow must toggle only once without navigating")
+	}
+}

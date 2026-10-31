@@ -98,3 +98,31 @@ func TestFileListKeepsShowingAsTheServerChanges(t *testing.T) {
 		t.Fatal("the choice or the cursor not kept")
 	}
 }
+
+func TestRemoteTreeSelectionDoesNotExpand(t *testing.T) {
+	f := fitest.New(t)
+	os.MkdirAll(filepath.Join(f.Root, "相册", "2025", "一月"), 0755)
+	h := browserHarness(t, f)
+	server := h.a.store.Servers[0].ID
+	h.click("文件夹 相册")
+	n := h.a.treeNode(server, 1, "相册")
+	if n.open || h.a.br.path != "相册" {
+		t.Fatal("row should navigate without expanding")
+	}
+	h.treeArrow("文件夹 相册", 2)
+	if !n.open || h.a.br.path != "相册" {
+		t.Fatal("arrow should expand without navigating")
+	}
+	h.click("文件夹 2025")
+	if h.a.treeNode(server, 1, "相册/2025").open {
+		t.Fatal("child selection expanded its branch")
+	}
+	h.treeArrow("文件夹 相册", 2)
+	if n.open || h.a.br.path != "相册/2025" {
+		t.Fatal("collapse changed selected directory")
+	}
+	h.click("文件夹 相册")
+	if n.open {
+		t.Fatal("selecting collapsed ancestor reopened it")
+	}
+}

@@ -568,20 +568,18 @@ func (a *app) localTop(dir string) string {
 	return top
 }
 
-// revealLocal opens the branches down to dir, and dir's, from the nearest
-// place it is in, as the tree of a server does.
+// revealLocal opens only ancestors, leaving the selected directory unchanged.
 func (a *app) revealLocal(dir string) {
 	top := a.localTop(dir)
-	if top == "" {
+	if top == "" || dir == top {
 		return
 	}
-	for d := dir; ; d = filepath.Dir(d) {
+	for d := filepath.Dir(dir); ; d = filepath.Dir(d) {
 		a.localNode(top, d).open = true
 		if d == top || filepath.Dir(d) == d {
 			break
 		}
 	}
-	*a.sectionOpen("local") = true
 }
 
 // within reports whether dir is base or inside it.

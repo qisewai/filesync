@@ -3,7 +3,6 @@ package main
 import (
 	"context"
 	"errors"
-	"path"
 	"slices"
 	"strings"
 	"time"
@@ -77,15 +76,16 @@ func (a *app) treeNode(server string, root int64, dir string) *directoryNode {
 	return n
 }
 
+// Reveal ancestors when navigating from outside the tree, without expanding
+// the selected directory itself.
 func (a *app) revealDirectory(b *browser) {
-	dir := ""
-	a.treeNode(b.server, b.root.ID, dir).open = true
 	if b.path == "" {
 		return
 	}
-	for _, part := range strings.Split(b.path, "/") {
-		dir = path.Join(dir, part)
-		a.treeNode(b.server, b.root.ID, dir).open = true
+	a.treeNode(b.server, b.root.ID, "").open = true
+	parts := strings.Split(b.path, "/")
+	for i := 1; i < len(parts); i++ {
+		a.treeNode(b.server, b.root.ID, strings.Join(parts[:i], "/")).open = true
 	}
 }
 
