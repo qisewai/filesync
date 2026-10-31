@@ -355,6 +355,16 @@ func (a *app) nasStartEdit(sv *config.Server) {
 // port 8090 by default.
 func normalizeAddr(s string) (string, error) {
 	s = strings.TrimSpace(s)
+	if strings.HasPrefix(s, "https://") && strings.Contains(s, "#") {
+		u, err := url.Parse(s)
+		if err != nil {
+			return "", err
+		}
+		if u.User != nil || u.Path != "" || u.RawQuery != "" {
+			return "", errors.New("无效的设备地址")
+		}
+		return fileindex.PeerAddress(u.Host, u.Fragment)
+	}
 	s = strings.TrimPrefix(strings.TrimPrefix(s, "http://"), "https://")
 	s = strings.TrimRight(s, "/")
 	if s == "" {
@@ -452,11 +462,14 @@ func (a *app) nasView(c *ui.Context) {
 		if root := a.nasRootInView(); b.pick != nil && b.busy == "" && root != nil && root.ReadOnly {
 			ui.Row(c).Gap(10).Padding(10, 12).Radius(t.Radius*2).Background(t.Warning.Alpha(0.1)).Border(1, t.Warning.Alpha(0.4)).Children(func() {
 				message := "“" + root.Name + "”在 fileindex 中设为只读，不能备份到这里。请在 fileindex 的“索引目录”页面编辑它，关闭“只读”，再回来选择。"
+				if fileindex.IsPeer(b.server.Addr) {
+					message = "对方的 MyGo 目录为只读共享，不能作为写入目标。"
+				}
 				if b.lockServer != "" {
 					message = "此目录只读，请返回选择服务器上的其他可写目录。"
 				}
 				ui.Text(c, message).Grow(1).Shrink(1)
-				if ui.Button(c, "打开 fileindex 设置").Clicked() {
+				if !fileindex.IsPeer(b.server.Addr) && ui.Button(c, "打开 fileindex 设置").Clicked() {
 					a.openURL("http://" + b.server.Addr + "/roots")
 				}
 			})
@@ -522,7 +535,7 @@ func (a *app) nasServers(c *ui.Context) {
 			row := ui.Row(c.Key(sv.ID)).Gap(10).Padding(10, 12).Children(func() {
 				ui.Column(c).Grow(1).Shrink(1).Gap(2).Children(func() {
 					ui.Text(c, sv.Title()).Bold().SingleLine()
-					sub := sv.Addr
+					sub := deviceAddressLabel(sv.Addr)
 					if n := len(a.store.TasksOf(sv.ID)); n > 0 {
 						sub += fmt.Sprintf(" · %d 个任务", n)
 					}
@@ -634,6 +647,10 @@ func (a *app) nasEdit(c *ui.Context) {
 			ui.TextInput(c.Key("sv-name"), &b.name).Placeholder("例如 家里的 NAS（可不填）").AutoFocus()
 		})
 		ui.Field(c, "地址", func() {
+			if b.editing != nil && fileindex.IsPeer(b.editing.Addr) {
+				ui.Text(c, deviceAddressLabel(b.editing.Addr))
+				return
+			}
 			if ui.TextInput(c.Key("sv-addr"), &b.addr).Placeholder("例如 192.168.0.235:8090").Submitted() {
 				a.nasSaveServer()
 			}

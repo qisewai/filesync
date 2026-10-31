@@ -3,3 +3,6 @@
 mygo_windows_*.syso
 /filesync
 /filesync.exe
+
+# Never commit updater signing secrets.
+mygo-update.key

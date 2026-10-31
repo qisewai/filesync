@@ -59,15 +59,16 @@ func main() {
 		log.Fatalf("无法读取设置 %s: %v", dir, err)
 	}
 	a := newApp(store)
-	backendExe := os.Getenv("FILESYNC_FILEMANAGER")
-	if backendExe == "" {
-		self, e := os.Executable()
-		if e == nil {
-			backendExe = filepath.Join(filepath.Dir(self), "filemanager")
-		}
-	}
+	// Keep this session's helper even if the updater replaces the installed bundle.
+	backendExe, cleanupHelper, helperErr := prepareCompanion()
+	defer cleanupHelper()
+	sessionCompanion = backendExe
 	backendCtx, backendCancel := context.WithTimeout(context.Background(), 15*time.Second)
-	backend, backendErr := localprocess.StartWritable(backendCtx, backendExe, "/", filepath.Join(dir, "filemanager", "mutations.log"))
+	var backend *localprocess.Process
+	backendErr := helperErr
+	if backendErr == nil {
+		backend, backendErr = localprocess.StartWritable(backendCtx, backendExe, "/", filepath.Join(dir, "filemanager", "mutations.log"))
+	}
 	backendCancel()
 	if backendErr != nil {
 		a.backendErr = fmt.Errorf("本机后台启动失败，请检查配套 filemanager 程序：%w", backendErr)
@@ -89,6 +90,18 @@ func main() {
 	if err != nil {
 		a.errorMsg = "无法确定本机索引快照位置：" + err.Error()
 	}
+	// Relaunch runs inside MyGo's shutdown, before Run returns and defers run.
+	mygo.App.OnQuit(func() {
+		a.stopBackground()
+		if a.transferHistory != nil {
+			_ = a.transferHistory.wait()
+		}
+		if backend != nil {
+			_ = backend.Close()
+		}
+		cleanupHelper()
+	})
+	a.useUpdater()
 	a.plainText = x11TextScale()
 
 	// Schemes go before the windows that load them.

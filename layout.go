@@ -314,6 +314,9 @@ func (a *app) serverItems(c *ui.Context, sv *config.Server) {
 	for _, r := range roots {
 		a.directoryView(c, sv, r, "", r.Name)
 	}
+	if fileindex.IsPeer(sv.Addr) {
+		return
+	}
 	a.navItem(c, trashPlace(sv.ID), iconTrash, "回收站", func() { a.openTrash(sv.ID) })
 	// The management, in the tab shown last.
 	tab := "roots"
@@ -365,7 +368,7 @@ func (a *app) serverMenu(m *ui.Menu, sv *config.Server) {
 	} else if m.Item("重新连接").Disabled(a.rootsLoading[sv.ID] != nil).Chosen() {
 		a.reconnect(sv)
 	}
-	if a.serverConnected(sv.ID) {
+	if a.serverConnected(sv.ID) && !fileindex.IsPeer(sv.Addr) {
 		m.Separator()
 		if m.Item("目录管理…").Chosen() {
 			a.openAdmin(sv.ID, "roots")
@@ -385,7 +388,7 @@ func (a *app) serverMenu(m *ui.Menu, sv *config.Server) {
 		a.openServers()
 		a.nasStartEdit(sv)
 	}
-	if m.Item("打开网页管理").Chosen() {
+	if !fileindex.IsPeer(sv.Addr) && m.Item("打开网页管理").Chosen() {
 		a.openURL("http://" + sv.Addr + "/settings")
 	}
 	if sv.Token != "" {

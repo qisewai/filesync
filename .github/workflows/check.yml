@@ -1,0 +1,32 @@
+name: Desktop checks
+on:
+  push:
+    branches: [main, master]
+  pull_request:
+permissions:
+  contents: read
+jobs:
+  linux:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache-dependency-path: |
+            go.sum
+            filemanager/go.sum
+      - run: go -C filemanager test ./...
+      - run: go test ./...
+  windows:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache-dependency-path: |
+            go.sum
+            filemanager/go.sum
+      - run: go -C filemanager test ./localpath ./localprocess -timeout 5m
+      - run: go build -o build/FileSync.exe .

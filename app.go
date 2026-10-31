@@ -18,12 +18,14 @@ import (
 
 // app is the window's state.
 type app struct {
-	backend    *fmclient.Client
-	backendErr error
-	lan        *lanDiscovery
-	discover   func(context.Context, func([]fileindex.DiscoveredServer)) error
-	store      *config.Store
-	favs       favorites
+	updatesReady bool
+	sharing      *sharingState
+	backend      *fmclient.Client
+	backendErr   error
+	lan          *lanDiscovery
+	discover     func(context.Context, func([]fileindex.DiscoveredServer)) error
+	store        *config.Store
+	favs         favorites
 	// hiddenTitleBar is whether the window started without the system's
 	// title bar: the toolbar takes its place, beside the window controls,
 	// which it draws itself with ownControls. maximized is whether the
@@ -668,6 +670,15 @@ func (a *app) maybeClose() {
 }
 
 func (a *app) stopBackground() {
+	if s := a.sharing; s != nil {
+		if s.cancel != nil {
+			s.cancel()
+		}
+		if s.process != nil {
+			s.process.Close()
+			s.process = nil
+		}
+	}
 	a.stopDiscovery()
 	if !a.closed {
 		a.saveTransferHistory()

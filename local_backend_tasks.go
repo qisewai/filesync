@@ -5,16 +5,15 @@ import (
 	"crypto/rand"
 	"encoding/hex"
 	"errors"
+	"filemanager/localpath"
 	"fmt"
-	"path/filepath"
-	"strings"
 	"time"
 
 	"filemanager/api"
 )
 
 func backendLocation(p string) api.Location {
-	return api.Location{Root: "local", Path: filepath.ToSlash(strings.TrimPrefix(filepath.Clean(p), string(filepath.Separator)))}
+	return localpath.Location(p)
 }
 
 // Keep the index bridge's intent open until the backend reports a terminal

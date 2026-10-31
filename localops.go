@@ -336,7 +336,7 @@ func (a *app) localMutation(action, source, target string) error {
 		if p == "" {
 			return api.Location{}
 		}
-		return api.Location{Root: "local", Path: filepath.ToSlash(strings.TrimPrefix(filepath.Clean(p), string(filepath.Separator)))}
+		return backendLocation(p)
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), requestTimeout)
 	defer cancel()

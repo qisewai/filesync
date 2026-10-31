@@ -262,7 +262,7 @@ func (a *app) directoryMenu(c *ui.Context, m *ui.Menu, sv *config.Server, root f
 		if m.Item("刷新").Chosen() {
 			a.refreshDirectory(sv, root, dir)
 		}
-		if m.Item("目录管理…").Chosen() {
+		if !fileindex.IsPeer(sv.Addr) && m.Item("目录管理…").Chosen() {
 			a.openAdmin(sv.ID, "roots")
 		}
 		if m.Item("属性").Chosen() {

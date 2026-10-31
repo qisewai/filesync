@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"strings"
 
+	fileindex "filemanager/remoteclient"
 	"filesync/config"
 
 	"github.com/egoist/mygo/ui"
@@ -19,6 +20,8 @@ func (a *app) settingsPage(c *ui.Context) {
 			a.serversCard(c)
 			a.localIndexCard(c)
 			a.generalCard(c)
+			a.sharingCard(c)
+			a.updatesCard(c)
 		})
 	})
 }
@@ -45,7 +48,7 @@ func settingsCard(c *ui.Context, svg *ui.SVG, title, about string, fn func()) {
 // each.
 func (a *app) serversCard(c *ui.Context) {
 	t := c.Theme()
-	settingsCard(c, iconServer, "服务器", "NAS 上运行的 fileindex。只保存登录状态，不保存密码。", func() {
+	settingsCard(c, iconServer, "服务器", "FileIndex 服务器与已连接的 MyGo 设备。", func() {
 		if len(a.store.Servers) == 0 {
 			ui.Text(c, "还没有服务器。").FontSize(12).TextColor(t.TextMuted)
 		}
@@ -59,7 +62,7 @@ func (a *app) serversCard(c *ui.Context) {
 					if a.unreachable(sv) {
 						title.TextColor(t.TextMuted)
 					}
-					detail := sv.Addr + " · " + state
+					detail := deviceAddressLabel(sv.Addr) + " · " + state
 					if roots, ok := a.roots[sv.ID]; ok && sv.Token != "" && a.serverErr[sv.ID] == nil {
 						detail += fmt.Sprintf(" · %d 个索引目录", len(roots))
 					}
@@ -70,7 +73,7 @@ func (a *app) serversCard(c *ui.Context) {
 				} else if !a.serverConnected(sv.ID) {
 					ui.Button(c.Key("connect/"+sv.ID), "连接").Label("连接 " + sv.Title()).
 						Disabled(a.rootsLoading[sv.ID] != nil).OnClick(func() { a.reconnect(sv) })
-				} else {
+				} else if !fileindex.IsPeer(sv.Addr) {
 					ui.Button(c.Key("manage/"+sv.ID), "管理").Label("管理 " + sv.Title()).OnClick(func() { a.openAdmin(sv.ID, "roots") })
 				}
 				iconButton(c, "server-menu/"+sv.ID, iconMore, "服务器菜单 "+sv.Title(), "更多操作", false, func() {}).

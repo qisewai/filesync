@@ -295,7 +295,7 @@ func (a *app) readLocalProbe(dir string, dirsOnly, hidden, probe bool) ([]filein
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), requestTimeout)
 	defer cancel()
-	entries, err := a.backend.List(ctx, api.ListRequest{Location: api.Location{Root: "local", Path: strings.TrimPrefix(filepath.ToSlash(abs), "/")}, Hidden: hidden, DirsOnly: dirsOnly, Probe: probe})
+	entries, err := a.backend.List(ctx, api.ListRequest{Location: backendLocation(abs), Hidden: hidden, DirsOnly: dirsOnly, Probe: probe})
 	if err != nil {
 		return nil, err
 	}
@@ -305,7 +305,7 @@ func (a *app) readLocalProbe(dir string, dirsOnly, hidden, probe bool) ([]filein
 		if !e.IsDir {
 			ext = extOf(e.Name)
 		}
-		out = append(out, fileindex.Entry{Name: e.Name, Path: filepath.Join(string(filepath.Separator), filepath.FromSlash(e.Path)), Parent: abs, IsDir: e.IsDir, Link: e.Link, Size: e.Size, MTime: e.MTime, Ext: ext})
+		out = append(out, fileindex.Entry{Name: e.Name, Path: filepath.Join(abs, e.Name), Parent: abs, IsDir: e.IsDir, Link: e.Link, Size: e.Size, MTime: e.MTime, Ext: ext})
 	}
 	return out, nil
 }

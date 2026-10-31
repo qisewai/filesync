@@ -86,7 +86,7 @@ NAS 浏览需要更新 fileindex，使其包含三个已登录只读接口：
 
 首次读取 tar 压缩流和单文件压缩流需要顺序扫描，界面显示读取量并可取消。打开 tar 内靠后的文件或固实 7z/RAR 成员也会较慢。加密包或加密成员只显示提示，第一阶段不输入密码；包内音视频下载后再打开；搜索不包含包内文件。多卷压缩包不支持。
 
-归档读取器与测试已统一至 `../filemanager/archive/`，客户端和服务端直接依赖共用模块。`scripts/sync-archive.sh` 仅保留为运行共用归档测试的兼容入口。
+归档读取器与测试已统一至 `./filemanager/archive/`，客户端和服务端直接依赖共用模块。`scripts/sync-archive.sh` 仅保留为运行共用归档测试的兼容入口。
 
 ## 功能
 
@@ -144,7 +144,7 @@ NAS 浏览需要更新 fileindex，使其包含三个已登录只读接口：
 百万项模拟数据的测量命令：
 
 ```sh
-(cd ../filemanager && go test ./index -run '^$' -bench BenchmarkMillion -benchmem)
+(cd ./filemanager && go test ./index -run '^$' -bench BenchmarkMillion -benchmem)
 ```
 
 ## 传输方式
@@ -201,14 +201,14 @@ FILESYNC_E2E_ADDR=192.168.0.235:8090 FILESYNC_E2E_TOKEN=会话 FILESYNC_E2E_SRC=
 ## 代码结构
 
 ```
-../filemanager/engine/ 比较与计划：扫描本机目录、对比目标、生成计划、执行（Target 接口）
+./filemanager/engine/ 比较与计划：扫描本机目录、对比目标、生成计划、执行（Target 接口）
 internal/archive/ 压缩包只读读取器、目录缓存和 HTTP 流（同步到 fileindex）
 archive.go  NAS/本机压缩包浏览、预览、导航和解压入口
-../filemanager/remoteclient/ fileindex 客户端和备份目标：浏览、管理、扫描、查重、统计、回收站、本机代理、任务事件、tar 上传下载、服务器间中转、归档
+./filemanager/remoteclient/ fileindex 客户端和备份目标：浏览、管理、扫描、查重、统计、回收站、本机代理、任务事件、tar 上传下载、服务器间中转、归档
             fitest/ 测试用的模拟 fileindex 服务器
 config/     服务器、任务和运行记录的读写
 localtrash/ 把本机文件移入系统回收站（Linux freedesktop、Windows 回收站）
-../filemanager/index/ 共用索引：扫描、二进制快照、操作日志、实时增量层、名称匹配和排序分页
+./filemanager/index/ 共用索引：扫描、二进制快照、操作日志、实时增量层、名称匹配和排序分页
 local*.go   本机浏览、本机索引与范围设置、创建备份任务
 favorites.go 收藏：侧边栏、添加移除、重命名排序、选择目录对话框中的收藏
 pathbar.go  路径栏：逐级跳转、子文件夹下拉、输入路径
@@ -250,7 +250,7 @@ main.go     窗口和系统接口（目录选择对话框、打开文件和网�
 
 索引计算与分页结果、本机文件修改、复制移动、备份计划执行、上传/下载/续传及服务器间中转已接入后台。前台仍保留索引检查点和日志桥接、批次确认、部分基础属性/预览/系统集成（缩略图读取与目录递归统计已通过后台）。后台按 `/v1/info` 声明能力。
 
-本机后台操作证据位于配置目录 `filemanager/mutations.log`，独立于索引快照。复制移动任务支持持久化结果查询及取消；备份和跨端传输当前仍是请求流，尚未统一重连查询。用户级单实例复用、事件游标、外部变化监听仍待完成；FileIndex 搜索核心已切换到共用树索引。完整边界见 `../filemanager/README.md`。
+本机后台操作证据位于配置目录 `filemanager/mutations.log`，独立于索引快照。复制移动任务支持持久化结果查询及取消；备份和跨端传输当前仍是请求流，尚未统一重连查询。用户级单实例复用、事件游标、外部变化监听仍待完成；FileIndex 搜索核心已切换到共用树索引。完整边界见 `./filemanager/README.md`。
 
 Linux 支持真实后台子进程；Windows 尚未提供 IPC 运行适配，交叉编译不代表可运行。
 
@@ -263,3 +263,88 @@ Linux 支持真实后台子进程；Windows 尚未提供 IPC 运行适配，交�
 服务器连接：启动时使用已保存的登录信息尝试连接一次。连接失败后，本次运行中的搜索、目标目录选择和地址栏不会自动重试；未连接的服务器及其收藏不出现在操作入口中。可在“设置 → 服务器”或“服务器管理”中手动连接，成功后恢复搜索及文件操作入口。
 
 文件浏览工具栏使用统一的地址/搜索入口：点击路径旁的输入区域或按 Ctrl+L 编辑地址，Ctrl+F / Ctrl+K 直接输入搜索词。按 Enter 后，存在的本机或 NAS 路径会跳转（文件会定位选中）；其他输入默认搜索当前目录及其子目录，支持通配符。支持本机绝对路径、~、相对路径及“服务器/索引目录/子目录”；NAS 相对路径基于当前目录解析。搜索结果页的同一输入框也可输入路径后按 Enter 跳转，正则模式下则始终作为正则搜索。
+
+## MyGo 之间访问共享磁盘
+
+两台电脑使用配套新版 `filesync` 与 `filemanager`，在可互通的网络中使用：
+
+1. 分享方打开“设置 → 设备共享”，添加磁盘根目录或文件夹，点击“开启共享”。默认端口为 17891，允许修改监听地址；仅选择的目录对外可见。
+2. 点击相应局域网地址旁的“复制连接邀请”。邀请包含访问权限，只交给允许访问的人。
+3. 接收方在同一设置卡片中粘贴邀请并点击“连接设备”。连接成功后，对方设备与共享目录显示在侧边栏，可浏览、预览普通文件，下载文件或目录，也可以复制后粘贴到本机。
+4. 分享方可随时停止共享。再次开启后，接收方重新粘贴邀请连接；停止期间可重置访问码，使旧邀请失效。每次启动 MyGo 后手动开启共享；程序退出后共享停止。
+
+此版本为只读共享：不支持上传、修改对方文件、远程索引搜索或在线压缩包浏览。目录内可使用现有文件名过滤；压缩包先下载到本机再打开。传输使用 HTTPS 和邀请中的证书指纹，不依赖公网服务，也不会挂载到系统文件管理器。配置保存在应用配置目录的 `sharing.json`，不在共享目录中暴露。连接失败时请检查双方网络及分享方监听端口。
+
+### 桌面软件更新
+
+设置中的“软件更新”使用 MyGo 原生 updater，支持签名校验、自动检查、差分更新和重启。
+生产安装包将客户端与 filemanager 放在同一个应用目录，作为一个版本更新。
+运行期间后台从独立的会话副本启动，避免安装新版后旧客户端启动新版后台。
+退出钩子会在 MyGo 重启前等待本机后台和共享后台退出；已有备份/传输退出确认仍然生效。
+如果取消重启，任务完成后可再次从更新窗口选择重启。
+配置、索引、操作日志仍保存在用户数据目录中。
+
+本地检查安装包（不启用在线更新）：
+
+```sh
+python3 scripts/package-desktop.py --unsigned --platform linux/amd64 --out build/releases
+```
+
+当前更新源为 `qisewai/filesync`，公钥已写入 mygo.json。
+本机首次生成的长期密钥位于 `~/.config/filesync/update-keys/`。
+其他维护者应安全取得同一私钥；只有新应用首次初始化时才使用
+`go tool mygo keygen -o <仓库外的安全目录>` 生成长期签名密钥。
+妥善备份私钥，不能每次发布重新生成。将公钥配置为 `FILESYNC_UPDATE_PUBLIC_KEY`，
+私钥内容通过 `MYGO_UPDATER_PRIVATE_KEY` 环境变量/CI Secret 提供。
+更新源选择 `FILESYNC_UPDATE_GITHUB=owner/repo` 或 `FILESYNC_UPDATE_URL=https://...` 其中之一。
+更新源、公钥也可以固定在 mygo.json 的 updates 配置中；打包脚本在临时目录注入环境配置，不修改工作区。
+
+```sh
+python3 scripts/package-desktop.py --platform linux/amd64 --out build/releases
+```
+
+签名模式缺少源、公钥或私钥会拒绝构建，不会悄悄生成未签名发布包。
+`--upload` 可由 MyGo 上传到配置的 GitHub Release；自托管 HTTPS 请上传生成的更新清单和归档到对应地址。
+Linux 想使用应用内升级，请使用归档附带的 install.sh 安装到用户目录；deb 安装由包管理器更新。
+开发用 `scripts/build-desktop.sh` 仍用于构建普通可执行文件，不开启自更新。
+
+`.github/workflows/release.yml` 提供手动触发的 Linux/Windows 多架构签名发布：
+输入已存在且与 mygo.json 一致的版本标签。filemanager 源码位于本仓库 `filemanager/`，
+前后台由同一个版本标签固定，无需额外检出后台仓库或配置后台访问凭据。
+更新公钥直接使用已提交的 mygo.json，仅需设置 Secret `MYGO_UPDATER_PRIVATE_KEY`。
+各平台测试、构建全部完成后上传草稿 Release，审核后再发布。
+macOS 可用打包脚本在 macOS 上构建，但正式分发还需配置 Apple 签名与公证，不在此 CI 矩阵内。
+远程 NAS 的 fileindex 不随桌面包更新。
+
+### 共用后台源码位置
+
+`filemanager/` 是完整的独立 Go 模块，其源码与桌面客户端在本仓库一起版本管理。
+桌面构建、测试和签名发布只需要检出本仓库；FileIndex 的本地依赖指向
+`../filesync/filemanager`，避免服务端与客户端各自维护一份后台实现。
+开发后台功能请直接修改此目录，不再修改旧的同级 `../filemanager` 工作副本。
+由于 Go 不跨越嵌套模块，完整验证需分别执行：
+
+```sh
+go test ./...
+go -C filemanager test ./...
+```
+
+### Windows 安装包
+
+发布流程构建 Windows x64 (`windows/amd64`) 与 ARM64 (`windows/arm64`)，
+分别生成 `FileSync Setup <版本> amd64.exe` 和 `FileSync Setup <版本> arm64.exe`，
+并附带各自签名的应用更新归档、更新清单。安装包包含配套的 `filemanager.exe`。
+更新包签名使用现有 MyGo 长期密钥；Windows Authenticode 证书签名需另行配置，二者用途不同。
+
+本地打包需要在 PATH 中安装 NSIS 的 `makensis`；缺少时会直接失败，避免误把裸 exe 当成完整安装包。
+
+```sh
+python3 scripts/package-desktop.py --platform windows/amd64 --out build/releases
+python3 scripts/package-desktop.py --platform windows/arm64 --out build/releases
+```
+
+后台为启动时可访问的盘符分别建立根目录，客户端文件位置按盘符映射；Windows 的私有 IPC
+目录设置仅当前用户和 SYSTEM 可访问的 ACL。挂载的新盘符需要重启客户端后加入后台；
+UNC 地址请先映射为盘符再使用。本机 IPC 要求系统支持 AF_UNIX。
+CI 在 Windows runner 上执行路径映射及真实后台启动、文件操作、共享与退出测试，
+这些测试与多平台构建全部通过后才创建草稿 Release。图形界面及安装/卸载仍需 Windows 实机验证。

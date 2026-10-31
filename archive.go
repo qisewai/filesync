@@ -28,6 +28,11 @@ type archiveBrowser struct {
 func (a *app) onArchive() bool            { return a.place == "archive" && a.arc != nil }
 func archiveEntry(e fileindex.Entry) bool { return !e.IsDir && !e.Link && archiveio.Supported(e.Name) }
 func (a *app) openArchive(server string, c *fileindex.Client, e fileindex.Entry, dir string) {
+	if c != nil && fileindex.IsPeer(c.Addr) {
+		a.errorMsg = "设备共享暂不支持在线浏览压缩包，请先下载到本机后打开"
+		return
+	}
+
 	if a.arc != nil && a.arc.cancel != nil {
 		a.arc.cancel()
 	}

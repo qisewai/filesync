@@ -1,0 +1,86 @@
+name: Signed desktop release
+on:
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: Existing FileSync version tag (vX.Y.Z)
+        required: true
+permissions:
+  contents: read
+jobs:
+  build:
+    strategy:
+      fail-fast: false
+      matrix:
+        platform: [linux/amd64, linux/arm64, windows/amd64, windows/arm64]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.tag }}
+          path: filesync
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: filesync/go.mod
+          cache-dependency-path: |
+            filesync/go.sum
+            filesync/filemanager/go.sum
+      - name: Verify release inputs
+        env:
+          RELEASE_TAG: ${{ inputs.tag }}
+        run: |
+          python3 - <<'PY'
+          import json, os
+          version = json.load(open('filesync/mygo.json'))['version']
+          assert os.environ['RELEASE_TAG'] == 'v' + version, 'Tag/version mismatch'
+          PY
+      - name: Install packaging tools
+        run: sudo apt-get update && sudo apt-get install -y nsis
+      - name: Test paired sources
+        run: |
+          (cd filesync/filemanager && go test ./...)
+          (cd filesync && go test ./...)
+      - name: Build signed release artifacts
+        env:
+          FILESYNC_UPDATE_GITHUB: ${{ github.repository }}
+          MYGO_UPDATER_PRIVATE_KEY: ${{ secrets.MYGO_UPDATER_PRIVATE_KEY }}
+        run: python3 filesync/scripts/package-desktop.py --platform '${{ matrix.platform }}' --out dist
+      - uses: actions/upload-artifact@v4
+        with:
+          name: desktop-${{ strategy.job-index }}
+          path: dist/
+  windows-runtime:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.tag }}
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache-dependency-path: |
+            go.sum
+            filemanager/go.sum
+      - name: Test Windows paths and real backend lifecycle
+        working-directory: filemanager
+        run: go test ./localpath ./localprocess -timeout 5m
+  release:
+    permissions:
+      contents: write
+    needs: [build, windows-runtime]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: desktop-*
+          path: dist
+          merge-multiple: true
+      - name: Upload to draft release for review
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          RELEASE_TAG: ${{ inputs.tag }}
+        run: |
+          gh release create "$RELEASE_TAG" --verify-tag --draft --title "$RELEASE_TAG" --generate-notes
+          find dist -type f \( -name '*.tar.gz' -o -name '*.json' -o -name '*.delta' -o -name '*.deb' -o -name '* Setup *.exe' \) -exec gh release upload "$RELEASE_TAG" {} +
+          gh release upload "$RELEASE_TAG" dist/linux-amd64/install.sh
