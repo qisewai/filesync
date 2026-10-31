@@ -54,6 +54,9 @@ func (a *app) detailSubject() detailSubject {
 		return detailSubject{source: localPlace, es: []fileindex.Entry{e}, folder: true}
 	case a.onSearch():
 		s := a.gsearch
+		if s.sel.Len() == 0 {
+			return detailSubject{}
+		}
 		var out detailSubject
 		for _, h := range s.hits {
 			if s.sel.Has(h.key()) {

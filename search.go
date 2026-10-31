@@ -826,12 +826,15 @@ func (a *app) searchPage(c *ui.Context) {
 	s := a.gsearch
 	es := []fileindex.Entry{}
 	var chosen []searchHit
-	for _, h := range s.hits {
-		if s.sel.Has(h.key()) {
-			chosen = append(chosen, h)
-			es = append(es, h.e)
+	if s.sel.Len() > 0 {
+		for _, h := range s.hits {
+			if s.sel.Has(h.key()) {
+				chosen = append(chosen, h)
+				es = append(es, h.e)
+			}
 		}
 	}
+
 	n := len(chosen)
 	acts := a.hitActions(chosen)
 	if n > 0 && !a.searchTyping && a.deleting == nil {

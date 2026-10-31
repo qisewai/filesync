@@ -136,11 +136,14 @@ func (a *app) tabBar(c *ui.Context) {
 	if !shown {
 		right += c.TitleBar().Right
 	}
-	a.headBar(c, "tab-bar").Padding(0, right, 0, left).Children(func() {
+	a.headBar(c, "tab-bar").BorderWidth(0).Background(c.Theme().Surface).
+		Padding(0, right, 0, left).Children(func() {
 		if a.sidebarHidden {
 			flatIcon(c, "toggle-sidebar", iconSidebar, "显示侧边栏", "显示侧边栏（Ctrl+B）", false, a.toggleSidebar)
 		}
-		a.tabStrip(c)
+		ui.ScrollHorizontal(c.Key("tab-scroll")).Shrink(1).MinWidth(0).Height(42).AlignSelf(ui.End).Children(func() {
+			a.tabStrip(c)
+		})
 		flatIcon(c, "new-tab", iconPlus, "新建标签页", "新建标签页（Ctrl+T）", len(a.tabs) >= maxTabs, func() { a.newTab("") })
 		ui.Spacer(c).MinWidth(16)
 		if !shown {
@@ -165,15 +168,21 @@ func (a *app) tabStrip(c *ui.Context) {
 	cur.title, cur.icon = a.tabTitle()
 	shown := a.tab
 	tabs := ui.TabsBase(c.Key("tabs"), &shown, len(a.tabs))
-	tabs.List.Gap(2).Padding(3).Radius(t.Radius * 1.5).Background(t.Surface).Shrink(1).MinWidth(0).Label("标签页")
+	tabs.List.Gap(2).Height(42).Label("标签页")
+	lastShown := ui.Local(tabs.List, "revealed-tab", func() int { return -1 })
+	reveal := *lastShown != cur.id
+	*lastShown = cur.id
 	tabs.List.Children(func() {
 		for i, tab := range a.tabs {
 			on := i == a.tab
-			item := tabs.Tab(i).Padding(4, 6, 4, 10).Gap(6).AlignItems(ui.Center).Radius(t.Radius).
-				MinWidth(64).MaxWidth(200).Shrink(1).Label("标签页 " + tab.title).Tooltip(tab.title)
+			item := tabs.Tab(i).Padding(0, 10, 0, 14).Gap(8).AlignItems(ui.Center).Radius(9, 9, 0, 0).
+				Width(180).Height(42).Shrink(0).Label("标签页 " + tab.title).Tooltip(tab.title)
+			if on && reveal {
+				item.ScrollIntoView()
+			}
 			switch {
 			case on:
-				item.Background(t.Background).Shadow(0, 1, 2, 0, ui.RGBA(0, 0, 0, 0.12))
+				item.Background(t.Background)
 			case item.Hovered():
 				item.Background(t.SurfaceHover)
 			}
@@ -184,14 +193,14 @@ func (a *app) tabStrip(c *ui.Context) {
 					color = folderColor
 				}
 				if tab.icon != nil {
-					ui.Icon(c, tab.icon).FontSize(13).TextColor(color)
+					ui.Icon(c, tab.icon).FontSize(16).TextColor(color)
 				}
 				text := ui.Text(c, tab.title).FontSize(13).SingleLine().Grow(1).Shrink(1).MinWidth(0)
 				if !on {
 					text.TextColor(t.TextMuted)
 				}
 				if len(a.tabs) > 1 {
-					x := ui.ButtonBase(c.Key(fmt.Sprintf("close-tab/%d", tab.id))).Size(16, 16).Radius(4).
+					x := ui.ButtonBase(c.Key(fmt.Sprintf("close-tab/%d", tab.id))).Size(24, 24).Shrink(0).Radius(5).
 						Label("关闭标签页 " + tab.title).Tooltip("关闭（Ctrl+W）").OnClick(func() { a.closeTab(i) })
 					hover := x.Hovered()
 					if hover {
@@ -199,7 +208,7 @@ func (a *app) tabStrip(c *ui.Context) {
 					}
 					x.Children(func() {
 						if on || hover || item.Hovered() {
-							ui.Icon(c, iconClose).FontSize(10).TextColor(t.TextMuted)
+							ui.Icon(c, iconClose).FontSize(12).TextColor(t.TextMuted)
 						}
 					})
 				}

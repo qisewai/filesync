@@ -24,6 +24,8 @@ const localPlace = "local"
 // localBrowser shows a directory of this computer, to back up what is
 // chosen in it.
 type localBrowser struct {
+	selectionCache fileSelectionCache
+
 	filter  filenameFilter
 	dir     string
 	items   []fileindex.Entry // Path is the full path
@@ -312,13 +314,7 @@ func (a *app) readLocalProbe(dir string, dirsOnly, hidden, probe bool) ([]filein
 
 // chosen returns the entries chosen, in the order shown.
 func (b *localBrowser) chosen() []fileindex.Entry {
-	var out []fileindex.Entry
-	for _, e := range b.items {
-		if b.sel.Has(e.Path) {
-			out = append(out, e)
-		}
-	}
-	return out
+	return b.selectionCache.chosen(b.items, &b.sel, b.sort.revision)
 }
 
 // localPath is, under the toolbar, where the page is.

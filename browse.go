@@ -20,6 +20,8 @@ const requestTimeout = 20 * time.Second
 
 // browser shows a directory of a root of a server.
 type browser struct {
+	selectionCache fileSelectionCache
+
 	filter filenameFilter
 	server string // the server's ID
 	root   fileindex.Root
@@ -282,13 +284,7 @@ func (a *app) reloadKeeping() {
 
 // chosen returns the entries chosen, in the order shown.
 func (b *browser) chosen() []fileindex.Entry {
-	var out []fileindex.Entry
-	for _, e := range b.items {
-		if b.sel.Has(e.Path) {
-			out = append(out, e)
-		}
-	}
-	return out
+	return b.selectionCache.chosen(b.items, &b.sel, b.sort.revision)
 }
 
 func paths(es []fileindex.Entry) []string {

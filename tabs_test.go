@@ -1,6 +1,7 @@
 package main
 
 import (
+	"fmt"
 	"os"
 	"path/filepath"
 	"testing"
@@ -170,4 +171,36 @@ func TestSidebarFilter(t *testing.T) {
 	h.click("清除过滤")
 	h.typeInto("过滤侧边栏", "没有这个")
 	h.want("没有找到名称包含“没有这个”的文件夹。只在已展开过的目录中查找。")
+}
+
+// Overflow keeps the selected tab and the window actions reachable.
+func TestTabStripOverflow(t *testing.T) {
+	_, h := tabsFixture(t)
+	h.menu("文件夹 照片", "在新标签页中打开")
+	if out := os.Getenv("FILESYNC_TABS_SNAPSHOT"); out != "" {
+		saveResumeSnapshot(t, h, out)
+	}
+	for len(h.a.tabs) < maxTabs {
+		h.a.newTab("")
+		h.settle()
+	}
+	for i, tab := range h.a.tabs[:maxTabs-1] {
+		tab.title = fmt.Sprintf("目录 %d", i)
+	}
+	h.settle()
+	check := func() {
+		t.Helper()
+		selected, ok := h.tt.Find("标签页 照片")
+		plus, plusOK := h.tt.Find("新建标签页")
+		if !ok || !plusOK || selected.W < 170 || selected.H < 40 || selected.X+selected.W > plus.X || plus.X+plus.W > 980 {
+			t.Fatalf("tab or actions clipped: selected=%v (%t), new=%v (%t)", selected, ok, plus, plusOK)
+		}
+	}
+	check()
+	h.tt.Key(ui.Ctrl|ui.Shift, ui.KeyTab)
+	h.settle()
+	check()
+	if out := os.Getenv("FILESYNC_TABS_OVERFLOW_SNAPSHOT"); out != "" {
+		saveResumeSnapshot(t, h, out)
+	}
 }
