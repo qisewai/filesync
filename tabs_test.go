@@ -65,26 +65,32 @@ func TestTabsOpenSwitchAndKeepTheirPlaces(t *testing.T) {
 	}
 }
 
-// Ctrl+T opens a tab where the one shown is, Ctrl+W closes it, as its
+// Ctrl+T opens a blank search tab, Ctrl+W closes it, as its
 // cross does; the last tab stays.
 func TestTabsNewAndClose(t *testing.T) {
 	_, h := tabsFixture(t)
 	h.tt.Key(ui.Ctrl, ui.KeyT)
 	h.settle()
-	if len(h.a.tabs) != 2 || h.a.tab != 1 || h.a.br.path != "文档" {
+	if len(h.a.tabs) != 2 || h.a.tab != 1 || !h.a.searchLanding() {
 		t.Fatalf("Ctrl+T: %d tabs, at %q", len(h.a.tabs), h.a.location())
+	}
+	if !h.tt.Focused("全局搜索") {
+		t.Fatal("new tab search is not focused")
+	}
+	if h.a.nav.CanGoBack() {
+		t.Fatal("new search inherited browsing history")
 	}
 	h.click("新建标签页")
 	h.settle()
-	if len(h.a.tabs) != 3 || h.a.tab != 2 {
+	if len(h.a.tabs) != 3 || h.a.tab != 2 || !h.a.searchLanding() {
 		t.Fatalf("new tab button: %d tabs, shown %d", len(h.a.tabs), h.a.tab)
 	}
 	h.tt.Key(ui.Ctrl, ui.KeyW)
 	h.settle()
-	if len(h.a.tabs) != 2 || h.a.tab != 1 || h.a.br.path != "文档" {
+	if len(h.a.tabs) != 2 || h.a.tab != 1 || !h.a.searchLanding() {
 		t.Fatalf("Ctrl+W: %d tabs, shown %d", len(h.a.tabs), h.a.tab)
 	}
-	h.click("关闭标签页 文档")
+	h.click("关闭标签页 搜索")
 	h.settle()
 	if len(h.a.tabs) != 1 {
 		t.Fatalf("cross: %d tabs", len(h.a.tabs))
@@ -185,8 +191,14 @@ func TestTabStripOverflow(t *testing.T) {
 	if out := os.Getenv("FILESYNC_TABS_SNAPSHOT"); out != "" {
 		saveResumeSnapshot(t, h, out)
 	}
+	if out := os.Getenv("FILESYNC_TABS_DARK_SNAPSHOT"); out != "" {
+		h.tt.SetDark(true)
+		saveResumeSnapshot(t, h, out)
+		h.tt.SetDark(false)
+		h.settle()
+	}
 	for len(h.a.tabs) < maxTabs {
-		h.a.newTab("")
+		h.a.newTab(h.a.location())
 		h.settle()
 	}
 	for i, tab := range h.a.tabs[:maxTabs-1] {
@@ -197,7 +209,7 @@ func TestTabStripOverflow(t *testing.T) {
 		t.Helper()
 		selected, ok := h.tt.Find("标签页 照片")
 		plus, plusOK := h.tt.Find("新建标签页")
-		if !ok || !plusOK || selected.W < 170 || selected.H < 40 || selected.X+selected.W > plus.X || plus.X+plus.W > 980 {
+		if !ok || !plusOK || selected.W < 170 || selected.H != tabHeight || selected.X+selected.W > plus.X || plus.X+plus.W > 980 {
 			t.Fatalf("tab or actions clipped: selected=%v (%t), new=%v (%t)", selected, ok, plus, plusOK)
 		}
 	}
@@ -207,5 +219,13 @@ func TestTabStripOverflow(t *testing.T) {
 	check()
 	if out := os.Getenv("FILESYNC_TABS_OVERFLOW_SNAPSHOT"); out != "" {
 		saveResumeSnapshot(t, h, out)
+	}
+}
+
+func TestDuplicateTabPreservesLocation(t *testing.T) {
+	_, h := tabsFixture(t)
+	h.menu("标签页 文档", "复制标签页")
+	if len(h.a.tabs) != 2 || !h.a.onRoot() || h.a.br.path != "文档" {
+		t.Fatal("duplicate did not preserve folder")
 	}
 }

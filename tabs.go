@@ -122,15 +122,15 @@ func (a *app) resumeTab() {
 	}
 }
 
-// newTab opens a tab after the one shown, showing loc ("" for the place
-// shown), and shows it.
+// newTab opens a tab after the one shown, showing loc ("" for a blank
+// search page), and shows it.
 func (a *app) newTab(loc string) {
 	if len(a.tabs) >= maxTabs {
 		a.errorMsg = fmt.Sprintf("最多打开 %d 个标签页", maxTabs)
 		return
 	}
 	if loc == "" {
-		loc = a.location()
+		loc = "/search"
 	}
 	a.leaveTab()
 	a.tabSeq++
@@ -143,6 +143,9 @@ func (a *app) newTab(loc string) {
 	a.br, a.local, a.gsearch, a.admin, a.recycle, a.arc = nil, nil, nil, nil, nil, nil
 	a.taskShown = ""
 	a.goLocation(loc)
+	if a.searchLanding() {
+		a.focusSearch, a.focusTries = true, 0
+	}
 }
 
 // openInNewTab opens a folder in a tab of its own.

@@ -315,7 +315,7 @@ func (a *app) windowControls(c *ui.Context) {
 
 // toolbarHeight is the height of the toolbar, and of the head of the
 // sidebar beside it: as the window controls, at least.
-const toolbarHeight = 52
+const toolbarHeight = 40
 
 func (a *app) toolbarHeight(c *ui.Context) float32 {
 	return max(c.TitleBar().Height, toolbarHeight)

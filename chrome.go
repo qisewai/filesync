@@ -135,10 +135,22 @@ func (a *app) tabBar(c *ui.Context) {
 		if a.sidebarHidden {
 			flatIcon(c, "toggle-sidebar", iconSidebar, "显示侧边栏", "显示侧边栏（Ctrl+B）", false, a.toggleSidebar)
 		}
-		ui.ScrollHorizontal(c.Key("tab-scroll")).Shrink(1).MinWidth(0).Height(42).AlignSelf(ui.End).Children(func() {
-			a.tabStrip(c)
+		viewport := ui.Row(c.Key("tab-viewport")).Shrink(1).MinWidth(0).Height(tabHeight).AlignSelf(ui.End).Clip().
+			Transition(ui.ElementTransition{Duration: treeMotion, Size: true})
+		count := ui.Local(viewport, "tab-count", func() int { return len(a.tabs) })
+		moving := *count != len(a.tabs) || viewport.Transitioning()
+		*count = len(a.tabs)
+		viewport.Children(func() {
+			scroll := ui.ScrollHorizontal(c.Key("tab-scroll")).Shrink(1).MinWidth(0).Height(tabHeight)
+			if moving {
+				// Temporary overflow during width transitions is not real overflow.
+				// Move the native scrollbar outside the clipped viewport until settled.
+				scroll.ScrollbarInsets(0, 0, -tabHeight, 0)
+			}
+			scroll.Children(func() { a.tabStrip(c) })
 		})
-		flatIcon(c, "new-tab", iconPlus, "新建标签页", "新建标签页（Ctrl+T）", len(a.tabs) >= maxTabs, func() { a.newTab("") })
+		flatIcon(c, "new-tab", iconPlus, "新建标签页", "新建标签页（Ctrl+T）", len(a.tabs) >= maxTabs, func() { a.newTab("") }).
+			Transition(ui.ElementTransition{Duration: treeMotion, Position: true})
 		ui.Spacer(c).MinWidth(16)
 		if !shown {
 			// Hidden for want of room: the button widens the window's share.
@@ -162,23 +174,29 @@ func (a *app) tabStrip(c *ui.Context) {
 	cur.title, cur.icon = a.tabTitle()
 	shown := a.tab
 	tabs := ui.TabsBase(c.Key("tabs"), &shown, len(a.tabs))
-	tabs.List.Gap(2).Height(42).Label("标签页")
+	tabs.List.Gap(2).Height(tabHeight).Label("标签页")
 	lastShown := ui.Local(tabs.List, "revealed-tab", func() int { return -1 })
 	reveal := *lastShown != cur.id
 	*lastShown = cur.id
 	tabs.List.Children(func() {
 		for i, tab := range a.tabs {
 			on := i == a.tab
-			item := tabs.Tab(i).Padding(0, 10, 0, 14).Gap(8).AlignItems(ui.Center).Radius(9, 9, 0, 0).
-				Width(180).Height(42).Shrink(0).Label("标签页 " + tab.title).Tooltip(tab.title)
+			// Identity follows the tab, not its position after a close or reorder.
+			c.Key(fmt.Sprintf("tab/%d", tab.id))
+			item := tabs.Tab(i).Padding(0, 16, 0, 20).Gap(8).AlignItems(ui.Center).Radius(9, 9, 0, 0).
+				Width(180).Height(tabHeight).Shrink(0).Label("标签页 " + tab.title).Tooltip(tab.title).
+				Transition(ui.ElementTransition{
+					Duration: treeMotion, Position: true,
+					Enter: &ui.Motion{Collapse: true}, Exit: &ui.Motion{Collapse: true},
+				})
 			if on && reveal {
 				item.ScrollIntoView()
 			}
 			switch {
 			case on:
-				item.Background(t.Background)
+				item.Draw(func(p *ui.Painter, r ui.Rect) { drawTabFace(p, r, t.Background) })
 			case item.Hovered():
-				item.Background(t.SurfaceHover)
+				item.Draw(func(p *ui.Painter, r ui.Rect) { drawTabFace(p, r, t.SurfaceHover) })
 			}
 			item.ContextMenu(func(m *ui.Menu) { a.tabMenu(m, i) })
 			item.Children(func() {
@@ -218,7 +236,7 @@ func (a *app) tabStrip(c *ui.Context) {
 func (a *app) tabMenu(m *ui.Menu, i int) {
 	if m.Item("复制标签页").Disabled(len(a.tabs) >= maxTabs).Chosen() {
 		a.switchTab(i)
-		a.newTab("")
+		a.newTab(a.location())
 	}
 	m.Separator()
 	if m.Item("向左移动").Disabled(i == 0).Chosen() {
@@ -303,4 +321,24 @@ func (a *app) pageTools(c *ui.Context) {
 		viewToggle(c, "archive-view", &a.arc.grid)
 		moreMenu(c, "archive-more", func(m *ui.Menu) { a.archiveMenu(c, m, nil) })
 	}
+}
+
+const tabHeight = 34
+
+// The bottom corners turn outward into the content surface, like browser tabs.
+// Keep the whole silhouette within the hit box so adjacent tabs never overpaint.
+func drawTabFace(p *ui.Painter, r ui.Rect, color ui.Color) {
+	const foot, top = float32(8), float32(10)
+	x, y, right, bottom := r.X, r.Y, r.X+r.W, r.Y+r.H
+	var shape ui.Path
+	shape.MoveTo(x, bottom).
+		QuadTo(x+foot, bottom, x+foot, bottom-foot).
+		LineTo(x+foot, y+top).
+		QuadTo(x+foot, y, x+foot+top, y).
+		LineTo(right-foot-top, y).
+		QuadTo(right-foot, y, right-foot, y+top).
+		LineTo(right-foot, bottom-foot).
+		QuadTo(right-foot, bottom, right, bottom).
+		Close()
+	p.FillPath(&shape, color)
 }

@@ -205,7 +205,7 @@ func (a *app) serverList(c *ui.Context) {
 		})
 		tip := sv.Addr
 		node.Children(func() {
-			// A section of its own, as the computer's.
+			ui.Icon(c, iconServer).FontSize(16).TextColor(c.Theme().TextMuted).Margin(0, 4, 0, 0)
 			sectionTitle(c, sv.Title())
 			if a.unreachable(sv) {
 				tip = sv.Addr + " · 无法连接，点右侧图标或右键重新连接"
