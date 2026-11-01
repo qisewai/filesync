@@ -1,10 +1,11 @@
 {
   "name": "FileSync",
   "identifier": "com.ning.filesync",
-  "version": "0.1.5",
+  "version": "0.1.6",
   "out": "build",
   "updates": {
     "publicKey": "xFnyO//PboUAVtZP7lfRe3+8ZeWoS3q6LUAwglYZnvI=",
     "github": "qisewai/filesync"
-  }
+  },
+  "slug": "filesync"
 }

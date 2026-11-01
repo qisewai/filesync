@@ -332,7 +332,7 @@ go -C filemanager test ./...
 ### Windows 安装包
 
 发布流程构建 Windows x64 (`windows/amd64`) 与 ARM64 (`windows/arm64`)，
-分别生成 `FileSync Setup <版本> amd64.exe` 和 `FileSync Setup <版本> arm64.exe`，
+分别生成 `filesync-setup-<版本>-amd64.exe` 和 `filesync-setup-<版本>-arm64.exe`，
 并附带各自签名的应用更新归档、更新清单。安装包包含配套的 `filemanager.exe`。
 更新包签名使用现有 MyGo 长期密钥；Windows Authenticode 证书签名需另行配置，二者用途不同。
 
@@ -348,3 +348,9 @@ python3 scripts/package-desktop.py --platform windows/arm64 --out build/releases
 UNC 地址请先映射为盘符再使用。本机 IPC 要求系统支持 AF_UNIX。
 CI 在 Windows runner 上执行路径映射及真实后台启动、文件操作、共享与退出测试，
 这些测试与多平台构建全部通过后才创建草稿 Release。图形界面及安装/卸载仍需 Windows 实机验证。
+
+### 原生界面自动化诊断
+
+调试版本可使用 `go build -tags e2e -o build/filesync-debug .` 构建，并通过
+`MYGO_AUTOMATION=/tmp/filesync-debug.sock` 启动以启用 MyGo 自动化协议。
+运行时需要配套的 filemanager 和终端运行库。正式发布包不包含此入口。

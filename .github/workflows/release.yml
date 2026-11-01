@@ -81,6 +81,16 @@ jobs:
           GH_REPO: ${{ github.repository }}
           RELEASE_TAG: ${{ inputs.tag }}
         run: |
+          version="${RELEASE_TAG#v}"
+          for platform in linux-amd64 linux-arm64 windows-amd64 windows-arm64; do
+            test -s "dist/$platform/update-$platform.json"
+            test -s "dist/$platform/filesync-$version-$platform.tar.gz"
+          done
+          for arch in amd64 arm64; do
+            test -s "dist/windows-$arch/filesync-setup-$version-$arch.exe"
+            test -s "dist/linux-$arch/filesync_${version}_${arch}.deb"
+          done
+          test -s dist/windows-amd64/install.ps1
           gh release create "$RELEASE_TAG" --verify-tag --draft --title "$RELEASE_TAG" --generate-notes
-          find dist -type f \( -name '*.tar.gz' -o -name '*.json' -o -name '*.delta' -o -name '*.deb' -o -name '* Setup *.exe' \) -exec gh release upload "$RELEASE_TAG" {} +
-          gh release upload "$RELEASE_TAG" dist/linux-amd64/install.sh
+          find dist -type f \( -name '*.tar.gz' -o -name '*.json' -o -name '*.delta' -o -name '*.deb' -o -name 'filesync-setup-*.exe' \) -exec gh release upload "$RELEASE_TAG" {} +
+          gh release upload "$RELEASE_TAG" dist/linux-amd64/install.sh dist/windows-amd64/install.ps1
