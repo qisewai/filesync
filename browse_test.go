@@ -446,6 +446,8 @@ func TestCopyAndMoveBetweenComputerAndServer(t *testing.T) {
 	h.clickPage("新.txt")
 	h.tt.Key(ui.Ctrl, ui.KeyC)
 	paste(nasLocation(server, 1, ""))
+	// Target checks run asynchronously before the transfer is registered.
+	h.waitStarted(3)
 	h.waitTransfers()
 	if b, _ := os.ReadFile(filepath.Join(f.Root, "新.txt")); string(b) != "new" {
 		t.Fatalf("copy to server %q", b)
@@ -458,6 +460,7 @@ func TestCopyAndMoveBetweenComputerAndServer(t *testing.T) {
 	h.clickPage("照片")
 	h.tt.Key(ui.Ctrl, ui.KeyX)
 	paste(nasLocation(server, 1, ""))
+	h.waitStarted(4)
 	h.waitTransfers()
 	if b, _ := os.ReadFile(filepath.Join(f.Root, "照片", "a.jpg")); string(b) != "photo" {
 		t.Fatalf("move to server %q", b)
